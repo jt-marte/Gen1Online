@@ -1,129 +1,106 @@
-# Gen1Online++ - Multiplayer MMO, GTS & Casino Lounge
+# Gen1Online+ - Multiplayer, GTS & Overworld Expansions
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Mod Version: v0.4.0.0](https://img.shields.io/badge/version-0.4.0.0-green.svg)](manifest.json)
+[![Mod Version: v0.5.0](https://img.shields.io/badge/version-0.5.0-green.svg)](manifest.json)
+[![Game: Pokemon Crystal](https://img.shields.io/badge/target-Pokemon%20Crystal-blue.svg)](https://github.com/bryanthaboi/gen1recomp)
 
-**Gen1Online++** brings the ultimate multiplayer Pokémon MMO experience together with persistent progression and high-stakes casino entertainment in *Pokémon Crystal*.
-
-It combines seamless real-time overworld MMO co-op, custom character avatars, persistent leveling (Level 1–100), authentic Link Trading & PVP battles, and a 24/7 persistent **Global Trade Station (GTS)** with the expanded **Celadon Casino Lounge**, featuring **Crash Multiplier**, **Tube Flyer**, **Prize Case**, and **Pawn Broker**.
+**Gen1Online+** brings a complete real-time multiplayer co-op experience with true-color overworld follower sprites, synchronized wild Pokémon encounters, real-time authoritative server clock, and a 24/7 Global Trade Station (GTS) to *Pokémon Crystal*.
 
 ---
 
 ## 🌟 Key Features
 
-### 📜 1. Online Quests (Gen 2 port — in progress)
-- The original Gen 1 quest content (**"Magnemite Repair"** co-op quest, **"Bye Bye Butterfree"** solo quest, and their in-world NPCs/items) was **removed during the Gen 2 migration**.
-- The mod now ships a **registry skeleton** (`quests/init.lua` and `npcs/init.lua`) with a clean registration API designed for Gen 2, ready to be filled back in with quest definitions and NPCs.
-- The server-side quest engine (`QUEST_DEFINITIONS` / `QuestManager` in `gts_server.py`, plus the `quest_get` / `quest_accept` / `quest_pickup` / `quest_turn_in` endpoints) is untouched and ready to serve the re-added content.
-- **Quest Log UI**: not yet reimplemented for Gen 2.
+### 🌐 1. Real-Time 60FPS Threaded Multiplayer
+- **Seamless Overworld Co-op**: Live player movement synchronization across Johto and Kanto with zero stutter or lag.
+- **Player Customization**: Walkable character avatars (`RED`, `BLUE`, `LEAF`, `PROF. OAK`, `COOLTRAINER`, `TEAM ROCKET`, and various trainer classes).
+- **Dedicated Dual-Save Architecture**: Online progress writes strictly to `save_online_crystal.lua`, preserving offline `save_crystal.lua` files untouched.
+
+### 🕒 2. Authoritative Server RTC Clock & Day/Night Sync
+- **Synchronized Real-Time Clock**: Server broadcasts canonical time, minute, second, and day-of-week on every sync heartbeat.
+- **Unified Day/Night Cycles**: Ensures all players in the world experience synchronized morning, day, night lighting and encounter tables. Manual clock manipulation is locked out for fair gameplay.
+
+### 🌿 3. Overworld Wild Pokémon Roaming
+- **Live Grass Spawns**: Wild Pokémon actively roam in grass patches across 95+ Johto and Kanto landmarks.
+- **Facing Encounters**: Walk up to wild Pokémon in the field and press **`A`** to trigger authentic battle transitions with cries and shiny chances.
+
+### 🐾 4. 1:1 True-Color PokeEmerald Follower Sprites
+- **Authentic Gen 3 Follower Sprites**: True-color overworld follower sprites for all Generation 1 & 2 Pokémon.
+- **Dynamic Directional Walking**: Followers mirror the player's movements with full 4-direction animations.
+
+### 💬 5. Global & Local Chat + PokéGear Integration
+- **Real-Time Live Notifications**: Receive popup alerts when other trainers send messages in the world.
+- **Dedicated PokéGear Chat Tab**: Full scrollable chat history built directly into the player's PokéGear with unread badges.
+
+### 🏪 6. 24/7 Global Trade Station (GTS) & Overworld PVP
+- **Persistent GTS Network**: Deposit and search for Pokémon listings asynchronously.
+- **Overworld Direct PVP Battles & Trades**: Walk up to any trainer in the world, face them, and press **`A`** to challenge or trade.
+
+### 👥 7. Co-Op Party System & Shared XP
+- **Party System (Up to 4 Players)**: Invite nearby trainers, view live teammate locations and levels.
+- **Shared Experience**: Gain co-op bonus experience points when teammates defeat Pokémon in battle.
 
 ---
 
-### 👥 2. Cooperative Party System & Shared XP
-- **Party System (Up to 4 Players)**: Create a party, invite nearby trainers, view live party member maps, coordinates, and levels.
-- **100% Shared XP**: All MMO experience gained from wild battles, trainer victories, catches, and quests is shared in real-time across all party members.
-- **Teammate Warp**: Warp directly to your party members across Kanto.
+## 🎨 Importing Follower Assets from PokéEmerald Decompilation
 
----
+The mod supports loading true-color overworld follower sprite sheets directly from a local clone of the **[pokeemerald-expansion](https://github.com/rh-hideout/pokeemerald-expansion)** or **[pokeemerald](https://github.com/pret/pokeemerald)** decompilation repository.
 
-### 🎰 3. Casino Lounge
-- **Celadon Casino Lounge (`BLACKJACK_LOUNGE`)**:
-  - **Crash Multiplier**: Rocket multiplier machine with high-volatility cash-outs.
-  - **Tube Flyer**: Flappy-style arcade machine earning coins per obstacle dodged.
-  - **Prize Case**: 500-coin prize roulette with version-exclusive Pokémon, shiny upgrades, rare TMs, and Master Balls.
-  - **Pawn Broker**: Shady Pokémon broker that appraises and holds up to 5 party Pokémon for instant coins.
-  - **1,000,000 Coin Economy**: Unified Coin Case used seamlessly across all games and original slots.
+### How to Acquire and Import Assets
 
----
+1. **Locate Your Local Decompilation Folder**:
+   Find your local checkout of the decompilation repository (e.g. `pokeemerald-expansion/graphics/pokemon/`).
 
-### 🌐 4. Streamlined "Connect to Server" & Character Setup
-- **Single-Click Start Menu**: Press **`START`** → Select **`CONNECT TO SERVER`**.
-- **Automatic Device Save Detection**: Loads your recovery token, level, and XP progression automatically.
-- **Authentic Vanilla Naming Screen**: Classic Game Boy letter-grid naming screen.
-- **Character Avatar Customization**: 17 walkable character sprites (`RED`, `BLUE`, `LEAF / GIRL`, `PROF. OAK`, `COOLTRAINER M`, `COOLTRAINER F`, `TEAM ROCKET`, `LASS`, `YOUNGSTER`, `BLACKBELT`, `SUPER NERD`, `HIKER`, `BEAUTY`, `BUG CATCHER`, `SWIMMER`, `SAILOR`, `GENTLEMAN`).
-- **Dedicated Dual-Save Architecture**: Online saves write strictly to `save_online_crystal.lua`, preserving offline `save_crystal.lua` data completely untouched.
-
----
-
-### 📈 5. Player Leveling System (Level 1 to 100)
-- **XP Progression Curve**: Dynamic leveling curve (`XP_REQ = math.floor(50 * ((lvl - 1) ^ 1.8))`).
-- **Core XP Rewards**:
-  - **Quests Completed**: `+1,000 XP`
-  - **Catching Pokémon**: `+50 XP`
-  - **Wild Battles**: `+15 XP`
-  - **Trainer Battles**: `+40 XP`
-  - **PVP Link Battles**: `+100 XP` (Win) / `+25 XP` (Participation)
-  - **Breeding / Evolution**: `+50 XP`
-- **Trainer Card**: Live server ranking (e.g. `#12/250`), PvP Win/Loss record, Badges, Pokédex count, and Blackout tally.
-
----
-
-### 🏪 6. 24/7 Global Trade Station (GTS) & PVP Battles
-- **Alphabetical Wanted Pokémon Selector**: Choose up to 3 wanted species (`A-C`, `D-F`, `G-I`, `J-L`, `M-O`, `P-R`, `S-U`, `V-Z`).
-- **Persistent Cloud Database**: Listings stay safe on the server even when players log off.
-- **Offline Claim Boxes**: Traded Pokémon are delivered safely for your next login.
-- **Facing PVP Link Battles & Link Trading**: Walk up to any trainer in the overworld, face them, and press **`A`** to challenge or trade.
-
----
-
-## 🛠️ Installation & Setup
-
-1. Place the `gen1online-plus` mod folder into your `mods/` directory:
+2. **Source Sprite Sheets**:
+   Follower sprite assets are located within each species subfolder:
+   ```text
+   graphics/pokemon/<species_name>/
+   ├── walking.png  (or follower.png / overworld.png)
+   └── palette.pal
    ```
-   pokemon-gen1-recomp/mods/gen1online-plus/
+
+3. **Place Assets in the Mod Directory**:
+   Copy the extracted 32x32 / 16x16 4-directional walking sprite sheets into:
+   ```text
+   pokemon-gen1-recomp/mods/gen1online-plus/assets/followers/
    ```
-2. **Server files are NOT part of the mod zip.** They live in a separate `server/gen1online/` folder
-   (outside the mod directory) so they are never distributed to players. The mod zip contains only the
-   client code — it carries **no** player database, tokens, or server secrets.
-3. **Configure the admin key** (required before first start):
+   Name each sprite file by species name or national Pokédex index (e.g., `025_pikachu.png`, `151_mew.png`, `249_lugia.png`).
+
+4. **Auto-Detection**:
+   When launching the game, `Gen1Online+` automatically mounts and renders true-color sprite sheets for both player followers and overworld roaming wild Pokémon.
+
+---
+
+## 🛠️ Server Installation & Hosting
+
+1. **Server Location**:
+   The server backend resides in `server/gen1online/gts_server.py` outside of the client mod archive to keep security keys and private databases protected.
+
+2. **Configure Admin Key**:
+   Create `server/gen1online/server_secrets.json`:
+   ```json
+   { "adminKey": "YOUR_SECURE_RANDOM_KEY" }
+   ```
+
+3. **Start the Server**:
    ```bash
    cd server/gen1online
-   python -c "import secrets; print(secrets.token_hex(16))"   # pick a long random key
-   ```
-   Save it in `server_secrets.json` next to `gts_server.py`:
-   ```json
-   { "adminKey": "PASTE_YOUR_RANDOM_KEY_HERE" }
-   ```
-4. Start the server (binds to `127.0.0.1` by default — it is never exposed directly):
-   ```bash
    python gts_server.py
    ```
-5. (Recommended for playing with friends) Expose it through a Cloudflare tunnel so your public IP stays hidden:
+
+4. **Expose with Cloudflare Tunnel (Optional)**:
    ```bash
    cloudflared tunnel --url http://127.0.0.1:7779
    ```
-   Give your friends the `https://<random>.trycloudflare.com/` URL.
-6. In *Pokémon Crystal Recomp*, press **`START`** → Select **`CONNECT TO SERVER`**.
-7. Walk up to any online trainer, face them, and press **`A`** to challenge them to PVP or trade.
-
----
-
-## 🔒 Server Security (Read This!)
-
-- **The server binds to `127.0.0.1` only.** Never change this to `0.0.0.0` unless you fully
-  understand the risk — an open port lets anyone on the internet reach your server and your PC.
-- **Use `cloudflared` (or similar) as the only way in.** The tunnel forwards the public URL to
-  localhost, so your home IP address is never revealed to players.
-- **The admin key is your master password.** `admin_action` requests (ban / unban / remove / audit)
-  are rejected with `403 FORBIDDEN` without it. Admin commands are run from the host machine:
-  ```bash
-  python gts_admin.py list
-  python gts_admin.py ban 123456 "cheating"
-  python gts_admin.py audit
-  ```
-  `gts_admin.py` reads the key from `server_secrets.json` automatically.
-- **Recovery tokens are secret.** Every account has a token that can restore the save. A leaked token
-  lets someone take over that account, so never share your token and never upload
-  `server_secrets.json`, `gts_database.json`, `players_backup.json`, or `private_ip_ledger.json`.
-- **Tokens are now 128-bit** for new accounts; legacy 8-character tokens remain valid.
-- The IP audit ledger (`private_ip_ledger.json`) is stored only on the host for ban enforcement — it is
-  never exposed through the API.
 
 ---
 
 ## 👨‍💻 Credits & Acknowledgements
 
-- **Creator & Lead Designer**: **Gamecorner33**
-- **Original Blackjack Mod Creator**: **martin2844** ([martin2844/gen1recomp-blackjack-corner](https://github.com/martin2844/gen1recomp-blackjack-corner))
-- **MMO Engine Inspiration**: **alamops** ([alamops/RBYMMOMod](https://github.com/alamops/RBYMMOMod))
-- **Platform**: **bryanthaboi** and the **Gen 1 Recomp Team** ([bryanthaboi/gen1recomp](https://github.com/bryanthaboi/gen1recomp))
+- **Project Lead & Core Direction**: **Brookes**
+- **Original Mod Creator**: **Gamecorner33**
+- **Engine, Netcode, RTC Sync & Cart Architecture**: **Antigravity**
+- **Platform & Recompilation Engine**: **bryanthaboi** and the **Gen 1 Recomp Team** ([bryanthaboi/gen1recomp](https://github.com/bryanthaboi/gen1recomp))
+- **Decompilation Assets & Sprite Data**: **pret** / The **pokeemerald** & **pokeemerald-expansion** decompilation projects ([rh-hideout/pokeemerald-expansion](https://github.com/rh-hideout/pokeemerald-expansion))
+- **MMO Architecture Foundation**: **alamops** ([alamops/RBYMMOMod](https://github.com/alamops/RBYMMOMod))
+- **PotatoVoxel 3D Diorama Bridge**: **ShaneMcGovernIE** ([ShaneMcGovernIE/potato_voxel](https://github.com/ShaneMcGovernIE/potato_voxel))
+- **PokéGear Cards Expansion**: **1Jamie** ([1Jamie/pokegear_cards](https://github.com/1Jamie/pokegear_cards))

@@ -1,6 +1,14 @@
 # Changelog
 
-## [0.4.0.0] - 2026-08-24
+## [0.5.0] - 2026-08-27
+
+### Added
+- Synchronized Real-Time Clock with server authority and automatic Day/Night cycle locking.
+- 1:1 True-Color PokeEmerald follower sprites.
+- Synchronized overworld wild Pokémon encounters with live grass roaming across Johto and Kanto.
+- Rebranded to Gen1Online+.
+
+## [0.4.0] - 2026-08-24
 
 ### Added
 
