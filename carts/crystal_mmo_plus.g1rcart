@@ -1,6 +1,6 @@
 return {
   cart = {
-    author = "Brookes",
+    author = "gamecorner33",
     base = "crystal",
     engine = ">=0.0.0-dev <1.0.0",
     id = "crystal_mmo_plus",
