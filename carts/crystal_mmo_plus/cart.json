@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "id": "crystal_mmo_plus",
+  "title": "Gen1Online+",
+  "version": "0.1.0",
+  "author": "Brookes",
+  "summary": "Pokemon Crystal with 60FPS multiplayer, PokeEmerald follower sprites, overworld encounters, and PotatoVoxel 3D",
+  "shell": "#2670e8",
+  "label": "label.png",
+  "base": "crystal",
+  "engine": ">=0.0.0-dev <1.0.0",
+  "seal": "sealed",
+  "mods": [
+    {
+      "id": "potato_voxel",
+      "source": "github",
+      "repo": "ShaneMcGovernIE/potato_voxel",
+      "version": "1.9.6",
+      "sha256": "f57c83e24fd8252fdc936bc7420ea2bc0439ec253d8a0f9ba11ffa9a06ea9846"
+    },
+    {
+      "id": "pokegear_cards",
+      "source": "github",
+      "repo": "1Jamie/pokegear_cards",
+      "version": "1.1.0",
+      "sha256": "2b6455e4d5e55b2a78668671b29b616e4af060d94135ecdfcad559039bc4f3d7"
+    },
+    {
+      "id": "gen1online-plus",
+      "source": "github",
+      "repo": "gamecorner-033/Gen1Online",
+      "version": "0.5.0",
+      "sha256": "0f1639ba805c0249dee65f68c032147e390dda43044e244dd816b0ae221b4a3a"
+    }
+  ],
+  "load_order": [
+    "potato_voxel",
+    "pokegear_cards",
+    "gen1online-plus"
+  ]
+}
