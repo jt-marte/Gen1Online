@@ -283,6 +283,18 @@ pick("GIVE PIDGEY")
 local given = tradeAnim and tradeAnim.opts.given and tradeAnim.opts.given.species
 local received = tradeAnim and tradeAnim.opts.received and tradeAnim.opts.received.species
 check(given == "PIDGEY" and received == "ABRA", "trade shows PIDGEY leaving, ABRA arriving")
+-- the server has handed the ABRA over: it is saved before the animation ends
+do
+  local SaveSerializer = require("src.core.SaveSerializer")
+  local onlinePath
+  for path in pairs(Rig.writes) do
+    if path:match("save_online_crystal%.lua$") then onlinePath = path end
+  end
+  local midTrade = SaveSerializer.decode(onlinePath and Rig.writes[onlinePath] or "") or {}
+  local savedAbra = false
+  for _, m in ipairs(midTrade.party or {}) do if m.species == "ABRA" then savedAbra = true end end
+  check(savedAbra, "the ABRA is in the online save while the trade animation still plays")
+end
 check(finishTradeAnim(), "the trade plays")
 check(said("GTS TRADE COMPLETE") ~= nil, "trade completes")
 check(partySpecies() == "CYNDAQUIL,KADABRA,HOOTHOOT,ABRA", "ABRA arrived, PIDGEY left")

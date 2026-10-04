@@ -48,6 +48,15 @@ A server of our own, built for playing with friends.
 - On Gen 1 the casino stays off (the Celadon Game Corner and its coin cap are
   vanilla), Yellow's own Pikachu follower is left alone, the avatar applies to
   the Gen 1 player sprite, and the 1x speed lock covers Gen 1 too.
+- A Pokémon received from the GTS or Wonder Trade is saved the moment it
+  arrives. It was saved only after the trade animation, so a crash during the
+  animation lost a Pokémon the server had already handed over.
+- On Gen 1 a full party and full PC boxes now refuse a GTS claim or withdrawal
+  (the server keeps the Pokémon) instead of losing it.
+- On Windows a second server can no longer start on a port that is already in
+  use (`SO_REUSEADDR` let two servers share it, and one data file).
+- The README, the mod card and the in-game party messages no longer promise
+  shared party XP, which no client code has ever shared.
 
 ## [0.5.1] - 2026-10-04
 

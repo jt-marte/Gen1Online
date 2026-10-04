@@ -858,6 +858,12 @@ class GenerationTests(ServerTest):
                          "WRONG_GENERATION")
         self.assertTrue(self.post("get_quests", game="", generation=2)["success"])
 
+    def test_a_world_claimed_by_gen_1_issues_letter_tokens(self):
+        # the register request claims the world before the token is made
+        res = self.post("register_player", name="RED", game="Pokemon Red")
+        self.assertRegex(res["account"]["token"], r"^[A-Z]{8}$")
+        self.assertEqual(self.get("/server/info")["generation"], 1)
+
     def test_gen_3_is_never_admitted(self):
         res = self.post("register_player", name="MAY", game="Pokemon Emerald")
         self.assertError(res, "WRONG_GENERATION")
@@ -909,6 +915,14 @@ class GenOneServerTests(ServerTest):
     def test_the_flag_rejects_other_generations(self):
         with self.assertRaises(ValueError):
             gts_server.GtsStore(os.path.join(self.dir, "other.json"), generation=3)
+
+
+class BindingTests(ServerTest):
+    def test_a_second_server_cannot_take_the_same_port(self):
+        self.assertEqual(gts_server.GtsHTTPServer.allow_reuse_address, os.name != "nt")
+        other = gts_server.GtsStore(os.path.join(self.dir, "other.json"))
+        with self.assertRaises(OSError):
+            gts_server.GtsHTTPServer(("127.0.0.1", self.port), other).server_close()
 
 
 class CommandLineTests(unittest.TestCase):

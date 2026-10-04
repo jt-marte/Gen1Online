@@ -1175,7 +1175,10 @@ class GtsHandler(BaseHTTPRequestHandler):
 
 class GtsHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # On Windows SO_REUSEADDR lets a second server bind a port that is already
+    # in use, so two servers would silently share one data file: there the
+    # second start must fail instead.
+    allow_reuse_address = os.name != "nt"
 
     def __init__(self, address, store):
         self.store = store

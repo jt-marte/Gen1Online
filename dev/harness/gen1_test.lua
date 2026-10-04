@@ -418,10 +418,43 @@ top():update(1 / 60)
 pick("GIVE PIDGEY")
 local given = tradeAnim and tradeAnim.opts.sent and tradeAnim.opts.sent.species
 check(given == "PIDGEY", "PIDGEY is the one leaving")
+-- the server has handed the ABRA over: it is saved before the animation ends
+local midTrade = SaveSerializer.decode(Rig.writes[onlinePath] or "") or {}
+local savedAbra = false
+for _, m in ipairs(midTrade.party or {}) do if m.species == "ABRA" then savedAbra = true end end
+check(savedAbra, "the ABRA is in the online save while the trade animation still plays")
 check(finishTradeAnim() and said("GTS TRADE COMPLETE") ~= nil, "the GTS trade completes")
 check(partySpecies() == "PIKACHU,KADABRA,ZUBAT,ABRA", "ABRA arrived, PIDGEY left (" .. partySpecies() .. ")")
 local sellerClaims = ((get("/gts/claims?trainerId=500001") or {}).claims) or {}
 check(#sellerClaims == 1 and sellerClaims[1].mon.species == "PIDGEY", "the seller's claim box has the PIDGEY")
+
+-- nowhere to put it: with the party and all 12 boxes full, a claim stays on
+-- the server until there is room
+do
+  local Boxes1 = require("src.pokemon.Boxes")
+  local party, boxes, current = game.save.party, game.save.boxes, game.save.currentBox
+  game.save.party = {}
+  for i = 1, 6 do game.save.party[i] = mon("RATTATA", 3) end
+  game.save.boxes = nil
+  for _, box in ipairs(Boxes1.ensure(game.save)) do
+    for j = 1, Boxes1.CAPACITY do box[j] = mon("ZUBAT", 2) end
+  end
+  local lid = post({ action = "deposit", trainerId = myId, trainerName = "ASH", offeredMon = mon("EKANS", 7),
+    wanted = {} }).listing.id
+  post({ action = "trade", listingId = lid, buyerId = "300002", buyerName = "B2", sentMon = mon("SPEAROW", 8) })
+  openGts("MY LISTINGS")
+  pick("GET SPEAROW")
+  closeTexts()
+  check(said("FULL") ~= nil and tradeAnim == nil, "a full party and full boxes refuse the claim: "
+    .. table.concat(messages, " / "))
+  check(#(((get("/gts/claims?trainerId=" .. myId) or {}).claims) or {}) == 1, "the SPEAROW waits on the server")
+  game.save.party, game.save.boxes, game.save.currentBox = party, boxes, current
+  openGts("MY LISTINGS")
+  pick("GET SPEAROW")
+  check(finishTradeAnim(), "with room again, the claim goes through")
+  check(partySpecies():find("SPEAROW", 1, true) ~= nil, "SPEAROW joined the party (" .. partySpecies() .. ")")
+end
+popTo(world)
 
 -- ---- 8. Wonder Trade ---------------------------------------------------------------------------
 local menu = openGts("WONDER TRADE")

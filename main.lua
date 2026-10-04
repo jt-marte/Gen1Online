@@ -1830,7 +1830,7 @@
                     if aRes and aRes.success then
                       activeParty = aRes.party
                       pendingPartyInvite = nil
-                      game.stack:push(TextBox.new(game, wrapText("JOINED CO-OP PARTY!\nALL XP IS NOW SHARED WITH MEMBERS!")))
+                      game.stack:push(TextBox.new(game, wrapText("JOINED CO-OP PARTY!\nYOU CAN NOW WARP TO YOUR PARTY MEMBERS!")))
                     else
                       pendingPartyInvite = nil
                       game.stack:push(TextBox.new(game, wrapText("COULD NOT JOIN PARTY!")))
@@ -3581,7 +3581,16 @@
     local save = game and game.save
     if not save then return false end
     if #(save.party or {}) < 6 then return true end
-    if not isGen2 then return true end
+    if not isGen2 then
+      -- 12 boxes of 20 (src.pokemon.Boxes): a Pokémon with nowhere to go
+      -- would be lost after the server has already handed it over
+      local okB1, Boxes1 = pcall(require, "src.pokemon.Boxes")
+      if not okB1 then return true end
+      for _, box in ipairs(Boxes1.ensure(save)) do
+        if #box < (Boxes1.CAPACITY or 20) then return true end
+      end
+      return false
+    end
     local okB, Boxes = pcall(require, "src.core.gen2.Boxes")
     if not okB then return false end
     for i = 1, Boxes.NUM_BOXES do
@@ -3623,10 +3632,7 @@
 
   -- Execute complete trade sequence: Pre-Save -> Cable Trade Animation -> Trade Evolution -> Post-Save -> MMO XP
   function GtsUI.performTradeWithAnimationAndEvolution(game, sentMon, receivedPacked, otName, otId, onComplete)
-    -- 1. Pre-Trade Save
-    performForcedSave(game)
-
-    -- 2. Unpack received mon and preserve full stats & OT
+    -- 1. Unpack received mon and preserve full stats & OT
     local receivedMon = GtsUI.unpackMon(game, receivedPacked)
     if not receivedMon then
       game.stack:push(TextBox.new(game, wrapText("THAT POKéMON ISN'T IN THIS GAME!")))
@@ -3653,6 +3659,10 @@
         dex.owned[receivedMon.species] = true
       end
     end
+
+    -- 2. Saved as soon as the Pokémon is here: the server has already handed
+    -- it over, so a crash during the animation must not lose it
+    performForcedSave(game)
 
     local function afterEvolution()
       performForcedSave(game)
@@ -5220,7 +5230,7 @@
             }, 1.5)
             if res and res.success then
               activeParty = res.party
-              local msg = "PARTY CREATED!\nINVITE PLAYERS TO SHARE DOUBLE XP & WARP!"
+              local msg = "PARTY CREATED!\nINVITE PLAYERS TO TEAM UP AND WARP TO EACH OTHER!"
               game.stack:push(TextBox.new(game, wrapText(msg), function()
                 openPartyMainMenu(game)
               end))

@@ -159,7 +159,7 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
 scratch on branch `server-rewrite` against the protocol below. `dev/server.sh`
 runs it for the tests. The legacy-server stand-in (`dev/make_test_server.py`)
 is gone, and the original 0.5.x server was never in this repo. Gen 1 support
-(client and the server's generation lock) is on branch `gen1-support`.
+(client and the server's generation lock) followed; both are on `master`.
 
 **One generation per server.** The data file records its world's generation
 (`"generation": 1 | 2`). `--gen 1|2` (or `GTS_GENERATION`) sets it; without
@@ -471,14 +471,21 @@ off the open internet.
 - For 5 s after a battle the client drops incoming challenge answers as stale
   (`lastBattleEndTime`), on both generations, so an offer made right after a
   battle times out.
+- Gen 1 link battles and trades run over `GtsNetAdapter`, which polls the
+  server synchronously on the main thread every 0.15 s (Crystal's native
+  battle uses the async engine, `pvpBattleSend`). Fine on a LAN; over
+  Tailscale or the internet each poll can stall a frame.
+- On Gen 1, remote players are drawn after the world (the `drawWorld`
+  wrapper), without name tags and without the SGB palette tint.
 
 - Every GTS and Wonder Trade arrival runs through
   `performTradeWithAnimationAndEvolution`, which awards `gts_trade` (100 XP)
   on top of the caller's own award (`gts_claim` 50, `wonder_trade` 75). The
   server adds whatever the client reports, so the totals agree; whether a
   claim should earn both is a design call.
-- The README promises shared party XP, but no client code shares XP and the
-  server always answers `partyXp: []` (see the design notes).
+- No client code shares party XP, and the server always answers
+  `partyXp: []` (see the design notes); the README and mod card no longer
+  promise it.
 
 - In-world link trades don't work on Crystal (the engine's `LinkState` trade
   is Gen 1 only); the GTS covers trading.

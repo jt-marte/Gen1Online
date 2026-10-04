@@ -18,7 +18,7 @@ A server hosts one generation's world: Gen 1 players (Red, Blue and Yellow toget
 - **Dedicated Dual-Save Architecture**: Online progress writes strictly to its own file in the mod's private storage (`save_online_crystal.lua`, `save_online_red.lua`, ...), leaving your offline save untouched.
 
 ### 🕒 2. Authoritative Server RTC Clock & Day/Night Sync (Crystal)
-- **Synchronized Real-Time Clock**: Server broadcasts canonical time, minute, second, and day-of-week on every sync heartbeat.
+- **Synchronized Real-Time Clock**: Server broadcasts the canonical hour, minute and day of the week on every sync heartbeat.
 - **Unified Day/Night Cycles**: Ensures all players in the world experience synchronized morning, day, night lighting and encounter tables. Manual clock manipulation is locked out for fair gameplay.
 
 ### 🐾 3. 1:1 True-Color PokeEmerald Follower Sprites (Crystal; Yellow keeps its own Pikachu)
@@ -27,15 +27,14 @@ A server hosts one generation's world: Gen 1 players (Red, Blue and Yellow toget
 
 ### 💬 4. Global & Local Chat + PokéGear Integration
 - **Real-Time Live Notifications**: Receive popup alerts when other trainers send messages in the world.
-- **Dedicated PokéGear Chat Tab**: Full scrollable chat history built directly into the player's PokéGear with unread badges.
+- **Dedicated PokéGear Chat Tab** (Crystal, with the optional [pokegear_cards](https://github.com/1Jamie/pokegear_cards) mod): Full scrollable chat history built directly into the player's PokéGear with unread badges.
 
 ### 🏪 5. 24/7 Global Trade Station (GTS) & Overworld PVP
 - **Persistent GTS Network**: Deposit and search for Pokémon listings asynchronously.
 - **Overworld Direct PVP Battles**: Walk up to any trainer in the world, face them, and press **`A`** to challenge them. Battles run on the recomp's native lockstep link battle. On Red, Blue and Yellow you can also link-trade face to face; on Crystal, trade through the GTS.
 
-### 👥 6. Co-Op Party System & Shared XP
+### 👥 6. Co-Op Party System
 - **Party System (Up to 4 Players)**: Invite nearby trainers, view live teammate locations and levels.
-- **Shared Experience**: Gain co-op bonus experience points when teammates defeat Pokémon in battle.
 
 ---
 
