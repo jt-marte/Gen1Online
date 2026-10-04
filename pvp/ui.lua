@@ -5,19 +5,14 @@
 --   * the battle is polled every frame so the opponent's actions arrive.
 
 local BattleState = require("src.ui.gen2.BattleState")
-local Session = require("mods.gen1online-plus.pvp.session")
 
 local PvpUi = {}
 PvpUi.__index = PvpUi
 setmetatable(PvpUi, { __index = BattleState })
 
+-- Turn trace for debugging a desync; set PvpUi.debug = true to print it.
 local function pvpDiag(line)
-  pcall(function()
-    local f = _G.love and _G.love.filesystem
-    if f and f.write then
-      f.write("gts_pvp_diag.txt", tostring(line) .. "\n")
-    end
-  end)
+  if PvpUi.debug then print("[Gen1Online+ pvp] " .. tostring(line)) end
 end
 
 -- opts: the vanilla BattleState opts (battle, save, onDone, ...) PLUS

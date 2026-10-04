@@ -1,15 +1,34 @@
-[card]
-id = "gen1online-plus"
-title = "Gen1Online++"
-version = "0.4.0.0"
-author = "Antigravity & User"
-category = "CONTENT"
-tags = ["multiplayer", "coop", "online", "pvp", "casino", "crystal"]
-description = "Multiplayer online co-op overworld exploration, 24/7 GTS Trading, PVP Battles, and Casino Lounge for Pokemon Crystal."
-
-[features]
-- Real-time overworld co-op movement sync (Human Trainer CHRIS + Follower Pokemon)
-- 24/7 Persistent GTS Server & Global Trading System
-- Celadon Game Corner Casino Lounge with Crash, Tube Flyer, and Prize Case
-- Distance-based PVP Link Battles (integrated native LinkBattle engine)
-- 3D Voxel diorama compatibility
+-- Sharing metadata for the mod manager and tooling; never read by the
+-- loader's merge.
+return {
+  summary = "Online multiplayer for Crystal: live co-op overworld, GTS trading, PVP battles and chat.",
+  author = "Gamecorner33 & Antigravity",
+  contact = "https://github.com/gamecorner-033/Gen1Online",
+  tags = { "multiplayer", "coop", "online", "pvp", "gts", "crystal" },
+  differences = {
+    changed = {
+      "the START menu gains CONNECT (ONLINE while connected); SAVE is hidden while online",
+      "the bedroom and Pokemon Center PCs gain a GTS row",
+      "while online the game runs at 1x speed and the clock follows the server",
+    },
+    added = {
+      "live overworld sync of other trainers, with name tags",
+      "24/7 GTS: deposit, browse, trade (with trade evolution) and Wonder Trade",
+      "PVP link battles against other trainers in the overworld",
+      "global chat with live notifications and a PokeGear chat card",
+      "co-op parties with shared XP and party warp",
+      "true-color party followers",
+      "a separate online save that never touches the offline save",
+    },
+    known = {
+      "needs a running Gen1Online server (gts_config.txt)",
+      "in-world link trades are not available on Crystal yet; trade through the GTS",
+    },
+  },
+  credits = {
+    { who = "bryanthaboi and the Gen 1 Recomp team", for_ = "the engine and its native link battle" },
+    { who = "pret / pokeemerald and pokeemerald-expansion", for_ = "follower sprite sources" },
+    { who = "alamops (RBYMMOMod)", for_ = "the MMO architecture foundation" },
+  },
+  compat = { modApi = 2 },
+}

@@ -1,5 +1,75 @@
 # Changelog
 
+## [0.5.1] - 2026-10-04
+
+Brought up to date with the current gen1recomp engine and tested on a real
+Crystal boot. Connects to 0.5.x servers.
+
+### Removed
+
+- Overworld wild Pokémon roaming (wild Pokémon walking around in the grass and
+  A-press battles). Wild encounters are the game's own tall-grass encounters
+  again. `data/encounter_tables.json` and `tools/encounter_editor.py`, which only
+  fed that feature, are gone too.
+
+### Changed
+
+- Crystal PVP now runs on the engine's native lockstep link battle
+  (`LinkBattle2`) when both players are on 0.5.1+: real per-turn desync checks,
+  and each player picks their own replacement after a faint. A player on an
+  older client still gets the mod's own battle engine, negotiated through the
+  challenge room id, so mixed versions can still battle.
+- The 1x speed lock while online uses the engine's own lock
+  (`Game2:speedLocked`) instead of overwriting the player's GAME SPEED options
+  every frame, so the player's speed setting is intact after going offline.
+- The global chat poll runs in the background through `mod.fetch` (with the
+  old request as a fallback), removing a hitch every 5 seconds online.
+- Chat typing goes through the engine's `input.key` hook instead of replacing
+  `love.keypressed`, which also swallowed keys meant for other screens.
+- Online name tags are drawn in the overworld pass, right above each trainer,
+  and no longer over battle, trade and evolution screens.
+- The mod loads its own files through the sandbox (`mod:read`/`mod:info`)
+  instead of `require("mods.gen1online-plus...")` and `io.open`, so it works
+  whatever its install folder is called. Debug files are no longer written to
+  disk every few seconds (developer-mode log lines instead).
+- Character creation and recovery-token entry use Crystal's own naming
+  screen (the token uses the box keyboard, the only one with digits).
+- The client accepts any server on the same major.minor version, the same rule
+  the server applies.
+
+### Fixed
+
+- Online saves, the online account and the chat setting now actually persist
+  (the storage calls used the wrong signature and silently failed).
+- Offline play no longer touches the online account: event handlers renamed
+  the offline player to the online name, stamped the account token into the
+  offline save (diverting its SAVE into the online file) and made blocking
+  server calls on every badge, catch and battle.
+- GTS on Crystal used the Gen 1 Pokémon format, losing held items, happiness,
+  Pokérus and caught data and rebuilding stats with Gen 1 formulas. It now uses
+  the Gen 2 format (old listings still load), honors party mail, checks for
+  room before a withdraw or claim, and lets Johto Pokémon (#152–251) be
+  requested.
+- GTS trades play Crystal's trade animation and evolve trade evolutions
+  (e.g. KADABRA into ALAKAZAM) on arrival; the animation used to be left on
+  screen.
+- A forced disconnect now reloads the offline save's story flags into the
+  world, and both disconnect paths restore the player's own Chris/Kris sprite.
+- Badge and Pokédex counts on profiles read Crystal's save layout (they were
+  always 0).
+- The online clock bypass (Oak's and Mom's clock questions) matches the
+  engine's current `InitClock` and only applies while online.
+- Talking to the follower works (it searched the wrong cell and called a
+  function the engine does not have).
+- The first chat message on a quiet server is no longer swallowed, and a new
+  character gets live chat notifications straight away.
+- RESET / SWITCH actually deletes the online save.
+- Background jobs ran three times a frame while online, so remote players
+  moved at 3x speed.
+- "CHALLENGE ACCEPTED" showed up after the battle instead of before it.
+- Text showed `POKÃ©MON` instead of `POKéMON`.
+- `mod.card` is in the engine's Lua format.
+
 ## [0.5.0] - 2026-08-27
 
 ### Added

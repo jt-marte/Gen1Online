@@ -52,6 +52,13 @@ return function(loadModFile, mod)
     return false
   end
 
+  local function tableContains(list, value)
+    for _, v in ipairs(list or {}) do
+      if v == value then return true end
+    end
+    return false
+  end
+
   local function insertNpc(ow, npc)
     if not ow or not npc then return end
     if type(ow.npcs) == "table" and not tableContains(ow.npcs, npc) then
@@ -60,13 +67,6 @@ return function(loadModFile, mod)
     if type(ow.entities) == "table" and not tableContains(ow.entities, npc) then
       table.insert(ow.entities, npc)
     end
-  end
-
-  local function tableContains(list, value)
-    for _, v in ipairs(list or {}) do
-      if v == value then return true end
-    end
-    return false
   end
 
   local NPCs = {

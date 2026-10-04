@@ -1,8 +1,102 @@
--- zip test2
-
   local mod = ...  -- the mod api (vararg from the loader, like PotatoVoxel's entry)
   local currentMod = nil
   print("[Gen1Online+] Initializing Gen1Online+ Asynchronous Threaded 60FPS Multiplayer Mod...")
+
+  -- Resolved before anything else: request headers, the default avatar and
+  -- the save paths below all read these.
+  local MOD_VERSION = "0.5.1"
+  local isGen2 = false
+  if mod and mod.generation then
+    isGen2 = (mod.generation == 2)
+  else
+    local okGv, GvMod = pcall(require, "src.core.GameVersion")
+    if okGv and GvMod and GvMod.generation then isGen2 = (GvMod.generation() == 2) end
+  end
+
+  -- Diagnostics go to the engine log, and only in developer mode.
+  local function diag(fmt, ...)
+    if not (mod and mod.developer and mod.log) then return end
+    pcall(mod.log.info, mod.log, fmt, ...)
+  end
+
+  -- (helpers below sit in do-blocks: this chunk is at Lua's 200-local cap)
+  local requireLocal, modFileExists
+  do
+    -- The mod's own Lua files, compiled into this sandbox through mod:read
+    -- and cached the way require caches.  require("mods.gen1online-plus.x")
+    -- only resolved when the install folder was named exactly
+    -- gen1online-plus, and it ran the file outside the sandbox.
+    local localModules = {}
+    requireLocal = function(relative)
+      local cached = localModules[relative]
+      if cached ~= nil then return cached end
+      local source = mod and mod.read and mod:read(relative)
+      if type(source) ~= "string" then error("missing mod file " .. tostring(relative), 2) end
+      local chunk, err = (loadstring or load)(source, "@" .. tostring(mod.path or "mod") .. "/" .. relative)
+      if not chunk then error(err, 2) end
+      local result = chunk()
+      localModules[relative] = result
+      return result
+    end
+
+    -- Whether a file ships inside this mod (mod:info, cached: the follower
+    -- and wild-spawn code asks every frame).
+    local modFileCache = {}
+    modFileExists = function(relative)
+      local hit = modFileCache[relative]
+      if hit ~= nil then return hit end
+      local ok, info = pcall(function() return mod and mod.info and mod:info(relative) end)
+      hit = (ok and type(info) == "table" and info.type == "file") and true or false
+      modFileCache[relative] = hit
+      return hit
+    end
+  end
+
+  -- Installation-wide persistence for the online character and client
+  -- settings.  mod.storage is playthrough-scoped (every call takes the game
+  -- whose save picks the scope), but the online character follows the player
+  -- across playthroughs, so these stay in this mod's private file store, where
+  -- save_online_crystal.lua has always lived.
+  local storageRead, storageWrite, storageRemove
+  do
+    local SaveSerializer = require("src.core.SaveSerializer")
+    local PERSIST_FILES = { online_save = "save_online_crystal.lua" }
+    local function persistFs()
+      local fs = love and love.filesystem
+      if fs and fs.read and fs.write and fs.getInfo then return fs end
+      return nil
+    end
+    local function persistPath(key)
+      key = tostring(key or ""):gsub("%.lua.*$", ""):gsub("[^%w_%-]", "_")
+      return PERSIST_FILES[key] or ("gen1online_" .. key .. ".lua")
+    end
+    storageRead = function(key)
+      local fs = persistFs()
+      if not fs then return nil end
+      local path = persistPath(key)
+      local ok, value = pcall(function()
+        if not fs.getInfo(path) then return nil end
+        local body = fs.read(path)
+        return type(body) == "string" and SaveSerializer.decode(body) or nil
+      end)
+      if not ok then return nil end
+      if type(value) == "table" and value.__value ~= nil then return value.__value end
+      return value
+    end
+    storageWrite = function(key, value)
+      local fs = persistFs()
+      if not fs then return false end
+      if type(value) ~= "table" then value = { __value = value } end
+      local ok, written = pcall(function()
+        return fs.write(persistPath(key), SaveSerializer.encode(value))
+      end)
+      return ok and written ~= false
+    end
+    storageRemove = function(key)
+      local fs = persistFs()
+      if fs and fs.remove then pcall(fs.remove, persistPath(key)) end
+    end
+  end
 
   local function loadLocal(mod, relative)
     local source = nil
@@ -36,52 +130,6 @@
   local Quests = {}
   local NPCs = {}
   local GtsUI = {}
-  local Wild = { active = {}, tilesCache = {}, latestServer = nil, db = nil, lastMapId = nil }
-  local Jobs = {
-    registry = {},
-    nextId = 1
-  }
-  function Jobs.submit(name, stepFn, cancelFn, persist)
-    local id = Jobs.nextId
-    Jobs.nextId = Jobs.nextId + 1
-    local job = {
-      id = id,
-      name = name or "task",
-      status = "running",
-      step = stepFn,
-      cancel = cancelFn,
-      persist = (persist ~= false),
-      createdAt = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
-    }
-    Jobs.registry[id] = job
-    return id
-  end
-  function Jobs.poll(id)
-    return Jobs.registry[id] or { status = "error", err = "unknown job" }
-  end
-  function Jobs.cancel(id)
-    local job = Jobs.registry[id]
-    if job then
-      job.status = "cancelled"
-      if job.cancel then pcall(job.cancel, job) end
-    end
-  end
-  function Jobs.step(game, dt)
-    for id, job in pairs(Jobs.registry) do
-      if job.status == "running" and job.step then
-        local ok, res = pcall(job.step, job, game, dt)
-        if not ok then
-          job.status = "error"
-          job.err = tostring(res)
-        elseif res == "done" or res == false then
-          job.status = "done"
-        end
-      end
-      if (job.status == "done" or job.status == "cancelled" or job.status == "error") and not job.persist then
-        Jobs.registry[id] = nil
-      end
-    end
-  end
 
 
   local Game, Input, OverworldState, BattleState = require("src.core.Game"), require("src.core.Input"), require("src.world.OverworldController"), require("src.battle.BattleState")
@@ -469,21 +517,6 @@
     return false, nil, nil, nil, nil
   end
 
-  local MOD_VERSION = "0.5.0"
-
-  -- Generation detection: Crystal is Gen 2; this build targets Crystal only.
-  local currentGeneration = "gen1"
-  do
-    local okGv, GvMod = pcall(require, "src.core.GameVersion")
-    if okGv and GvMod and GvMod.get then
-      local vid = GvMod.get()
-      if vid == "crystal" then
-        currentGeneration = "gen2"
-      end
-    end
-  end
-  local isGen2 = (currentGeneration == "gen2")
-
   -- Generation-aware Starting Spawn Locations (Johto / New Bark Town for Crystal, Kanto / Pallet Town for Gen 1)
   local defaultStartingOutdoor = isGen2 and "NEW_BARK_TOWN" or "PALLET_TOWN"
   local defaultStartingOutdoorX = isGen2 and 13 or 5
@@ -512,13 +545,8 @@
 
   -- Profanity Filter Module Loader
   local Profanity = nil
-  local okProf, profMod = pcall(require, "mods.gen1online-plus.other.profanity")
-  if okProf and profMod then
-    Profanity = profMod
-  else
-    local okProf2, profMod2 = pcall(require, "other.profanity")
-    if okProf2 and profMod2 then Profanity = profMod2 end
-  end
+  local okProf, profMod = pcall(requireLocal, "other/profanity.lua")
+  if okProf and type(profMod) == "table" then Profanity = profMod end
 
   local function gtsApiGet(path, timeout)
     local response_body = {}
@@ -618,7 +646,7 @@
   end
   function saveChatNotifPref(val)
     ChatState.liveEnabled = val and true or false
-    if currentMod and currentMod.storage and currentMod.storage.write then pcall(currentMod.storage.write, currentMod.storage, "live_chat_notifications", ChatState.liveEnabled) end
+    storageWrite("live_chat_notifications", ChatState.liveEnabled)
     if currentGame and currentGame.save then
       currentGame.save.modData = currentGame.save.modData or {}
       currentGame.save.modData["gen1online-plus"] = currentGame.save.modData["gen1online-plus"] or {}
@@ -673,10 +701,12 @@
     end
   end
   function handleNewChatMessages(game, msgs)
-    if not msgs or #msgs == 0 then return end
+    msgs = msgs or {}
 
-    -- On initial connect / startup, establish baseline without spamming old messages
-    if ChatState.lastId == 0 or not ChatState.connectedBaseline then
+    -- On initial connect / startup, establish baseline without spamming old
+    -- messages.  An empty history is a baseline too (lastId 0), so the first
+    -- message on a quiet server is not swallowed as "old".
+    if not ChatState.connectedBaseline then
       local maxId = 0
       for _, m in ipairs(msgs) do
         local id = tonumber(m.id) or 0
@@ -688,6 +718,7 @@
       ChatState.connectedBaseline = true
       return
     end
+    if #msgs == 0 then return end
 
     local maxId = ChatState.lastId
     for _, m in ipairs(msgs) do
@@ -715,13 +746,52 @@
     ChatState.lastId = maxId
     ChatState.history = msgs
   end
+  -- The periodic chat poll runs off the main thread through mod.fetch (the
+  -- engine's background HTTP, which also speaks real HTTPS) when the build
+  -- has it; the blocking GET it replaces stalled a frame every poll on a
+  -- remote server.  serviceChatFetch collects the answer each frame.
   function pollGlobalChat(game)
     game = game or currentGame
     if not game or not isGtsServerConnected then return end
+    local fetch = mod and mod.fetch
+    if fetch and fetch.available and fetch:available() then
+      if ChatState.fetchJob then return end -- the last poll is still in flight
+      local url = getServerUrl():gsub("/+$", "") .. "/chat/history?version="
+        .. MOD_VERSION .. "&modVersion=" .. MOD_VERSION
+      ChatState.fetchJob = fetch:get(url, { accept = "application/json", maxSeconds = 5 })
+      if ChatState.fetchJob then return end
+    end
     local res = gtsApiGet("/chat/history", 2.0)
     if res and res.success and res.messages then
       handleNewChatMessages(game, res.messages)
     end
+  end
+  function serviceChatFetch(game)
+    local job = ChatState.fetchJob
+    if not job then return end
+    local result = mod.fetch:poll(job)
+    if not result or result.status == "pending" then return end
+    pcall(mod.fetch.release, mod.fetch, job)
+    ChatState.fetchJob = nil
+    if result.status == "ok" and isGtsServerConnected then
+      local okJson, res = pcall(Json.decode, result.body or "")
+      if okJson and type(res) == "table" and res.success and res.messages then
+        handleNewChatMessages(game or currentGame, res.messages)
+      end
+    end
+  end
+  -- A fresh chat session: the first poll sets the baseline, so history from
+  -- before connecting is not replayed as notifications.  Every way of coming
+  -- online (login, new character, recovery token) starts one.
+  function startChatSession(game)
+    ChatState.lastId = 0
+    ChatState.connectedBaseline = false
+    ChatState.unread = 0
+    ChatState.queue = {}
+    ChatState.pollTimer = 0
+    loadChatNotifPref()
+    pcall(pollGlobalChat, game)
+    ensureChatTextInputPatch()
   end
   function sendGlobalChat(game, rawText, scope)
     scope = scope or "global"
@@ -783,6 +853,15 @@
   end
   function ChatInputScreen:update(dt)
     self.cursorBlink = (self.cursorBlink + 1) % 60
+    -- a controller reaches the box through the game's input, not a callback
+    local input = self.game and self.game.input
+    if input and input.wasPressed then
+      for _, button in ipairs({ "a", "start", "b", "select" }) do
+        if input:wasPressed(button) then
+          return self:onGamepadPressed(button == "select" and "back" or button)
+        end
+      end
+    end
   end
   function ChatInputScreen:onKeyPressed(key)
     if key == "escape" then
@@ -880,32 +959,37 @@
     Font.draw("B / ESC: BACK", 8, 120)
     love.graphics.setColor(1, 1, 1, 1)
   end
-  -- Patch love.textinput and love.keypressed to forward to top ChatInputScreen if present
-  local _origLoveTextInput = love.textinput
-  local _origLoveKeyPressed = love.keypressed
+  -- Keys reach the chat box through the engine's input.key hook (RFC 0020),
+  -- which runs before any of the game's own key handling, so a key the box
+  -- takes never also moves a cursor underneath it.  Only the chat box is
+  -- served: the old love.keypressed override fed every screen with a
+  -- keypressed method and swallowed the key from the engine.
+  if mod and mod.hooks and mod.hooks.wrap then
+    mod.hooks:wrap("input.key", function(nextFn, game, ev)
+      local top = game and game.stack and game.stack:top()
+      if ev and ev.phase == "pressed" and top and getmetatable(top) == ChatInputScreen then
+        local ok, handled = pcall(top.onKeyPressed, top, ev.key)
+        if ok and handled ~= false then return end
+      end
+      return nextFn(game, ev)
+    end)
+  end
+
+  -- Typed characters: the engine does not route love.textinput into the
+  -- game, so the chat box chains it (installed the first time it opens).
   local _chatTextInputPatched = false
   function ensureChatTextInputPatch()
     if _chatTextInputPatched then return end
     _chatTextInputPatched = true
+    local previous = love.textinput
     love.textinput = function(t)
       local g = currentGame
-      if g and g.stack and g.stack:top() and g.stack:top().textinput then
-        local top = g.stack:top()
-        if top.textinput then pcall(top.textinput, top, t); return end
+      local top = g and g.stack and g.stack:top()
+      if top and getmetatable(top) == ChatInputScreen then
+        pcall(top.textinput, top, t)
+        return
       end
-      if _origLoveTextInput then return _origLoveTextInput(t) end
-    end
-    love.keypressed = function(key, scancode, isrepeat)
-      local g = currentGame
-      if g and g.stack and g.stack:top() then
-        local top = g.stack:top()
-        if top.onKeyPressed or top.keypressed then
-          local fn = top.onKeyPressed or top.keypressed
-          local ok, handled = pcall(fn, top, key)
-          if ok and handled ~= false then return end
-        end
-      end
-      if _origLoveKeyPressed then return _origLoveKeyPressed(key, scancode, isrepeat) end
+      if previous then return previous(t) end
     end
   end
 
@@ -943,13 +1027,13 @@
     return table.concat(pages, "\f")
   end
 
-  -- Helper to list all Gen 1 PokÃ©mon species sorted alphabetically
+  -- Helper to list all Gen 1 Pokémon species sorted alphabetically
   local function getAllGen1Species(data)
     local speciesList = {}
     if data and data.pokemon then
       for key, def in pairs(data.pokemon) do
         local name = def.name or key
-        if type(key) == "string" and name and def.dex and def.dex >= 1 and def.dex <= 151 then
+        if type(key) == "string" and name and def.dex and def.dex >= 1 and def.dex <= (isGen2 and 251 or 151) then
           table.insert(speciesList, { id = key, name = name, dex = def.dex })
         end
       end
@@ -1064,26 +1148,6 @@
   local syncMultiNetPlayers, startPvpBattle, startLinkTrade, saveOnlineAccount, loadOnlineAccount, syncLocalProfile, performForcedSave, writeOnlineSave, loadOnlineSave, addMmoXp, openOnlineOptionsMenu, openFreshOnlinePlayerMenu, openRedeemTokenMenu, openMyProfileMenu, openServerUrlMenu, openTrainerCardScreen, openMmoLevelInfoScreen, openMmoChatMenu, handleDisconnect, handleConnectToServer, applyPlayerSprite
 
 
-  -- Hook World:interactBody to trigger wild battle on A-press facing wild Pokémon
-  pcall(function()
-    local okW, Gen2World = pcall(require, "src.world.gen2.World")
-    if okW and Gen2World and Gen2World.interactBody then
-      local origInteractBody = Gen2World.interactBody
-      Gen2World.interactBody = function(self)
-        if self.facingObjectCell then
-          local targetCell = self:facingObjectCell()
-          if targetCell then
-            local npc = self:npcAt(targetCell)
-            if npc and npc.isWildMon then
-              return startWildMonBattle(self.game, self, npc)
-            end
-          end
-        end
-        return origInteractBody(self)
-      end
-    end
-  end)
-
   -- ==========================================================================
   -- Non-blocking persistent HTTP/1.1 client & MMO Sync Engine
   -- ==========================================================================
@@ -1170,14 +1234,7 @@
     if not asyncEnsureHost() then asyncClose("bad url"); return end
     -- Diagnostic: a connect during a battle means the persistent connection
     -- dropped, and the blocking handshake below would freeze the PVP lockstep.
-    if inBattle then
-      pcall(function()
-        local f = _G.love and _G.love.filesystem
-        if f and f.write then
-          f.write("gts_pvp_diag.txt", "async reconnect during battle\n")
-        end
-      end)
-    end
+    if inBattle then diag("async reconnect during battle") end
     local okS, socket = pcall(require, "socket")
     if not (okS and socket and socket.tcp) then
       asyncClose("no luasocket"); return
@@ -1454,12 +1511,45 @@
   -- packParty path.
   local function packPartyForGame(game, party)
     if isGen2 then
-      local okP, PvpEngine = pcall(require, "mods.gen1online-plus.pvp.engine")
+      if Protocol.packParty2 then return Protocol.packParty2(party or {}) end
+      local okP, PvpEngine = pcall(requireLocal, "pvp/engine.lua")
       if okP and PvpEngine and PvpEngine.packParty then
         return PvpEngine.packParty(party)
       end
     end
     return Protocol.packParty(party)
+  end
+
+  -- Crystal PVP runs on the engine's native lockstep link battle
+  -- (src/link/LinkBattle2.lua) when both trainers' clients have it.  A client
+  -- that offers it tags the challenge room TAG; an accepting client that also
+  -- has it answers on the room plus "K".  Any other combination -- an older
+  -- client on either side -- stays on the mod's own engine (pvp/*), so mixed
+  -- versions still battle.  The server relays roomId verbatim.
+  local NativePvp = {}
+  do
+    local TAG = "_L2"
+    local ACK = TAG .. "K"
+    local ok, LinkBattle2 = pcall(require, "src.link.LinkBattle2")
+    NativePvp.LinkBattle2 = ok and type(LinkBattle2) == "table" and LinkBattle2 or nil
+    NativePvp.available = isGen2 and NativePvp.LinkBattle2 ~= nil
+      and type(NativePvp.LinkBattle2.newHost) == "function"
+    local function endsWith(s, suffix)
+      return type(s) == "string" and #s >= #suffix and s:sub(-#suffix) == suffix
+    end
+    -- the room a challenger offers
+    function NativePvp.offerRoom(roomId)
+      return NativePvp.available and (roomId .. TAG) or roomId
+    end
+    -- the room an accepting client answers on
+    function NativePvp.acceptRoom(roomId)
+      if NativePvp.available and endsWith(roomId, TAG) then return roomId .. "K" end
+      return roomId
+    end
+    -- did both sides agree on the native battle for this room
+    function NativePvp.negotiated(roomId)
+      return NativePvp.available and endsWith(roomId, ACK)
+    end
   end
 
   -- =========================================================================
@@ -1622,17 +1712,10 @@
     if asyncDiagTime == 0 or now - asyncDiagTime >= 5.0 then
       asyncDiagTime = now
       if (now - asyncLastSuccess) > 5.0 and asyncLastError ~= "" then
-        pcall(function()
-          local f = _G.love and _G.love.filesystem
-          if f and f.write then
-            f.write("gts_async_diag.txt", string.format(
-              "state=%s lastError=%s lastSuccessAge=%ds pending=%d active=%s sock=%s\n",
-              tostring(asyncState), tostring(asyncLastError),
-              math.floor(now - asyncLastSuccess), #asyncPending,
-              asyncActive and "yes" or "no",
-              asyncSock and "yes" or "no"))
-          end
-        end)
+        diag("async state=%s lastError=%s lastSuccessAge=%ds pending=%d active=%s sock=%s",
+          tostring(asyncState), tostring(asyncLastError),
+          math.floor(now - asyncLastSuccess), #asyncPending,
+          asyncActive and "yes" or "no", asyncSock and "yes" or "no")
       end
     end
     -- Drain ALL queued position-sync responses (drain-all prevents stale challenge
@@ -1720,11 +1803,6 @@
               end
             end
 
-            -- Synchronize Overworld Wild Encounters
-            if res.wildEncounters and type(res.wildEncounters) == "table" then
-              Wild.latestServer = res.wildEncounters
-            end
-
             -- Synchronize Real-Time Global Chat Messages
             if res.chat and type(res.chat) == "table" and #res.chat > 0 then
               handleNewChatMessages(game, res.chat)
@@ -1767,12 +1845,16 @@
                   gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
 
                   if not game.save or not game.save.party or #game.save.party == 0 then
-                    game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKÃ©MON IN YOUR PARTY TO BATTLE!")))
+                    game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO BATTLE!")))
                   elseif not remotePartyPacked or #remotePartyPacked == 0 then
-                    game.stack:push(TextBox.new(game, wrapText(string.format("%s HAS NO POKÃ©MON IN THEIR PARTY!", challengerName or "FOE"))))
+                    game.stack:push(TextBox.new(game, wrapText(string.format("%s HAS NO POKéMON IN THEIR PARTY!", challengerName or "FOE"))))
                   else
-                    game.stack:push(TextBox.new(game, "CHALLENGE ACCEPTED!\nSTARTING PVP BATTLE!"))
-                    startPvpBattle(game, challengerName, challengerId, remotePartyPacked, true, sharedSeed, roomId)
+                    -- the battle starts as the message closes; pushed the
+                    -- other way round, it sat under the battle and only
+                    -- showed once the fight was over
+                    game.stack:push(TextBox.new(game, "CHALLENGE ACCEPTED!\nSTARTING PVP BATTLE!", function()
+                      startPvpBattle(game, challengerName, challengerId, remotePartyPacked, true, sharedSeed, roomId)
+                    end))
                   end
                 end
               elseif cType == "ACCEPT_TRADE" then
@@ -1780,7 +1862,7 @@
                 local myId = getTrainerInfo(game.save)
                 gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                 if not game.save or not game.save.party or #game.save.party == 0 then
-                  game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKÃ©MON IN YOUR PARTY TO TRADE!")))
+                  game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
                 else
                   game.stack:push(TextBox.new(game, wrapText("OFFER ACCEPTED! STARTING LINK TRADE!")))
                   startLinkTrade(game, challengerName, challengerId, false, roomId)
@@ -1800,13 +1882,15 @@
                       local myPackedParty = packPartyForGame(game, game.save and game.save.party or {})
                       if cType == "PVP" then
                         if not game.save or not game.save.party or #game.save.party == 0 then
-                          game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKÃ©MON IN YOUR PARTY TO BATTLE!")))
+                          game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO BATTLE!")))
                           return
                         end
                         if not remotePartyPacked or #remotePartyPacked == 0 then
-                          game.stack:push(TextBox.new(game, wrapText(string.format("%s HAS NO POKÃ©MON IN THEIR PARTY!", challengerName or "FOE"))))
+                          game.stack:push(TextBox.new(game, wrapText(string.format("%s HAS NO POKéMON IN THEIR PARTY!", challengerName or "FOE"))))
                           return
                         end
+                        -- answered on the native room when both sides have it
+                        local battleRoom = NativePvp.acceptRoom(roomId)
                         gtsApiPost({
                           action = "send_challenge",
                           targetId = challengerId,
@@ -1815,12 +1899,12 @@
                           challengeType = "ACCEPT_PVP",
                           party = myPackedParty,
                           seed = sharedSeed,
-                          roomId = roomId
+                          roomId = battleRoom
                         }, 1.5)
-                        startPvpBattle(game, challengerName, challengerId, remotePartyPacked, false, sharedSeed, roomId)
+                        startPvpBattle(game, challengerName, challengerId, remotePartyPacked, false, sharedSeed, battleRoom)
                       elseif cType == "TRADE" then
                         if not game.save or not game.save.party or #game.save.party == 0 then
-                          game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKÃ©MON IN YOUR PARTY TO TRADE!")))
+                          game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
                           return
                         end
                         gtsApiPost({
@@ -1925,8 +2009,16 @@
 
   -- Calculate Total Owned Badges from Save
   -- Calculate Total Owned Badges from Save
+  -- Crystal keeps Johto/Kanto badges under save.player and the dex under
+  -- pokedex.caught; Save.summary is the engine's own count of both.
   local function getBadgeCount(save)
-    if not save or not save.badges then return 0 end
+    if not save then return 0 end
+    if isGen2 then
+      local okSave, Gen2Save = pcall(require, "src.core.gen2.Save")
+      local summary = okSave and Gen2Save.summary and Gen2Save.summary(save)
+      return (summary and summary.badges) or 0
+    end
+    if not save.badges then return 0 end
     local count = 0
     for _, b in pairs(save.badges) do
       if b then count = count + 1 end
@@ -1934,9 +2026,15 @@
     return count
   end
 
-  -- Calculate Total PokÃ©dex Caught from Save
+  -- Calculate Total Pokédex Caught from Save
   local function getPokedexCount(save)
-    if not save or not save.pokedex or not save.pokedex.owned then return 0 end
+    if not save then return 0 end
+    if isGen2 then
+      local okSave, Gen2Save = pcall(require, "src.core.gen2.Save")
+      local summary = okSave and Gen2Save.summary and Gen2Save.summary(save)
+      return (summary and summary.caught) or 0
+    end
+    if not save.pokedex or not save.pokedex.owned then return 0 end
     local count = 0
     for _, owned in pairs(save.pokedex.owned) do
       if owned then count = count + 1 end
@@ -1944,15 +2042,8 @@
     return count
   end
 
-  -- Dual Save State Storage: Dedicated Online MMO Save File (Independent of Local save.lua / save_gold.lua)
-  local function getOnlineSaveFiles()
-    local gv = "red"
-    local okGv, GvMod = pcall(require, "src.core.GameVersion")
-    if okGv and GvMod and GvMod.get then gv = GvMod.get() or "red" end
-    local suffix = (gv == "blue" and "_blue") or (gv == "yellow" and "_yellow") or (gv == "gold" and "_gold") or (gv == "silver" and "_silver") or (gv == "crystal" and "_crystal") or ""
-    return "save_online" .. suffix .. ".lua", "save_online" .. suffix .. ".lua.bak", "save_online" .. suffix .. ".lua.tmp"
-  end
-
+  -- Dual Save State Storage: the online character's save lives apart from the
+  -- game's own save (storageRead/storageWrite "online_save", above).
   local offlineSaveBackup = nil
 
   local function loadOfflineSave()
@@ -1971,31 +2062,6 @@
     return nil
   end
 
-  local function storageRead(key)
-    key = tostring(key or ""):gsub("%.lua.*$", "")
-    if currentMod and currentMod.storage and currentMod.storage.read then
-      local ok, res = pcall(currentMod.storage.read, currentMod.storage, key)
-      if ok and res ~= nil then return res end
-    end
-    return nil
-  end
-
-  local function storageWrite(key, value)
-    key = tostring(key or ""):gsub("%.lua.*$", "")
-    if currentMod and currentMod.storage and currentMod.storage.write then
-      local ok, res = pcall(currentMod.storage.write, currentMod.storage, key, value)
-      return ok and res
-    end
-    return false
-  end
-
-  local function storageRemove(key)
-    key = tostring(key or ""):gsub("%.lua.*$", "")
-    if currentMod and currentMod.storage and currentMod.storage.delete then
-      pcall(currentMod.storage.delete, currentMod.storage, key)
-    end
-  end
-
   loadServerUrl()
 
   loadOnlineSave = function(game)
@@ -2003,25 +2069,14 @@
     if save and type(save) == "table" and save.onlineAccount and save.onlineAccount.token then
       return save
     end
-    -- Also read directly from love.filesystem persistence (guarded: the mod
-    -- sandbox blocks love.filesystem, so this is a safe no-op that never
-    -- crashes; storageRead above is the real persistence path).
-    local SaveSerializer = require("src.core.SaveSerializer")
-    local okFs, fsRead = pcall(function()
-      local f = _G.love and _G.love.filesystem
-      if not (f and f.getInfo) then return nil end
-      if not f.getInfo("save_online_crystal.lua") then return nil end
-      return f.read("save_online_crystal.lua")
-    end)
-    if okFs and fsRead then
-      local ok, decoded = pcall(SaveSerializer.decode, fsRead)
-      if ok and decoded and decoded.onlineAccount and decoded.onlineAccount.token then
-        return decoded
-      end
-    end
     local acc = storageRead("online_account")
     if acc and type(acc) == "table" and acc.token then
+      -- an account with no online save yet starts from a COPY of the current
+      -- progress; the offline save table itself never goes online
       local curSave = (game and game.save) or (Game and Game.save) or {}
+      local Serializer = require("src.core.SaveSerializer")
+      local okCopy, copy = pcall(function() return Serializer.decode(Serializer.encode(curSave)) end)
+      if okCopy and type(copy) == "table" then curSave = copy end
       curSave.onlineAccount = acc
       return curSave
     end
@@ -2046,22 +2101,19 @@
       saveTable = currentGame.save
     end
     if not saveTable or type(saveTable) ~= "table" then return false end
-    storageWrite("online_save", saveTable)
+    -- Normalized the way the engine's own Save.save normalizes, so the online
+    -- save reloads through Game2:adoptSave like a normal one.
+    if isGen2 then
+      local okSave, Gen2Save = pcall(require, "src.core.gen2.Save")
+      if okSave and Gen2Save and Gen2Save.normalize then pcall(Gen2Save.normalize, saveTable) end
+    end
+    saveTable.savedAt = os.time()
+    local written = storageWrite("online_save", saveTable)
     if saveTable.onlineAccount then
       storageWrite("online_account", saveTable.onlineAccount)
     end
-    -- Also write directly to love.filesystem persistence as save_online_crystal.lua
-    -- (guarded: the mod sandbox blocks love.filesystem, so this no-ops safely;
-    -- storageWrite above is the real persistence path).
-    local SaveSerializer = require("src.core.SaveSerializer")
-    pcall(function()
-      local f = _G.love and _G.love.filesystem
-      if not (f and f.write) then return end
-      if not (SaveSerializer and SaveSerializer.encode) then return end
-      local encoded = SaveSerializer.encode(saveTable)
-      if encoded then f.write("save_online_crystal.lua", encoded) end
-    end)
-    return true
+    if not written then diag("online save could not be written") end
+    return written
   end
 
   -- Global Save Guards: Intercept all Start Menu and in-game saves while online
@@ -2109,6 +2161,10 @@
 
   -- Sync Local Trainer Profile & Online Account to Server
   loadOnlineAccount = function(save)
+    -- Online only: offline these touched the OFFLINE save (renaming its
+    -- player, stamping the account token that diverts its SAVE into the
+    -- online file) and made blocking server calls on every flag/battle.
+    if not isGtsServerConnected then return nil end
     local acc = storageRead("online_account")
     if not acc and save and save.onlineAccount and save.onlineAccount.token then
       acc = save.onlineAccount
@@ -2120,7 +2176,7 @@
       mmoLevel = tonumber(acc.level) or 1
       mmoXp = tonumber(acc.xp) or 0
       mmoToken = acc.token or nil
-      localSelectedSprite = acc.spriteId or "SPRITE_RED"
+      localSelectedSprite = acc.spriteId or (isGen2 and "SPRITE_CHRIS" or "SPRITE_RED")
       if acc.title then localTrainerTitle = acc.title end
       if acc.favoriteMon then localFavoriteMon = acc.favoriteMon end
       return acc
@@ -2129,6 +2185,10 @@
   end
 
   saveOnlineAccount = function(save)
+    -- Online only: offline these touched the OFFLINE save (renaming its
+    -- player, stamping the account token that diverts its SAVE into the
+    -- online file) and made blocking server calls on every flag/battle.
+    if not isGtsServerConnected then return nil end
     if not save then return end
     save.onlineAccount = save.onlineAccount or {}
     save.onlineAccount.trainerId = (save.player and save.player.id) or save.onlineAccount.trainerId or "100001"
@@ -2136,13 +2196,17 @@
     save.onlineAccount.level = mmoLevel or 1
     save.onlineAccount.xp = mmoXp or 0
     save.onlineAccount.token = mmoToken or save.onlineAccount.token
-    save.onlineAccount.spriteId = localSelectedSprite or "SPRITE_RED"
+    save.onlineAccount.spriteId = localSelectedSprite or (isGen2 and "SPRITE_CHRIS" or "SPRITE_RED")
     save.onlineAccount.title = localTrainerTitle or "ACE TRAINER"
     save.onlineAccount.favoriteMon = localFavoriteMon or "PIKACHU"
     storageWrite("online_account", save.onlineAccount)
   end
 
   syncLocalProfile = function(game, winDelta)
+    -- Online only: offline these touched the OFFLINE save (renaming its
+    -- player, stamping the account token that diverts its SAVE into the
+    -- online file) and made blocking server calls on every flag/battle.
+    if not isGtsServerConnected then return nil end
     if not game or not game.save then return end
     loadOnlineAccount(game.save)
     local trainerId, trainerName = getTrainerInfo(game.save)
@@ -2162,6 +2226,10 @@
   end
 
   addMmoXp = function(game, xpType, extraAmount, extraFields)
+    -- Online only: offline these touched the OFFLINE save (renaming its
+    -- player, stamping the account token that diverts its SAVE into the
+    -- online file) and made blocking server calls on every flag/battle.
+    if not isGtsServerConnected then return nil end
     local rewards = {
       catch = 50,
       wild_battle = 15,
@@ -2206,37 +2274,106 @@
     if inBattle then return end  -- Double-start guard
     if not game or not game.save or not game.save.party or #game.save.party == 0 then
       inBattle = false
-      game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKÃ©MON IN YOUR PARTY TO BATTLE!")))
+      game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO BATTLE!")))
       return
     end
     if not remotePartyPacked or #remotePartyPacked == 0 then
       inBattle = false
-      game.stack:push(TextBox.new(game, wrapText(string.format("%s HAS NO POKÃ©MON IN THEIR PARTY!", opponentName or "FOE"))))
+      game.stack:push(TextBox.new(game, wrapText(string.format("%s HAS NO POKéMON IN THEIR PARTY!", opponentName or "FOE"))))
       return
     end
 
     if isGen2 then
-      -- Custom Gen 2 PVP engine (pvp/*): both machines run the same
-      -- deterministic battle with a shared seed; actions exchange over the
-      -- async battle transport. Swap-friendly: when the recomp gains native
-      -- PVP, replace this backend (pvp.config.engine = "native").
-      local okPvp, PvpEngine = pcall(require, "mods.gen1online-plus.pvp.engine")
-      local okSess, PvpSession = pcall(require, "mods.gen1online-plus.pvp.session")
-      local okNet, PvpNet = pcall(require, "mods.gen1online-plus.pvp.net")
-      local okUi, PvpUi = pcall(require, "mods.gen1online-plus.pvp.ui")
-      if not (okPvp and okSess and okNet and okUi) then
+      local okNet, PvpNet = pcall(requireLocal, "pvp/net.lua")
+      if not okNet then
+        inBattle = false
+        game.stack:push(TextBox.new(game, wrapText("PVP MODULE FAILED TO LOAD.")))
+        return
+      end
+      local trainerId, myName = getTrainerInfo(game.save)
+
+      -- Shared by both backends: the battle screen is already off the stack.
+      local function finishPvp(outcome, session)
+        pcall(function()
+          local Music = require("src.core.Music")
+          if Music and Music.restoreMap then Music.restoreMap(game.data) end
+        end)
+        inBattle = false
+        activeBattleAdapter = nil
+        if session then pcall(function() session:close() end) end
+        if netInChannel then while netInChannel:pop() do end end
+        isWaitingForChallenge = false
+        lastBattleEndTime = (_G.love and _G.love.timer and _G.love.timer.getTime)
+                              and _G.love.timer.getTime() or os.time()
+        -- Non-blocking room/challenge cleanup (never freeze on the end screen).
+        pvpBattleSend({ action = "clear_challenge", trainerId = trainerId })
+        pvpBattleSend({ action = "clear_challenge", trainerId = opponentId })
+        pvpBattleSend({ action = "clear_battle_room", roomId = roomId })
+        local extra = { opponentName = opponentName or "TRAINER", opponentId = opponentId or "0" }
+        if outcome == "win" then
+          addMmoXp(game, "pvp_win", nil, extra)
+          syncLocalProfile(game, 1)
+          performForcedSave(game)
+        elseif outcome then
+          addMmoXp(game, "pvp_loss", nil, extra)
+          performForcedSave(game)
+        end
+      end
+
+      -- Native lockstep battle (both clients negotiated it on the room id).
+      if NativePvp.negotiated(roomId) then
+        local net = PvpNet.new({
+          send = pvpBattleSend,
+          myId = trainerId,
+          theirId = opponentId,
+          roomId = roomId,
+        })
+        local opts = {
+          myParty = packPartyForGame(game, game.save.party),
+          theirParty = remotePartyPacked,
+          theirName = opponentName or "FOE",
+          seed = seed or 12345,
+          verdict = "full",
+          strict = true,
+        }
+        local screen, why
+        if isHostPlayer then
+          screen, why = NativePvp.LinkBattle2.newHost(game, net, opts)
+        else
+          screen, why = NativePvp.LinkBattle2.newGuest(game, net, opts)
+        end
+        if not screen then
+          net:close()
+          game.stack:push(TextBox.new(game, wrapText(tostring(why or "PVP BATTLE COULD NOT START."))))
+          return
+        end
+        inBattle = true
+        -- LinkBattle2 pops its own screen and closes the transport first.
+        screen.onFinish = function(result)
+          finishPvp(result == "win" and "win" or (result == "lose" and "lose" or "draw"))
+        end
+        game.stack:push(screen)
+        return
+      end
+
+      -- Fallback: the mod's own Gen 2 PVP engine (pvp/*), for a peer on an
+      -- older client.  Both machines run the same deterministic battle with a
+      -- shared seed; actions exchange over the async battle transport.
+      local okPvp, PvpEngine = pcall(requireLocal, "pvp/engine.lua")
+      local okSess, PvpSession = pcall(requireLocal, "pvp/session.lua")
+      local okUi, PvpUi = pcall(requireLocal, "pvp/ui.lua")
+      if not (okPvp and okSess and okUi) then
         inBattle = false
         game.stack:push(TextBox.new(game, wrapText("PVP MODULE FAILED TO LOAD.")))
         return
       end
 
       inBattle = true
-      local trainerId, myName = getTrainerInfo(game.save)
       local myParty = PvpEngine.clampParty(game.data, packPartyForGame(game, game.save.party))
       local theirParty = PvpEngine.clampParty(game.data, remotePartyPacked)
       if #myParty == 0 or #theirParty == 0 then
         inBattle = false
-        game.stack:push(TextBox.new(game, wrapText("BOTH TRAINERS NEED POKÃ©MON TO BATTLE!")))
+        game.stack:push(TextBox.new(game, wrapText("BOTH TRAINERS NEED POKéMON TO BATTLE!")))
         return
       end
 
@@ -2266,34 +2403,11 @@
         session = session,
         onDone = function()
           -- Return to the map immediately: never leave the battle screen up
-          -- (the vanilla Gen 2 onDone pops the battle state, World.lua:5879).
+          -- (the vanilla Gen 2 onDone pops the battle state).
           if game and game.stack then
             pcall(function() game.stack:pop() end)
           end
-          pcall(function()
-            local Music = require("src.core.Music")
-            if Music and Music.restoreMap then Music.restoreMap(game.data) end
-          end)
-          inBattle = false
-          activeBattleAdapter = nil
-          pcall(function() session:close() end)
-          if netInChannel then while netInChannel:pop() do end end
-          local myId = getTrainerInfo(game.save)
-          isWaitingForChallenge = false
-          lastBattleEndTime = (_G.love and _G.love.timer and _G.love.timer.getTime)
-                                and _G.love.timer.getTime() or os.time()
-          -- Non-blocking room/challenge cleanup (never freeze on the end screen).
-          pvpBattleSend({ action = "clear_challenge", trainerId = myId })
-          pvpBattleSend({ action = "clear_challenge", trainerId = opponentId })
-          pvpBattleSend({ action = "clear_battle_room", roomId = roomId })
-          if battle and battle.outcome == "win" then
-            addMmoXp(game, "pvp_win", nil, { opponentName = opponentName or "TRAINER", opponentId = opponentId or "0" })
-            syncLocalProfile(game, 1)
-            performForcedSave(game)
-          elseif battle then
-            addMmoXp(game, "pvp_loss", nil, { opponentName = opponentName or "TRAINER", opponentId = opponentId or "0" })
-            performForcedSave(game)
-          end
+          finishPvp(battle and (battle.outcome == "win" and "win" or "lose"), session)
         end,
       })
       game.stack:push(ui)
@@ -2384,7 +2498,7 @@
     end
     -- A trade needs one mon to offer and one to keep.
     if not game.save or not game.save.party or #game.save.party < 2 then
-      game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKÃ©MON IN YOUR PARTY TO TRADE!")))
+      game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKéMON IN YOUR PARTY TO TRADE!")))
       return
     end
 
@@ -2492,8 +2606,14 @@
     if localSave and game then
       game.save = localSave
       if game.adoptSave then game:adoptSave(game.save) end
-      localSelectedSprite = "SPRITE_RED"
-      applyPlayerSprite(game, "SPRITE_RED")
+      -- the live world's flags/scenes follow the restored save, as the
+      -- ONLINE menu's DISCONNECT does
+      if isGen2 and ow and ow.loadPlayerData then
+        pcall(ow.loadPlayerData, ow, game.save)
+        if ow.vm then ow.vm.events = ow.events end
+      end
+      localSelectedSprite = (isGen2 and "SPRITE_CHRIS" or "SPRITE_RED")
+      GtsUI.restorePlayerSprite(game)
       local pMap = (game.save.position and game.save.position.map) or (game.save.player and game.save.player.map) or defaultStartingOutdoor
       local px = (game.save.position and game.save.position.x) or (game.save.player and game.save.player.x) or defaultStartingOutdoorX
       local py = (game.save.position and game.save.position.y) or (game.save.player and game.save.player.y) or defaultStartingOutdoorY
@@ -2541,6 +2661,19 @@
         disconnectOnTitle(self)
         return origReturnToTitle(self, ...)
       end
+    end
+  end
+
+  -- MMO speed lock: while connected every player runs at 1x so the online
+  -- world stays in sync.  Game2:speedLocked is the engine's own lock (link
+  -- battles and minigames use it): logicSpeed answers 1 and a fast-forward
+  -- frame in flight is ended cleanly, and the player's saved GAME SPEED
+  -- option is left alone for when they go offline.
+  if okGame2 and Game2Mod and Game2Mod.speedLocked then
+    local origSpeedLocked = Game2Mod.speedLocked
+    Game2Mod.speedLocked = function(self, ...)
+      if isGtsServerConnected then return true, "online" end
+      return origSpeedLocked(self, ...)
     end
   end
 
@@ -2764,17 +2897,9 @@
           -- Write remote-sprite diagnostic once so a missing sprite can be diagnosed
           if not gtsSpriteDiagWritten then
             gtsSpriteDiagWritten = true
-            pcall(function()
-              local f = _G.love and _G.love.filesystem
-              if f and f.write then
-                f.write("gts_sprite_diag.txt", string.format(
-                  "tid=%s spriteId=%s spriteCreated=%s spriteDef=%s spritesCount=%d\n",
-                  tostring(tid), tostring(data.spriteId),
-                  (pNpc.sprite and "yes") or "no",
-                  (spriteDef and spriteDef.id) or "nil",
-                  (type(sprites) == "table") and _G.next(sprites) and 1 or 0))
-              end
-            end)
+            diag("remote sprite tid=%s spriteId=%s created=%s def=%s",
+              tostring(tid), tostring(data.spriteId),
+              (pNpc.sprite and "yes") or "no", tostring(spriteDef and spriteDef.id))
           end
 
           netNpcs[tid] = pNpc
@@ -2857,29 +2982,23 @@
       return sprites[spriteId], spriteId
     end
 
-    local function fileExists(p)
-      if not p then return false end
-      if love and love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(p) then return true end
-      local fh = io.open(p, "rb")
-      if fh then fh:close(); return true end
-      return false
-    end
-
-    -- Check if custom converted follower sprite exists
-    local relPath = "mods/gen1online-plus/assets/followers/" .. spKey .. suffix .. ".png"
-    local fallbackRel = "mods/gen1online-plus/assets/followers/" .. spKey .. ".png"
+    -- Converted follower sheets ship inside this mod; the engine loads them by
+    -- the mod's own path, whatever its install folder is called.
     local assetPath = nil
-    if fileExists(relPath) then
-      assetPath = relPath
-    elseif fileExists(fallbackRel) then
-      assetPath = fallbackRel
-    elseif fileExists("mods/gen1online-plus/assets/followers/pikachu.png") then
-      assetPath = "mods/gen1online-plus/assets/followers/pikachu.png"
+    for _, rel in ipairs({
+      "assets/followers/" .. spKey .. suffix .. ".png",
+      "assets/followers/" .. spKey .. ".png",
+      "assets/followers/pikachu.png",
+    }) do
+      if modFileExists(rel) then
+        assetPath = (mod.path or "mods/gen1online-plus") .. "/" .. rel
+        break
+      end
     end
 
     -- If no follower asset exists on disk, fallback gracefully to vanilla sprite record
     if not assetPath then
-      local fallbackDef = sprites and (sprites["SPRITE_PIKACHU"] or sprites["SPRITE_RED"] or (game.save and game.save.player and game.save.player.spriteDef))
+      local fallbackDef = sprites and (sprites["SPRITE_PIKACHU"] or sprites["SPRITE_CHRIS"] or sprites["SPRITE_RED"] or (game.save and game.save.player and game.save.player.spriteDef))
       return fallbackDef, "SPRITE_PIKACHU"
     end
 
@@ -2895,11 +3014,11 @@
       anchorY = 16,
     }
 
+    -- Straight into the live sprite table the world reads: the content
+    -- registry only merges at load, and registering here collided with this
+    -- very write.
     if sprites then
       sprites[spriteId] = def
-    end
-    if mod and mod.content and mod.content.sprites and mod.content.sprites.register then
-      pcall(function() mod.content.sprites:register(spriteId, def) end)
     end
 
     followerSpriteCache[spriteId] = def
@@ -2987,22 +3106,23 @@
     end
   end
 
-  -- Hook Gen 2 World interact to talk to follower with A button
+  -- A press on the follower: a cry and a companion line.  facingObjectCell
+  -- answers two coordinates, and the counter rule it applies is the one
+  -- npcAt needs.
   pcall(function()
     local World = require("src.world.gen2.World")
     if World and World.interactBody then
       local origInteractBody = World.interactBody
       World.interactBody = function(self)
         if not self:busy() and self.player and not self.player.moving then
-          local targetCell = self:facingObjectCell()
-          local npc = self:npcAt(targetCell)
+          local tx, ty = self:facingObjectCell()
+          local npc = tx and self:npcAt(tx, ty)
           if npc and (npc.follower or npc.pikachuFollower) then
-            self:freezeNpc(npc)
             if FollowerMod and FollowerMod.talk then
-              return FollowerMod.talk(self.game, self, npc, function() self:unfreezeNpc(npc) end)
+              -- frozen for the line; World:step releases it once not busy
+              self:freezeNpc(npc)
+              return FollowerMod.talk(self.game, self, npc)
             end
-          elseif npc and npc.isWildMon then
-            return startWildMonBattle(self.game, self, npc)
           end
         end
         return origInteractBody(self)
@@ -3017,400 +3137,20 @@
     if not game or not game.stack or isPlayerBusy(game) then return end
     hasCheckedEmeraldAssets = true
 
-    local function fileExists(p)
-      if not p then return false end
-      if love and love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(p) then return true end
-      local fh = io.open(p, "rb")
-      if fh then fh:close(); return true end
-      return false
-    end
-
     local samples = {
       "pikachu", "bulbasaur", "charmander", "squirtle",
       "chikorita", "cyndaquil", "totodile",
       "treecko", "torchic", "mudkip", "gengar", "eevee"
     }
-    local found = 0
     for _, sp in ipairs(samples) do
-      if fileExists("mods/gen1online-plus/assets/followers/" .. sp .. ".png") then
-        found = found + 1
-      end
+      if modFileExists("assets/followers/" .. sp .. ".png") then return end
     end
-
-    local statusMsg
-    if found >= 1 then
-      statusMsg = "POKEEMERALD ASSETS: ACTIVE\nFOLLOWER SPRITES LOADED!"
-    else
-      statusMsg = "POKEEMERALD ASSETS:\nNOT FOUND (OPTIONAL)\nFOLLOWERS USING FALLBACK\nSEE README_ASSETS.MD"
-    end
-
-    game.stack:push(TextBox.new(game, wrapText(statusMsg)))
+    -- Only the actionable case interrupts play: the sheets ship with the mod,
+    -- so this fires when an install is missing them.
+    game.stack:push(TextBox.new(game, wrapText(
+      "POKEEMERALD ASSETS:\nNOT FOUND (OPTIONAL)\nFOLLOWERS USING FALLBACK\nSEE README_ASSETS.MD")))
   end
 
-
-  -- =========================================================================
-  -- OVERWORLD WILD POKEMON SPAWNER & ENCOUNTER ENGINE (GEN 2 CRYSTAL)
-  -- Synchronized with 24/7 server & encounter_tables.json
-  -- Strict COLL_TALL_GRASS / COLL_LONG_GRASS in-bounds validation
-  -- Uses authentic 1:1 PokeEmerald true-color overworld sprites
-  -- =========================================================================
-
-
-  local function loadEncounterTablesDb()
-    if Wild.db and next(Wild.db) then return Wild.db end
-    local path = "mods/gen1online-plus/data/encounter_tables.json"
-    local raw = nil
-    if love and love.filesystem and love.filesystem.getInfo and love.filesystem.getInfo(path) then
-      pcall(function() raw = love.filesystem.read(path) end)
-    end
-    if not raw then
-      local fh = io.open(path, "r")
-      if fh then
-        raw = fh:read("*a")
-        fh:close()
-      end
-    end
-    if raw and Json and Json.decode then
-      local ok, res = pcall(Json.decode, raw)
-      if ok and type(res) == "table" then
-        Wild.db = res
-        return Wild.db
-      end
-    end
-    Wild.db = {}
-    return Wild.db
-  end
-
-  local function getMapValidGrassTiles(map)
-    if not map or not map.id then return {} end
-    if Wild.tilesCache[map.id] then return Wild.tilesCache[map.id] end
-
-    local tiles = {}
-    local w = map.widthCells or (map.width and map.width * 2) or 20
-    local h = map.heightCells or (map.height and map.height * 2) or 20
-
-    local isGrassMap = false
-    -- First pass: find tall grass (0x18) or long grass (0x14) or aliases
-    for cy = 0, h - 1 do
-      for cx = 0, w - 1 do
-        local coll = map:cellCollision(cx, cy)
-        if coll == 0x18 or coll == 0x14 or coll == 0x10 or coll == 0x1C or (coll >= 0x48 and coll <= 0x4C) then
-          table.insert(tiles, { x = cx, y = cy, grass = true })
-          isGrassMap = true
-        end
-      end
-    end
-
-    -- If no grass tiles found (e.g. cave, dungeon), scan walkable land tiles
-    if not isGrassMap and #tiles == 0 then
-      local okP, Permissions = pcall(require, "src.world.gen2.Permissions")
-      for cy = 1, h - 2 do
-        for cx = 1, w - 2 do
-          local coll = map:cellCollision(cx, cy)
-          if okP and Permissions and Permissions.isLand and Permissions.isLand(coll) and coll ~= 0x07 and coll ~= 0x0F then
-            table.insert(tiles, { x = cx, y = cy, grass = false })
-          end
-        end
-      end
-    end
-
-    Wild.tilesCache[map.id] = tiles
-    return tiles
-  end
-
-  local function isTileClearForSpawn(world, cx, cy)
-    if not world or not world.map then return false end
-    if not world.map.inBounds or not world.map:inBounds(cx, cy) then return false end
-    if world.map.isWalkableCell and not world.map:isWalkableCell(cx, cy) then return false end
-    if world.npcAt and world:npcAt(cx, cy) then return false end
-    local p = world.player
-    if p and (p.cellX == cx or (p.targetX == cx)) and (p.cellY == cy or (p.targetY == cy)) then
-      return false
-    end
-    return true
-  end
-
-  local function startWildMonBattle(game, world, npc)
-    if not game or not world or not npc or npc._inBattle then return true end
-    npc._inBattle = true
-
-    if world.freezeNpc then pcall(world.freezeNpc, world, npc) end
-    if world.player and world.player.freeze then pcall(world.player.freeze, world.player) end
-
-    -- 1. Play authentic species cry
-    pcall(function()
-      local Sound = require("src.core.Sound")
-      if Sound and Sound.playCry then
-        Sound.playCry(game.data, npc.species)
-      end
-    end)
-
-    -- 2. Claim encounter on 24/7 server if online
-    local encId = npc.encounterId or ("local_" .. tostring(os.time()))
-    if isGtsServerConnected and gtsApiPost and world.map and world.map.id then
-      local myTid = select(1, getTrainerInfo(game.save))
-      gtsApiPost({
-        action = "claim_wild_encounter",
-        map = world.map.id,
-        encounterId = encId,
-        trainerId = tostring(myTid)
-      }, 0.5)
-    end
-
-    -- 3. Remove from overworld NPC pool
-    Wild.active[encId] = nil
-    if world.npcs then
-      for i = #world.npcs, 1, -1 do
-        if world.npcs[i] == npc then
-          table.remove(world.npcs, i)
-          break
-        end
-      end
-    end
-    if world.entities then
-      for j = #world.entities, 1, -1 do
-        if world.entities[j] == npc then
-          table.remove(world.entities, j)
-          break
-        end
-      end
-    end
-
-    -- 4. Launch authentic Gen 2 wild battle
-    local species = npc.species or "PIDGEY"
-    local level = npc.level or 3
-    local isShiny = npc.shiny or false
-
-    local okMon, Mon = pcall(require, "src.battle.gen2.Mon")
-    if okMon and Mon and Mon.new and world.startBattle then
-      local wildMon = Mon.new(game.data, species, level, {
-        timeOfDay = world.timeOfDayId and world:timeOfDayId(),
-        shiny = isShiny
-      })
-      if wildMon then
-        if game.save and game.save.pokedex then
-          game.save.pokedex.seen = game.save.pokedex.seen or {}
-          game.save.pokedex.seen[species] = true
-        end
-        world:startBattle({ wild = wildMon })
-        return true
-      end
-    end
-    return true
-  end
-
-  local function updateOverworldWildPokemon(game, world, dt)
-    if not game or not world or not world.map or not world.map.id then return end
-    local mapId = world.map.id
-
-    -- On map change, clean up previous wild mons
-    if Wild.lastMapId ~= mapId then
-      Wild.lastMapId = mapId
-      for encId, entry in pairs(Wild.active) do
-        if entry.npc and world.npcs then
-          for i = #world.npcs, 1, -1 do
-            if world.npcs[i] == entry.npc then table.remove(world.npcs, i) break end
-          end
-        end
-        if entry.npc and world.entities then
-          for j = #world.entities, 1, -1 do
-            if world.entities[j] == entry.npc then table.remove(world.entities, j) break end
-          end
-        end
-      end
-      Wild.active = {}
-    end
-
-    -- Load encounter database
-    local db = loadEncounterTablesDb()
-    local mapConfig = db[mapId] or db["LANDMARK_" .. mapId]
-    if not mapConfig and world.map.landmark then
-      local lm = tostring(world.map.landmark)
-      mapConfig = db[lm] or db["LANDMARK_" .. lm]
-    end
-    if not mapConfig then return end
-
-    local grassTiles = getMapValidGrassTiles(world.map)
-    if #grassTiles == 0 then return end
-
-    -- Determine target encounters (from server or offline local generator)
-    local targetList = Wild.latestServer
-    if not targetList or #targetList == 0 then
-      -- Offline Local Encounter Generator
-      local tod = "DAY"
-      local hour = os.date("*t").hour
-      if hour >= 4 and hour < 10 then tod = "MORN"
-      elseif hour >= 18 or hour < 4 then tod = "NITE" end
-
-      local slots = (mapConfig.grass and (mapConfig.grass[tod] or mapConfig.grass.DAY or mapConfig.grass.NITE)) or {}
-      local rareSlots = mapConfig.rare_ow or {}
-      targetList = {}
-      local targetCount = math.min(6, math.max(3, math.floor(#grassTiles / 4)))
-
-      for idx = 1, targetCount do
-        local slot = nil
-        local isRare = (#rareSlots > 0 and math.random(1, 100) <= 15)
-        if isRare then
-          slot = rareSlots[math.random(1, #rareSlots)]
-        elseif #slots > 0 then
-          slot = slots[math.random(1, #slots)]
-        end
-
-        if slot then
-          local minL = tonumber(slot.minLevel) or 2
-          local maxL = tonumber(slot.maxLevel) or minL
-          if maxL < minL then minL, maxL = maxL, minL end
-          local lvl = math.random(minL, maxL)
-          local isShiny = (math.random(1, isRare and 512 or 8192) == 1)
-          table.insert(targetList, {
-            id = string.format("local_%s_%d", mapId, idx),
-            species = slot.species or "PIDGEY",
-            level = lvl,
-            shiny = isShiny
-          })
-        end
-      end
-    end
-
-    -- Clean up stale encounters not in target list
-    local targetIds = {}
-    for _, t in ipairs(targetList) do targetIds[t.id] = true end
-    for encId, entry in pairs(Wild.active) do
-      if not targetIds[encId] then
-        if entry.npc and world.npcs then
-          for i = #world.npcs, 1, -1 do
-            if world.npcs[i] == entry.npc then table.remove(world.npcs, i) break end
-          end
-        end
-        if entry.npc and world.entities then
-          for j = #world.entities, 1, -1 do
-            if world.entities[j] == entry.npc then table.remove(world.entities, j) break end
-          end
-        end
-        Wild.active[encId] = nil
-      end
-    end
-
-    local okNpc, Gen2NPC = pcall(require, "src.world.gen2.Npc")
-    if not okNpc or not Gen2NPC then return end
-
-    -- Spawn missing encounters
-    for idx, enc in ipairs(targetList) do
-      if not Wild.active[enc.id] then
-        -- Find unoccupied grass tile
-        local chosenTile = nil
-        for attempt = 1, 25 do
-          local cand = grassTiles[math.random(1, #grassTiles)]
-          if cand and isTileClearForSpawn(world, cand.x, cand.y) then
-            chosenTile = cand
-            break
-          end
-        end
-
-        if chosenTile then
-          local spDef, spId = getFollowerSpriteDef(game, enc.species, enc.shiny)
-          if spDef then
-            if world.sprites then world.sprites[spId] = spDef end
-            if game.data and game.data.gen2Sprites then game.data.gen2Sprites[spId] = spDef end
-
-            local npc = Gen2NPC.new(mapId, {
-              index = 300 + idx,
-              name = "WILD_" .. tostring(enc.species),
-              sprite = spId,
-              movement = Gen2NPC.MOVE.STANDING_DOWN,
-              x = chosenTile.x,
-              y = chosenTile.y
-            }, spDef)
-
-            npc.isWildMon = true
-            npc.encounterId = enc.id
-            npc.species = enc.species
-            npc.level = enc.level or 3
-            npc.shiny = enc.shiny or false
-            npc.passable = true
-            npc._wanderCooldown = math.random(2.0, 4.5)
-
-            world.npcs = world.npcs or {}
-            world.entities = world.entities or {}
-            table.insert(world.npcs, npc)
-            table.insert(world.entities, npc)
-
-            Wild.active[enc.id] = {
-              npc = npc,
-              species = enc.species,
-              level = enc.level,
-              shiny = enc.shiny,
-              timer = 0
-            }
-          end
-        end
-      end
-    end
-
-    -- Keep all active wild mons in world.npcs and world.entities across rebuilds
-    for encId, entry in pairs(Wild.active) do
-      local npc = entry.npc
-      if npc then
-        local inNpcs = false
-        for _, n in ipairs(world.npcs or {}) do
-          if n == npc then inNpcs = true break end
-        end
-        if not inNpcs then
-          world.npcs = world.npcs or {}
-          table.insert(world.npcs, npc)
-        end
-
-        local inEntities = false
-        for _, e in ipairs(world.entities or {}) do
-          if e == npc then inEntities = true break end
-        end
-        if not inEntities then
-          world.entities = world.entities or {}
-          table.insert(world.entities, npc)
-        end
-      end
-    end
-
-    -- Wander AI & Player Bump Collision Check
-    local px = world.player and (world.player.cellX or world.player.x)
-    local py = world.player and (world.player.cellY or world.player.y)
-
-    for encId, entry in pairs(Wild.active) do
-      local npc = entry.npc
-      if npc and not npc._inBattle then
-        -- 1. Check direct bump collision with player
-        if px and py and npc.cellX == px and npc.cellY == py then
-          startWildMonBattle(game, world, npc)
-          return
-        end
-
-        -- 2. Wander AI
-        npc._wanderCooldown = (npc._wanderCooldown or 3.0) - (dt or 0.016)
-        if npc._wanderCooldown <= 0 and not npc.moving and not (world.busy and world:busy()) then
-          npc._wanderCooldown = math.random(2.5, 5.0)
-          local dirs = {"down", "up", "left", "right"}
-          local d = dirs[math.random(1, 4)]
-          local dx, dy = 0, 0
-          if d == "down" then dy = 1
-          elseif d == "up" then dy = -1
-          elseif d == "left" then dx = -1
-          elseif d == "right" then dx = 1 end
-
-          local targetX = npc.cellX + dx
-          local targetY = npc.cellY + dy
-
-          -- Only step if target cell is valid grass and clear
-          local coll = world.map:cellCollision(targetX, targetY)
-          local isGrassTile = (coll == 0x18 or coll == 0x14 or coll == 0x10 or coll == 0x1C or (coll >= 0x48 and coll <= 0x4C))
-          if isGrassTile and isTileClearForSpawn(world, targetX, targetY) then
-            if npc.scriptStep then
-              npc:scriptStep(d)
-            end
-          end
-        end
-      end
-    end
-  end
 
   -- Register persistent background jobs for asynchronous MMO coordination
 
@@ -3418,39 +3158,62 @@
   -- SERVER-SYNCHRONIZED REAL TIME CLOCK & LOCKOUT HOOKS
   -- Bypasses Oak / Mom clock setup screens and locks debug clock overrides
   -- =========================================================================
+  -- Online, the server's clock is authoritative (sync_pos re-anchors the
+  -- save's RTC every response), so the clock questions are answered for the
+  -- player instead of asked.  Offline both screens stay vanilla.
   pcall(function()
     local InitClock = require("src.ui.gen2.InitClock")
-    if InitClock and InitClock.new then
+    local Clock = require("src.core.gen2.Clock")
+    if InitClock and InitClock.new and Clock then
       local origInitClockNew = InitClock.new
-      InitClock.new = function(game, mode, onDone)
-        local okClock, Clock = pcall(require, "src.core.gen2.Clock")
-        if game and game.save and okClock and Clock then
-          local h = tonumber(os.date("%H")) or 10
-          local m = tonumber(os.date("%M")) or 0
-          local w = (tonumber(os.date("%w")) or 0) % 7
-          if Clock.setTime then Clock.setTime(game.save, h, m) end
-          if Clock.setWeekday then Clock.setWeekday(game.save, w) end
+      -- InitClock.new(game, opts): opts.mode "clock" | "day", opts.onDone
+      -- (hour, minute) / (day).  The caller pops the screen from onDone.
+      InitClock.new = function(game, opts, ...)
+        if not isGtsServerConnected or type(opts) ~= "table" then
+          return origInitClockNew(game, opts, ...)
         end
-        if onDone then
-          return onDone()
+        local save = opts.save or (game and game.save)
+        local h = tonumber(os.date("%H")) or Clock.DEFAULT_HOUR or 10
+        local m = tonumber(os.date("%M")) or 0
+        local w = Clock.hostWeekday and Clock.hostWeekday() or 0
+        if save and Clock.isSet and Clock.isSet(save) then
+          h, m, w = Clock.hour(save), Clock.minute(save), Clock.weekday(save)
         end
-        return origInitClockNew(game, mode, onDone)
+        if save then
+          if opts.mode ~= "day" and Clock.setTime then Clock.setTime(save, h, m) end
+          if Clock.setWeekday then Clock.setWeekday(save, w) end
+        end
+        -- a one-frame stand-in for the screen, answered on its first update
+        local standIn = { isOpaque = false, answered = false }
+        function standIn:update()
+          if self.answered then return end
+          self.answered = true
+          if opts.onDone then
+            if opts.mode == "day" then opts.onDone(w) else opts.onDone(h, m) end
+          end
+        end
+        function standIn:draw() end
+        return standIn
       end
     end
   end)
 
   pcall(function()
     local Specials = require("src.script.gen2.Specials")
-    if Specials and Specials.HANDLERS and Specials.HANDLERS.SetDayOfWeek then
-      Specials.HANDLERS.SetDayOfWeek = function(vm)
-        local okClock, Clock = pcall(require, "src.core.gen2.Clock")
-        if vm and okClock and Clock then
-          local record = vm.game and vm.game.save
-          if record and Clock.setWeekday and Clock.hostWeekday then
-            Clock.setWeekday(record, Clock.hostWeekday())
-            record.rtc = record.rtc or {}
-            record.rtc.day = tonumber(os.date("%j")) or record.rtc.day
-          end
+    local Clock = require("src.core.gen2.Clock")
+    if Specials and Specials.HANDLERS and Specials.HANDLERS.SetDayOfWeek and Clock then
+      local origSetDayOfWeek = Specials.HANDLERS.SetDayOfWeek
+      -- Mom's "what day is it?" wheel: online it takes the server-synced day,
+      -- the same answer the engine's own no-screen fallback gives.
+      Specials.HANDLERS.SetDayOfWeek = function(vm, ...)
+        if not isGtsServerConnected then return origSetDayOfWeek(vm, ...) end
+        local record = (currentGame and currentGame.save) or (vm and vm.game and vm.game.save)
+        if record and Clock.setWeekday then
+          local day = (Clock.isSet and Clock.isSet(record) and Clock.weekday(record))
+            or (Clock.hostWeekday and Clock.hostWeekday()) or 0
+          Clock.setWeekday(record, day)
+          record.rtc = record.rtc or {}
+          record.rtc.day = tonumber(os.date("%j")) or record.rtc.day
         end
       end
     end
@@ -3465,7 +3228,6 @@
     if ow then
       checkEmeraldAssetsStartup(game)
       updatePlayerFollower(game, ow)
-      updateOverworldWildPokemon(game, ow, dt)
       if isGtsServerConnected then
         for _, pNpc in pairs(netNpcs) do updateNpcMovement(pNpc, dt) end
         for _, fNpc in pairs(netFollowers) do updateNpcMovement(fNpc, dt) end
@@ -3475,7 +3237,7 @@
 
   local function getRankTitle(level, pvpWins)
     level = tonumber(level) or 1
-    if level >= 100 then return "POKÃ©MON LEGEND"
+    if level >= 100 then return "POKéMON LEGEND"
     elseif level >= 90 then return "GRAND MASTER"
     elseif level >= 80 then return "CHAMPION"
     elseif level >= 70 then return "ELITE FOUR"
@@ -3596,38 +3358,72 @@
     end
   end
 
+  -- Wire format for a GTS mon.  Crystal mons travel as packMon2, so the held
+  -- item, happiness, Pokerus and caught data ride along and stats are rebuilt
+  -- with Gen 2 rules on arrival; unpackMon2 also reads the Gen 1-shaped
+  -- packets earlier clients deposited (Gen 1 packMon dropped all of that and
+  -- unpackMon rebuilt stats with Gen 1 formulas).
+  function GtsUI.packMon(mon)
+    if isGen2 and Protocol.packMon2 then return Protocol.packMon2(mon) end
+    return Protocol.packMon(mon)
+  end
+
+  function GtsUI.unpackMon(game, packed)
+    if isGen2 and Protocol.unpackMon2 then return Protocol.unpackMon2(game.data, packed) end
+    return Protocol.unpackMon(game.data, packed)
+  end
+
+  function GtsUI.monLabelName(game, mon)
+    return mon.nickname or (game.data and game.data.pokemon and game.data.pokemon[mon.species]
+      and game.data.pokemon[mon.species].name) or mon.species or "?"
+  end
+
   -- Helper to get all Pokémon across Party and PC Storage Boxes
   function GtsUI.getAllPlayerMons(game)
     local list = {}
     local save = game and game.save
     if not save then return list end
+    local okMail, Mail = pcall(require, "src.core.gen2.Mail")
+
+    -- An egg is not a tradeable listing, and a mon holding MAIL cannot leave:
+    -- its letter lives in a party slot the GTS has no way to carry
+    -- (the PC refuses it the same way, src/core/gen2/Boxes.lua).
+    local function tradeable(mon)
+      if not mon or mon.isEgg then return false end
+      if isGen2 and okMail and Mail.monHoldsMail and Mail.monHoldsMail(mon) then return false end
+      return true
+    end
 
     if save.party then
       for i, pMon in ipairs(save.party) do
-        local pName = pMon.nickname or (game.data and game.data.pokemon and game.data.pokemon[pMon.species] and game.data.pokemon[pMon.species].name) or pMon.species
-        table.insert(list, {
-          source = "party",
-          slotIndex = i,
-          mon = pMon,
-          label = string.format("%s LV%d (PARTY)", pName:sub(1, 8), pMon.level or 1)
-        })
+        if tradeable(pMon) then
+          table.insert(list, {
+            source = "party",
+            slotIndex = i,
+            mon = pMon,
+            label = string.format("%s LV%d (PARTY)", GtsUI.monLabelName(game, pMon):sub(1, 8), pMon.level or 1)
+          })
+        end
       end
     end
 
-    local BoxesMod = nil
-    pcall(function() BoxesMod = require(isGen2 and "src.core.gen2.Boxes" or "src.pokemon.Boxes") end)
-    local boxes = (BoxesMod and BoxesMod.ensure and BoxesMod.ensure(save)) or save.boxes
-    if boxes then
-      for bIdx, box in ipairs(boxes) do
-        for mIdx, bMon in ipairs(box) do
-          local bName = bMon.nickname or (game.data and game.data.pokemon and game.data.pokemon[bMon.species] and game.data.pokemon[bMon.species].name) or bMon.species
-          table.insert(list, {
-            source = "box",
-            boxIndex = bIdx,
-            slotIndex = mIdx,
-            mon = bMon,
-            label = string.format("%s LV%d (BOX %d)", bName:sub(1, 7), bMon.level or 1, bIdx)
-          })
+    local boxes = save.boxes
+    if not isGen2 then
+      local okB, BoxesMod = pcall(require, "src.pokemon.Boxes")
+      boxes = (okB and BoxesMod and BoxesMod.ensure and BoxesMod.ensure(save)) or save.boxes
+    end
+    if type(boxes) == "table" then
+      for bIdx = 1, 14 do
+        for mIdx, bMon in ipairs(boxes[bIdx] or {}) do
+          if tradeable(bMon) then
+            table.insert(list, {
+              source = "box",
+              boxIndex = bIdx,
+              slotIndex = mIdx,
+              mon = bMon,
+              label = string.format("%s LV%d (BOX %d)", GtsUI.monLabelName(game, bMon):sub(1, 7), bMon.level or 1, bIdx)
+            })
+          end
         end
       end
     end
@@ -3639,11 +3435,19 @@
     local save = game and game.save
     if not save or not item then return nil end
     if item.source == "party" then
-      return table.remove(save.party, item.slotIndex)
+      local mon = table.remove(save.party, item.slotIndex)
+      -- party mail is keyed by slot: the letters behind it move up one
+      if isGen2 and mon then
+        local okMail, Mail = pcall(require, "src.core.gen2.Mail")
+        if okMail and Mail.removeSlot then pcall(Mail.removeSlot, save, item.slotIndex) end
+      end
+      return mon
     elseif item.source == "box" then
-      local BoxesMod = nil
-      pcall(function() BoxesMod = require(isGen2 and "src.core.gen2.Boxes" or "src.pokemon.Boxes") end)
-      local boxes = (BoxesMod and BoxesMod.ensure and BoxesMod.ensure(save)) or save.boxes
+      local boxes = save.boxes
+      if not isGen2 then
+        local okB, BoxesMod = pcall(require, "src.pokemon.Boxes")
+        boxes = (okB and BoxesMod and BoxesMod.ensure and BoxesMod.ensure(save)) or save.boxes
+      end
       if boxes and boxes[item.boxIndex] then
         return table.remove(boxes[item.boxIndex], item.slotIndex)
       end
@@ -3651,20 +3455,49 @@
     return nil
   end
 
-  -- Helper to add a received Pokémon to Party or PC Storage Box
+  -- Is there a party slot or box space for one more Pokémon?
+  function GtsUI.hasRoom(game)
+    local save = game and game.save
+    if not save then return false end
+    if #(save.party or {}) < 6 then return true end
+    if not isGen2 then return true end
+    local okB, Boxes = pcall(require, "src.core.gen2.Boxes")
+    if not okB then return false end
+    for i = 1, Boxes.NUM_BOXES do
+      if not Boxes.isFull(save, i) then return true end
+    end
+    return false
+  end
+
+  -- Helper to add a received Pokémon to Party or PC Storage Box.  Answers
+  -- "party", index | "box", boxIndex | nil when there is no room anywhere.
   function GtsUI.addPlayerMon(game, mon)
     local save = game and game.save
-    if not save or not mon then return end
-    local added = Party.add(save.party, mon)
-    if not added then
-      local BoxesMod = nil
-      pcall(function() BoxesMod = require(isGen2 and "src.core.gen2.Boxes" or "src.pokemon.Boxes") end)
-      if BoxesMod and BoxesMod.deposit then
-        BoxesMod.deposit(save, mon)
-      elseif Boxes and Boxes.deposit then
-        Boxes.deposit(save, mon)
-      end
+    if not save or not mon then return nil end
+    save.party = save.party or {}
+    if #save.party < 6 then
+      save.party[#save.party + 1] = mon
+      return "party", #save.party
     end
+    if isGen2 then
+      -- SendMonIntoBox: the current box first, then the next one with room
+      local okB, Boxes = pcall(require, "src.core.gen2.Boxes")
+      if not okB then return nil end
+      local first = save.currentBox or 1
+      for step = 0, Boxes.NUM_BOXES - 1 do
+        local index = ((first - 1 + step) % Boxes.NUM_BOXES) + 1
+        if not Boxes.isFull(save, index) then
+          local box = Boxes.box(save, index)
+          box[#box + 1] = Boxes.enterBox(mon, game.data)
+          return "box", index
+        end
+      end
+      return nil
+    end
+    local added = Party.add(save.party, mon)
+    if added then return "party", #save.party end
+    if Boxes and Boxes.deposit then Boxes.deposit(save, mon) end
+    return "box", 1
   end
 
   -- Execute complete trade sequence: Pre-Save -> Cable Trade Animation -> Trade Evolution -> Post-Save -> MMO XP
@@ -3673,63 +3506,84 @@
     performForcedSave(game)
 
     -- 2. Unpack received mon and preserve full stats & OT
-    local receivedMon = Protocol.unpackMon(game.data, receivedPacked)
+    local receivedMon = GtsUI.unpackMon(game, receivedPacked)
+    if not receivedMon then
+      game.stack:push(TextBox.new(game, wrapText("THAT POKéMON ISN'T IN THIS GAME!")))
+      return
+    end
     receivedMon.traded = true
-    if otName then receivedMon.ot = otName end
+    if otName then receivedMon.ot = otName; receivedMon.otName = otName end
     if otId then receivedMon.otId = otId end
 
     -- Add to player party / boxes
-    GtsUI.addPlayerMon(game, receivedMon)
+    local whereTo, slot = GtsUI.addPlayerMon(game, receivedMon)
 
     -- Update Pokédex seen & caught flags
-    if game.save and game.save.pokedex then
-      game.save.pokedex.seen = game.save.pokedex.seen or {}
-      game.save.pokedex.owned = game.save.pokedex.owned or {}
-      game.save.pokedex.seen[receivedMon.species] = true
-      game.save.pokedex.owned[receivedMon.species] = true
+    if game.save then
+      game.save.pokedex = game.save.pokedex or {}
+      local dex = game.save.pokedex
+      dex.seen = dex.seen or {}
+      dex.seen[receivedMon.species] = true
+      if isGen2 then
+        dex.caught = dex.caught or {}
+        dex.caught[receivedMon.species] = true
+      else
+        dex.owned = dex.owned or {}
+        dex.owned[receivedMon.species] = true
+      end
+    end
+
+    local function afterEvolution()
+      performForcedSave(game)
+      if addMmoXp then addMmoXp(game, "gts_trade", 100) end
+      if onComplete then onComplete(receivedMon) end
     end
 
     -- 3. Post-Animation sequence: Trade Evolution & Learn Moves
     local function finishTradeSequence()
-      local Evolution = require("src.pokemon.Evolution")
-      local nextSpecies, evo = Evolution.pendingFor(game, receivedMon, { kind = "trade" })
-
-      local function afterEvolution()
-        performForcedSave(game)
-        if addMmoXp then addMmoXp(game, "gts_trade", 100) end
-        if onComplete then onComplete(receivedMon) end
+      if isGen2 then
+        -- EVOLVE_TRADE fires for a mon arriving in the party, as on the cart;
+        -- EvolutionAnim applies it, marks the dex and teaches the new moves.
+        local okEvo, Evolution = pcall(require, "src.core.gen2.Evolution")
+        local okPal, Palettes = pcall(require, "src.world.gen2.Palettes")
+        local entry = whereTo == "party" and okEvo and Evolution.checkMon(game.data, receivedMon, {
+          link = true,
+          timeOfDay = okPal and Palettes.clockDaytime and Palettes.clockDaytime() or nil,
+        })
+        local okScreens, Screens = pcall(require, "src.ui.Screens")
+        if entry and okScreens and Screens.push then
+          Screens.push(game, "Gen2EvolutionAnim", {
+            mon = receivedMon,
+            entry = entry,
+            index = slot,
+            party = game.save.party,
+            save = game.save,
+            onDone = function()
+              game.stack:pop()
+              if game.restartMapMusicAfterEvolution then
+                pcall(game.restartMapMusicAfterEvolution, game)
+              end
+              afterEvolution()
+            end,
+          })
+          return
+        end
+        afterEvolution()
+        return
       end
 
+      local Evolution = require("src.pokemon.Evolution")
+      local nextSpecies = Evolution.pendingFor(game, receivedMon, { kind = "trade" })
       if nextSpecies then
-        if isGen2 then
-          local okEvo, EvolutionAnim = pcall(require, "src.ui.gen2.EvolutionAnim")
-          if okEvo and EvolutionAnim and EvolutionAnim.new then
-            local evoScreen = EvolutionAnim.new(game, {
-              mon = receivedMon,
-              entry = evo,
-              party = game.save.party,
-              save = game.save,
-              force = true,
-              onDone = function()
-                Evolution.learnEvolutionMoves(game, receivedMon, afterEvolution)
-              end
-            })
-            game.stack:push(evoScreen)
-            return
-          end
-        else
-          local okEvo, EvolutionState = pcall(require, "src.ui.EvolutionState")
-          if okEvo and EvolutionState and EvolutionState.new then
-            local evoScreen = EvolutionState.new(game, receivedMon, nextSpecies, function()
-              Evolution.apply(game, receivedMon, nextSpecies, "TRADE")
-              Evolution.learnEvolutionMoves(game, receivedMon, afterEvolution)
-            end, "TRADE")
-            game.stack:push(evoScreen)
-            return
-          end
+        local okEvo, EvolutionState = pcall(require, "src.ui.EvolutionState")
+        if okEvo and EvolutionState and EvolutionState.new then
+          local evoScreen = EvolutionState.new(game, receivedMon, nextSpecies, function()
+            Evolution.apply(game, receivedMon, nextSpecies, "TRADE")
+            Evolution.learnEvolutionMoves(game, receivedMon, afterEvolution)
+          end, "TRADE")
+          game.stack:push(evoScreen)
+          return
         end
-
-        -- Direct evolution fallback
         Evolution.apply(game, receivedMon, nextSpecies, "TRADE")
         Evolution.learnEvolutionMoves(game, receivedMon, afterEvolution)
       else
@@ -3740,16 +3594,22 @@
     -- 4. Launch Cable Trade Animation
     local okAnim = false
     if isGen2 then
-      local okT, TradeAnimView = pcall(require, "src.ui.gen2.TradeAnim")
-      if okT and TradeAnimView and TradeAnimView.new then
-        local anim = TradeAnimView.new(game, {
-          sent = sentMon,
+      -- Gen2TradeAnim reads the OT from an npc_trades-shaped row; it does not
+      -- pop itself, so its onDone does, the way TradeMenu:playAnim does.
+      local okScreens, Screens = pcall(require, "src.ui.Screens")
+      local world = getWorld(game)
+      if okScreens and Screens.push then
+        okAnim = Screens.push(game, "Gen2TradeAnim", {
+          row = { otName = otName or "TRAINER", otId = otId or 0 },
+          given = sentMon,
           received = receivedMon,
-          enemyName = otName or "TRAINER",
-          onDone = finishTradeSequence
-        })
-        game.stack:push(anim)
-        okAnim = true
+          save = game.save,
+          eventTables = world and world.eventTables or nil,
+          onDone = function()
+            game.stack:pop()
+            finishTradeSequence()
+          end,
+        }) and true or false
       end
     else
       local okT, TradeAnim = pcall(require, "src.ui.TradeAnim")
@@ -3775,7 +3635,7 @@
   function GtsUI.openGtsSummaryCard(game, listing)
     local trainerId, buyerName = getTrainerInfo(game.save)
     local offered = listing.offeredMon or {}
-    local offName = offered.nickname or (game.data.pokemon[offered.species] and game.data.pokemon[offered.species].name) or offered.species or "POKÃ©MON"
+    local offName = offered.nickname or (game.data.pokemon[offered.species] and game.data.pokemon[offered.species].name) or offered.species or "POKéMON"
     local otName = listing.trainerName or offered.ot or "TRAINER"
     local otId = listing.trainerId or offered.otId or 0
 
@@ -3828,7 +3688,7 @@
           end
 
           if #eligibleList == 0 then
-            game.stack:push(TextBox.new(game, wrapText("YOU DO NOT HAVE ANY OF THE WANTED POKÃ©MON IN PARTY OR PC BOXES!")))
+            game.stack:push(TextBox.new(game, wrapText("YOU DO NOT HAVE ANY OF THE WANTED POKéMON IN PARTY OR PC BOXES!")))
             return
           end
 
@@ -3838,13 +3698,13 @@
               label = string.format("GIVE %s", choice.label:sub(1, 13)),
               onSelect = function()
                 if choice.source == "party" and #game.save.party < 2 then
-                  game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKÃ©MON IN PARTY TO TRADE FROM PARTY!")))
+                  game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKéMON IN PARTY TO TRADE FROM PARTY!")))
                   return
                 end
 
                 -- Remove chosen mon
                 local sentMon = GtsUI.removePlayerMon(game, choice)
-                local packedSent = Protocol.packMon(sentMon)
+                local packedSent = GtsUI.packMon(sentMon)
 
                 -- Post trade to server
                 local res = gtsApiPost({
@@ -3894,10 +3754,10 @@
         if #movesStr > 0 then
           Font.draw(string.format("MOVES: %s", movesStr), 8, 66)
         end
-        Font.draw("WANTED POKÃ©MON:", 8, 78)
+        Font.draw("WANTED POKéMON:", 8, 78)
 
         if #wantedList == 0 then
-          Font.draw(" - ANY POKÃ©MON", 8, 90)
+          Font.draw(" - ANY POKéMON", 8, 90)
         else
           local curY = 90
           for idx, wSpec in ipairs(wantedList) do
@@ -3942,7 +3802,9 @@
         local include = true
         if filterMode == "unowned_dex" then
           -- Filter for unowned species
-          if game.save and game.save.pokedex and game.save.pokedex.owned and game.save.pokedex.owned[offered.species] == true then
+          local dex = game.save and game.save.pokedex
+          local ownedSet = dex and (isGen2 and dex.caught or dex.owned)
+          if ownedSet and ownedSet[offered.species] == true then
             include = false
           end
         elseif filterMode == "can_fulfill" then
@@ -4054,7 +3916,7 @@
                     end
                   end
                   if #monItems == 0 then
-                    game.stack:push(TextBox.new(game, wrapText("NO POKÃ©MON IN THIS RANGE.")))
+                    game.stack:push(TextBox.new(game, wrapText("NO POKéMON IN THIS RANGE.")))
                   else
                     table.insert(monItems, { label = "BACK", onSelect = function() showMainWantedMenu() end })
                     game.stack:push(Menu.new(game, monItems, { tx = 0, ty = 0, tw = 20, maxVisible = 7, startCloses = true }))
@@ -4109,7 +3971,7 @@
 
     local function handleDepositSelection(chosenItem)
       if chosenItem.source == "party" and #game.save.party < 2 then
-        game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKÃ©MON IN PARTY TO DEPOSIT FROM PARTY!")))
+        game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKéMON IN PARTY TO DEPOSIT FROM PARTY!")))
         return
       end
 
@@ -4124,7 +3986,7 @@
         if depositMon.nickname and Profanity and Profanity.censor then
           depositMon.nickname = Profanity.censor(depositMon.nickname)
         end
-        local packedMon = Protocol.packMon(depositMon)
+        local packedMon = GtsUI.packMon(depositMon)
 
         local res = gtsApiPost({
           action = "deposit",
@@ -4164,7 +4026,7 @@
         label = "FROM PARTY",
         onSelect = function()
           if not game.save or not game.save.party or #game.save.party < 2 then
-            game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKÃ©MON IN PARTY TO DEPOSIT!")))
+            game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKéMON IN PARTY TO DEPOSIT!")))
             return
           end
           local partyItems = {}
@@ -4239,10 +4101,14 @@
         table.insert(items, {
           label = string.format("TAKE %s LV%d", offName, offered.level or 1),
           onSelect = function()
+            if not GtsUI.hasRoom(game) then
+              game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
+              return
+            end
             performForcedSave(game)
 
-            local returnedMon = Protocol.unpackMon(game.data, offered)
-            GtsUI.addPlayerMon(game, returnedMon)
+            local returnedMon = GtsUI.unpackMon(game, offered)
+            if returnedMon then GtsUI.addPlayerMon(game, returnedMon) end
 
             gtsApiPost({ action = "withdraw", listingId = id, trainerId = trainerId }, 2.0)
 
@@ -4269,6 +4135,10 @@
       table.insert(items, {
         label = string.format("GET %s (%s)", cName, fromStr),
         onSelect = function()
+          if not GtsUI.hasRoom(game) then
+            game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
+            return
+          end
           gtsApiPost({ action = "claim", trainerId = trainerId, index = idx - 1 }, 2.0)
           table.remove(gtsDb.claim_boxes[tostring(trainerId)], idx)
           GtsUI.addGtsReceipt(string.format("%s CLAIMED TRADED %s", trainerName, cName))
@@ -4337,6 +4207,10 @@
       table.insert(items, {
         label = string.format("CLAIM %s!", cName:sub(1, 9)),
         onSelect = function()
+          if not GtsUI.hasRoom(game) then
+            game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
+            return
+          end
           gtsDb.wonder_claims[tostring(trainerId)] = nil
           gtsApiPost({ action = "wonder_trade_claim", trainerId = trainerId }, 2.0)
 
@@ -4359,7 +4233,7 @@
       table.insert(items, {
         label = string.format("STATUS: (%d/5 POOL)", #gtsDb.wonder_pool),
         onSelect = function()
-          local msg = string.format("WONDER TRADE POOL:\n%d/5 POKÃ©MON READY.\nYOUR OFFER: %s LV%d.\nWAITING FOR 5 POKÃ©MON...", #gtsDb.wonder_pool, mName, pMon.level or 1)
+          local msg = string.format("WONDER TRADE POOL:\n%d/5 POKéMON READY.\nYOUR OFFER: %s LV%d.\nWAITING FOR 5 POKéMON...", #gtsDb.wonder_pool, mName, pMon.level or 1)
           game.stack:push(TextBox.new(game, wrapText(msg)))
         end
       })
@@ -4369,8 +4243,8 @@
           performForcedSave(game)
           local entry = table.remove(gtsDb.wonder_pool, trainerInPoolIndex)
           if entry and entry.offeredMon then
-            local returnedMon = Protocol.unpackMon(game.data, entry.offeredMon)
-            GtsUI.addPlayerMon(game, returnedMon)
+            local returnedMon = GtsUI.unpackMon(game, entry.offeredMon)
+            if returnedMon then GtsUI.addPlayerMon(game, returnedMon) end
           end
           gtsApiPost({ action = "wonder_trade_withdraw", trainerId = trainerId }, 2.0)
           performForcedSave(game)
@@ -4390,7 +4264,7 @@
               label = choice.label,
               onSelect = function()
                 if choice.source == "party" and #game.save.party < 2 then
-                  game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKÃ©MON IN PARTY TO DEPOSIT FROM PARTY!")))
+                  game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKéMON IN PARTY TO DEPOSIT FROM PARTY!")))
                   return
                 end
 
@@ -4398,7 +4272,7 @@
                 local depositMon = GtsUI.removePlayerMon(game, choice)
                 if not depositMon then return end
 
-                local packedMon = Protocol.packMon(depositMon)
+                local packedMon = GtsUI.packMon(depositMon)
                 table.insert(gtsDb.wonder_pool, {
                   trainerId = tostring(trainerId),
                   trainerName = trainerName,
@@ -4445,7 +4319,7 @@
           end
 
           if #monItems == 0 then
-            game.stack:push(TextBox.new(game, wrapText("YOU HAVE NO POKÃ©MON AVAILABLE TO DEPOSIT!")))
+            game.stack:push(TextBox.new(game, wrapText("YOU HAVE NO POKéMON AVAILABLE TO DEPOSIT!")))
             return
           end
 
@@ -4546,7 +4420,7 @@
   -- Customize Local Trainer Profile Submenu ("ONLINE SETTINGS")
   openMyProfileMenu = function(game)
     local titles = {
-      "ACE TRAINER", "BUG CATCHER", "POKÃ©MANIAC", "LASS", "YOUNGSTER",
+      "ACE TRAINER", "BUG CATCHER", "POKéMANIAC", "LASS", "YOUNGSTER",
       "CHAMPION", "GYM LEADER", "BLACKBELT", "SUPER NERD", "COOLTRAINER"
     }
 
@@ -4609,7 +4483,7 @@
         label = "FAVORITE MON",
         onSelect = function()
           if not game.save or not game.save.party or #game.save.party == 0 then
-            game.stack:push(TextBox.new(game, wrapText("YOU HAVE NO POKÃ©MON IN YOUR PARTY!")))
+            game.stack:push(TextBox.new(game, wrapText("YOU HAVE NO POKéMON IN YOUR PARTY!")))
             return
           end
           local favItems = {}
@@ -4623,7 +4497,7 @@
                   game.save.onlineAccount.favoriteMon = mName
                 end
                 syncLocalProfile(game, 0)
-                local msg = string.format("FAVORITE POKÃ©MON SET TO:\n%s!", mName)
+                local msg = string.format("FAVORITE POKéMON SET TO:\n%s!", mName)
                 game.stack:push(TextBox.new(game, wrapText(msg)))
               end
             })
@@ -4686,15 +4560,57 @@
     end
   end
 
+  -- Back to the player's own look after going offline: World:applyPlayerState
+  -- picks Chris or Kris by gender, and the bike/surf sheet for that state.
+  function GtsUI.restorePlayerSprite(game)
+    local gWorld = getWorld(game)
+    if isGen2 and gWorld and gWorld.applyPlayerState then
+      pcall(gWorld.applyPlayerState, gWorld, gWorld.playerState)
+      return
+    end
+    applyPlayerSprite(game, isGen2 and "SPRITE_CHRIS" or "SPRITE_RED")
+  end
+
   -- Wrap Player.new to ensure whenever local player is initialized, chosen avatar is used
   -- Player avatar helper (native walking animations preserved)
   -- Redeem Recovery Token to Restore Lost Save
-  openRedeemTokenMenu = function(game)
+  -- A naming keyboard.  On Crystal it is the game's own screen -- the box
+  -- keyboard when digits are needed, since only BoxNameInput carries 0-9 --
+  -- and that screen leaves popping itself to the caller.
+  function GtsUI.nameEntry(game, opts)
+    if isGen2 then
+      local okScreens, Screens = pcall(require, "src.ui.Screens")
+      if okScreens and Screens and Screens.push then
+        Screens.push(game, "Gen2NamingScreen", {
+          type = opts.digits and "box" or "player",
+          prompt = opts.prompt,
+          maxLength = opts.maxLength,
+          initial = opts.initial or "",
+          gender = game.save and game.save.player and game.save.player.gender,
+          onDone = function(name)
+            game.stack:pop()
+            if opts.onDone then opts.onDone(name) end
+          end,
+          onCancel = function()
+            game.stack:pop()
+            if opts.onCancel then opts.onCancel() end
+          end,
+        })
+        return
+      end
+    end
     local NamingScreen = require("src.ui.NamingScreen")
-    local okScreens, Screens = pcall(require, "src.ui.Screens")
-    local namingId = isGen2 and "Gen2NamingScreen" or "NamingScreen"
+    game.stack:push(NamingScreen.new(game, {
+      title = opts.prompt, maxLen = opts.maxLength, default = opts.initial or "",
+      onDone = opts.onDone,
+    }))
+  end
+
+  openRedeemTokenMenu = function(game)
     local tokenOpts = {
-      maxLen = 8,
+      prompt = "RECOVERY TOKEN?",
+      maxLength = 8,
+      digits = true,
       onDone = function(enteredToken)
         if not enteredToken or #enteredToken == 0 then return end
         enteredToken = enteredToken:gsub("%s+", ""):upper()
@@ -4705,7 +4621,7 @@
           mmoLevel = acc.level or 1
           mmoXp = acc.xp or 0
           mmoToken = acc.token or enteredToken
-          localSelectedSprite = acc.spriteId or "SPRITE_RED"
+          localSelectedSprite = acc.spriteId or (isGen2 and "SPRITE_CHRIS" or "SPRITE_RED")
           if acc.title then localTrainerTitle = acc.title end
           if acc.favoriteMon then localFavoriteMon = acc.favoriteMon end
 
@@ -4765,10 +4681,10 @@
           currentGame = game
           game.save = newSave
           if game.adoptSave then game:adoptSave(game.save) end
+          isGtsServerConnected = true
           saveOnlineAccount(game.save)
 
           applyPlayerSprite(game, localSelectedSprite)
-          isGtsServerConnected = true
 
           -- Restore the exact saved location (existing save) or default start
           -- (fresh save), then persist the snapshotted save so flags/mapScenes
@@ -4795,6 +4711,7 @@
 
           syncLocalProfile(game, 0)
           fetchGtsServerSync(acc.trainerId)
+          startChatSession(game)
 
           game.stack:push(TextBox.new(game, wrapText(string.format("TOKEN REDEEMED!\nWELCOME BACK, %s!\nMMO LEVEL %d RESTORED!", acc.name or "TRAINER", mmoLevel)), function()
             openOnlineOptionsMenu(game)
@@ -4805,16 +4722,11 @@
         end
       end
     }
-    if okScreens and Screens and Screens.push then
-      Screens.push(game, namingId, tokenOpts)
-    else
-      game.stack:push(NamingScreen.new(game, tokenOpts))
-    end
+    GtsUI.nameEntry(game, tokenOpts)
   end
 
   -- Fresh Online Player Creation & Authentic Naming Screen
     openFreshOnlinePlayerMenu = function(game)
-    local NamingScreen = require("src.ui.NamingScreen")
 
     local function pickCharacterSprite(chosenName)
       local spriteItems = {}
@@ -4928,6 +4840,7 @@
               writeOnlineSave(game.save)
               syncLocalProfile(game, 0)
               fetchGtsServerSync(newTid)
+              startChatSession(game)
 
               if ow and ow.player and ow.map and netOutChannel then
                 local p = ow.player
@@ -4977,10 +4890,9 @@
     end
 
     local function startNewCharacterFlow()
-      local namingScreen = NamingScreen.new(game, {
-        title = Strings("YOUR ONLINE NAME?"),
-        maxLen = 7,
-        default = "",
+      GtsUI.nameEntry(game, {
+        prompt = "YOUR ONLINE NAME?",
+        maxLength = 7,
         onDone = function(enteredName)
           enteredName = (enteredName or ""):gsub("^%s+", ""):gsub("%s+$", "")
           if #enteredName == 0 then
@@ -4997,7 +4909,8 @@
             return
           end
 
-          local check = gtsApiGet("/player/check_name?name=" .. enteredName, 1.5)
+          local check = gtsApiGet("/player/check_name?name="
+            .. enteredName:gsub("[^%w]", function(c) return string.format("%%%02X", c:byte()) end), 1.5)
           if check and check.taken then
             local reasonMsg = string.format("NAME '%s' IS ALREADY TAKEN ON SERVER!", enteredName)
             game.stack:push(TextBox.new(game, wrapText(reasonMsg), function()
@@ -5023,7 +4936,6 @@
           end
         end
       })
-      game.stack:push(namingScreen)
     end
 
     local connectOptions = {
@@ -5399,10 +5311,8 @@
             {
               label = "YES, RESET",
               onSelect = function()
-                local sf, bf, tf = getOnlineSaveFiles()
-                storageRemove(sf)
-                storageRemove(bf)
-                storageRemove(tf)
+                storageRemove("online_save")
+                storageRemove("online_account")
                 openFreshOnlinePlayerMenu(game)
               end
             }
@@ -5437,7 +5347,7 @@
             if ow and ow.setMap and pMap and px and py then
               pcall(ow.setMap, ow, pMap, px, py, pFacing)
             end
-            applyPlayerSprite(game, "SPRITE_CHRIS")
+            GtsUI.restorePlayerSprite(game)
           end
           game.stack:push(TextBox.new(game, wrapText("DISCONNECTED FROM ONLINE SERVER.\nLOCAL OFFLINE SAVE RESTORED.")))
         end
@@ -5458,7 +5368,10 @@
     local srvInfo = gtsApiGet("/server/info", 3.0)
     if srvInfo and (srvInfo.modVersion or srvInfo.version) then
       local srvVer = srvInfo.modVersion or srvInfo.version
-      if srvVer ~= MOD_VERSION then
+      -- the server's own rule (is_version_compatible): major.minor must
+      -- match, so a patch release still connects to the same server
+      local function series(v) return tostring(v or ""):match("^(%d+%.%d+)") end
+      if series(srvVer) ~= series(MOD_VERSION) then
         local msg = string.format("VERSION MISMATCH!\nSERVER IS ON V%s\nYOUR MOD IS ON V%s\nPLEASE UPDATE TO PLAY!", srvVer, MOD_VERSION)
         game.stack:push(TextBox.new(game, wrapText(msg)))
         return
@@ -5545,13 +5458,7 @@
     writeOnlineSave(game.save)
     isGtsServerConnected = true
     -- Init global chat poll state (vanilla wrap, no spam on connect)
-    ChatState.lastId = 0
-    ChatState.unread = 0
-    ChatState.queue = {}
-    ChatState.pollTimer = 0
-    loadChatNotifPref()
-    pcall(pollGlobalChat, game)
-    ensureChatTextInputPatch()
+    startChatSession(game)
 
     syncLocalProfile(game, 0)
     local tid, currentName = getTrainerInfo(game.save)
@@ -5784,16 +5691,12 @@ return function(mod)
   local function onEvent(eventName, callback)
     if mod and mod.events and type(mod.events.on) == "function" then
       pcall(function() mod.events:on(eventName, callback) end)
-    elseif mod and mod.events and type(mod.events.on) == "function" then
-      pcall(function() mod.events.on(mod, eventName, callback) end)
-    elseif Runtime and Runtime.events and type(Runtime.events.on) == "function" then
-      pcall(function() Runtime.events:on(eventName, callback) end)
     end
   end
 
   -- 1. Battles Finished (Wild & Trainer Battles) - Handled in BattleState.finish hook below to prevent double XP triggers
 
-  -- 2. PokÃ©mon Caught
+  -- 2. Pokémon Caught
   onEvent("pokemon.caught", function(payload)
     if Game and Game.save then
       addMmoXp(Game, "catch")
@@ -5802,7 +5705,7 @@ return function(mod)
     end
   end)
 
-  -- 3. PokÃ©mon Evolved & Move Learned
+  -- 3. Pokémon Evolved & Move Learned
   onEvent("pokemon.evolved", function(payload)
     if Game and Game.save then
       addMmoXp(Game, "breeding", 50)
@@ -5823,7 +5726,7 @@ return function(mod)
     end
   end)
 
-  -- 4. Trades & PokÃ©mon Received
+  -- 4. Trades & Pokémon Received
   onEvent("trade.completed", function(payload)
     if Game and Game.save then
       performForcedSave(Game)
@@ -5904,56 +5807,9 @@ return function(mod)
     return res
   end
 
-  -- Draw MMO player name tags in WINDOW space, through the sanctioned
-  -- render.hud seam (src/core/Game.lua:563, src/core/Game2.lua:1230).  A
-  -- world point lands on the window exactly where its sprite does: Gen 2
-  -- centers the player in the full window with World:zoomScale (World:draw,
-  -- src/world/gen2/World.lua:9947), while Gen 1 letterboxes its 160x144
-  -- world canvas at the viewport origin scaled by viewport.scale
-  -- (Renderer:endFrame, src/render/Renderer.lua:879).  In both, the camera
-  -- already centers the player, so canvas = world - camera.  The old code
-  -- added a bogus +80/+72 offset (pinning the tag to the lower right) and
-  -- Gen 2's drawWorldBody drew a second copy, doubling every tag.
-  mod.hooks:wrap("render.hud", function(nextFn, game, viewport)
-    if nextFn then nextFn(game, viewport) end
-    local ow = getWorld(game)
-    if not (isGtsServerConnected and ow and ow.player and ow.camera and viewport) then
-      return
-    end
-    local isG2 = game.world ~= nil
-    local camX = ow.camera.x or (ow.player.cellX * 16)
-    local camY = ow.camera.y or (ow.player.cellY * 16)
-    local s = isG2
-      and ((ow.zoomScale and ow:zoomScale()) or viewport.scale or 1)
-      or (viewport.scale or 1)
-    local ox = isG2 and 0 or (viewport.gameX or 0)
-    local oy = isG2 and 0 or (viewport.gameY or 0)
-
-    -- Canvas-space cull, window-space placement: only tags on the view (with
-    -- a margin) are drawn, and each lands just above its sprite.
-    local function drawHeaderTag(nameStr, wx, wy)
-      local cleanName = tostring(nameStr or "TRAINER"):gsub("_", " ")
-      local cx = math.floor(wx - camX)
-      local cy = math.floor(wy - camY - 16)
-      if cx >= -48 and cx <= 208 and cy >= -48 and cy <= 192 then
-        Font.draw(cleanName,
-          math.floor(ox + cx * s) - math.floor(#cleanName * 3),
-          math.floor(oy + cy * s))
-      end
-    end
-
-    -- Remote player name tags, directly above each head
-    for tid, pNpc in pairs(netNpcs) do
-      local rawData = netPlayerMap[tid] or {}
-      local name = rawData.name or pNpc.name or "TRAINER"
-      drawHeaderTag(name, pNpc.px or 0, pNpc.py or 0)
-    end
-
-    -- Local player name tag, directly above the player's sprite
-    local myName = (Game.save and Game.save.onlineAccount and Game.save.onlineAccount.name)
-      or (Game.save and Game.save.player and Game.save.player.name) or "YOU"
-    drawHeaderTag(myName, ow.player.px, ow.player.py)
-  end)
+  -- (MMO name tags are drawn in the world pass -- the drawPeople wrapper
+  -- below -- not over the window: there they line up with their sprites and
+  -- never paint over a battle, trade or evolution screen.)
 
   -- Hook Overworld Update with TRUE ZERO-LAG Async Threading & Lockout Guard
   local origOverworldUpdate = OverworldState.update
@@ -6012,8 +5868,7 @@ return function(mod)
     if origOverworldUpdate then origOverworldUpdate(self, dt) end
     if not Game or not isGtsServerConnected then return end
 
-    -- 1. Advance all registered background jobs (network sync & overworld placement)
-    Jobs.step(Game, dt)
+    -- 1. Background jobs run once per frame, from the core.update hook.
 
     -- 2. Push position to background network queue (Rate limited to preserve 60FPS fluid gameplay)
     local ow = self
@@ -6146,17 +6001,17 @@ return function(mod)
             label = "PVP 1V1 SINGLES",
             onSelect = function()
               if not Game.save or not Game.save.party or #Game.save.party == 0 then
-                Game.stack:push(TextBox.new(Game, wrapText("YOU NEED AT LEAST 1 POKÃ©MON IN YOUR PARTY TO BATTLE!")))
+                Game.stack:push(TextBox.new(Game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO BATTLE!")))
                 return
               end
               local myId, myName = getTrainerInfo(Game.save)
               local myPackedParty = packPartyForGame(Game, Game.save.party)
               local linkSeed = math.random(1, 2^30)
-              local roomId = "BATTLE_"
+              local roomId = NativePvp.offerRoom("BATTLE_"
                 .. tostring(math.min(tonumber(myId) or 0, tonumber(targetTid) or 0))
                 .. "_"
                 .. tostring(math.max(tonumber(myId) or 0, tonumber(targetTid) or 0))
-                .. "_" .. tostring(linkSeed)
+                .. "_" .. tostring(linkSeed))
 
               isWaitingForChallenge = true
               challengeWaitTimer = 0
@@ -6178,7 +6033,7 @@ return function(mod)
             label = "LINK TRADE",
             onSelect = function()
               if not Game.save or not Game.save.party or #Game.save.party == 0 then
-                Game.stack:push(TextBox.new(Game, wrapText("YOU NEED AT LEAST 1 POKÃ©MON IN YOUR PARTY TO TRADE!")))
+                Game.stack:push(TextBox.new(Game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
                 return
               end
               local myId, myName = getTrainerInfo(Game.save)
@@ -6329,9 +6184,8 @@ return function(mod)
       if origGen2Step then origGen2Step(self) end
       if not curGame or not isGtsServerConnected then return end
 
-      local dt = 1 / 60
-      -- Advance all registered background jobs (network sync & overworld placement)
-      Jobs.step(curGame, dt)
+      -- (background jobs run once per frame, from the core.update hook: a
+      -- second and third run here made remote players interpolate 3x fast)
 
       local p = self.player
       if p and self.map and netOutChannel then
@@ -6427,17 +6281,17 @@ return function(mod)
               label = "PVP 1V1 SINGLES",
               onSelect = function()
                 if not curGame.save or not curGame.save.party or #curGame.save.party == 0 then
-                  curGame.stack:push(TextBox.new(curGame, wrapText("YOU NEED AT LEAST 1 POKÃ©MON IN YOUR PARTY TO BATTLE!")))
+                  curGame.stack:push(TextBox.new(curGame, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO BATTLE!")))
                   return
                 end
                 local myId, myName = getTrainerInfo(curGame.save)
                 local myPackedParty = packPartyForGame(curGame, curGame.save.party)
                 local linkSeed = math.random(1, 2^30)
-                local roomId = "BATTLE_"
+                local roomId = NativePvp.offerRoom("BATTLE_"
                   .. tostring(math.min(tonumber(myId) or 0, tonumber(targetTid) or 0))
                   .. "_"
                   .. tostring(math.max(tonumber(myId) or 0, tonumber(targetTid) or 0))
-                  .. "_" .. tostring(linkSeed)
+                  .. "_" .. tostring(linkSeed))
 
                 isWaitingForChallenge = true
                 challengeWaitTimer = 0
@@ -6459,7 +6313,7 @@ return function(mod)
               label = "LINK TRADE",
               onSelect = function()
                 if not curGame.save or not curGame.save.party or #curGame.save.party == 0 then
-                  curGame.stack:push(TextBox.new(curGame, wrapText("YOU NEED AT LEAST 1 POKÃ©MON IN YOUR PARTY TO TRADE!")))
+                  curGame.stack:push(TextBox.new(curGame, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
                   return
                 end
                 local myId, myName = getTrainerInfo(curGame.save)
@@ -6526,25 +6380,47 @@ return function(mod)
             end
           end
         end
-        -- Diagnostic (throttled): confirms this hook fires and how many
-        -- remote sprites were drawn. Look for gts_draw_diag.txt next to
-        -- gts_sprite_diag.txt.
-        local nowD = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
-        if drawDiagTime == 0 or nowD - drawDiagTime >= 3.0 then
-          drawDiagTime = nowD
-          local nCount = 0
-          for _ in pairs(netNpcs) do nCount = nCount + 1 end
+        -- Name tags, in the same camera transform as the sprites so each sits
+        -- right above its trainer, and only when the overworld itself is
+        -- drawn.  Half the world scale keeps them small; a light plate keeps
+        -- them readable on any ground.
+        if isGtsServerConnected and self.camera and self.player then
+          local G = love.graphics
+          local cam, scale = self.camera, (s or 1)
+          local function tag(name, wx, wy)
+            name = tostring(name or "TRAINER"):gsub("_", " ")
+            local width = Font.width(name)
+            local x = math.floor((wx + 8) * 2 - width / 2)
+            local y = math.floor((wy - 12) * 2)
+            G.setColor(1, 1, 1, 0.85)
+            G.rectangle("fill", x - 1, y - 1, width + 2, 10)
+            G.setColor(1, 1, 1, 1)
+            Font.draw(name, x, y)
+          end
+          G.push()
+          G.translate(-(cam.x or 0) * scale, -(cam.y or 0) * scale)
+          G.scale(scale / 2, scale / 2)
           pcall(function()
-            local f = _G.love and _G.love.filesystem
-            if f and f.write then
-              f.write("gts_draw_diag.txt", string.format(
-                "fired=yes netNpcs=%d drawn=%d camX=%s camY=%s s=%s\n",
-                nCount, drawn,
-                tostring(self.camera and self.camera.x or "nil"),
-                tostring(self.camera and self.camera.y or "nil"),
-                tostring(s)))
+            for tid, pNpc in pairs(netNpcs) do
+              if pNpc and pNpc.px and pNpc.py then
+                local rawData = netPlayerMap[tid] or {}
+                tag(rawData.name or pNpc.name, pNpc.px, pNpc.py)
+              end
             end
+            local save = self.game and self.game.save
+            tag((save and save.onlineAccount and save.onlineAccount.name)
+              or (save and save.player and save.player.name) or "YOU",
+              self.player.px or 0, self.player.py or 0)
           end)
+          G.pop()
+          G.setColor(1, 1, 1, 1)
+        end
+        -- Diagnostic (throttled, developer mode only): how many remote
+        -- sprites this pass drew.
+        local nowD = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
+        if mod.developer and (drawDiagTime == 0 or nowD - drawDiagTime >= 3.0) then
+          drawDiagTime = nowD
+          diag("drawPeople remote sprites drawn=%d s=%s", drawn, tostring(s))
         end
         return res
       end
@@ -6554,18 +6430,7 @@ return function(mod)
   -- Wrap Game.update to continuously service active GtsNetAdapter during battle
   mod.hooks:wrap("core.update", function(nextFn, game, dt)
     currentGame = game
-    -- MMO speed lock: while connected, every player runs at 1x (NORMAL) game
-    -- speed so the online world stays in sync. Force it BEFORE the update so
-    -- the frame itself runs at 1x, and repeat every frame so the speed
-    -- hotkey / shoulder buttons / options menu cannot change it.
-    _G.YELLOW_CRYSTAL_TIME_OVERRIDE = nil
-    if isGtsServerConnected and game and game.options then
-      game.options.speed = 1
-      if game.options.speedOverworld ~= nil then game.options.speedOverworld = 1 end
-      if game.options.speedBattle ~= nil then game.options.speedBattle = 1 end
-      if game.options.speedMenu ~= nil then game.options.speedMenu = 1 end
-      game.speedOverride = nil
-    end
+    -- (the 1x speed lock while connected is Game2.speedLocked, below)
 
     if nextFn then nextFn(game, dt) end
 
@@ -6582,6 +6447,7 @@ return function(mod)
         ChatState.pollTimer = 0
         pcall(pollGlobalChat, game)
       end
+      pcall(serviceChatFetch, game)
       pcall(drainChatNotifQueue, game)
     end
 
@@ -6635,7 +6501,7 @@ return function(mod)
       local origPartyAdd = Party.add
       Party.add = function(party, mon)
         local res = origPartyAdd(party, mon)
-        if res and Game then
+        if res and Game and isGtsServerConnected then
           addMmoXp(Game, "catch")
           local tid = getTrainerId and getTrainerId(Game.save) or "100001"
           local sp = mon and mon.species
@@ -6650,7 +6516,7 @@ return function(mod)
       BattleState._mmoHooked = true
       local origBattleFinish = BattleState.finish
       BattleState.finish = function(self)
-        if self.result == "win" and Game then
+        if self.result == "win" and Game and isGtsServerConnected then
           local tid = getTrainerId and getTrainerId(Game.save) or "100001"
           local isTrainer = (self.kind == "trainer" or self.trainer ~= nil or self.oppClass ~= nil)
           if isTrainer then
@@ -7124,7 +6990,9 @@ return function(mod)
     UI.openAfterMessage(game, message, screen, done)
   end
 
-  if mod.content and mod.content.map_scripts and mod.content.map_scripts.register then
+  -- The casino lives in Gen 1's Celadon GAME_CORNER; Crystal has no such map
+  -- and no map_scripts registry, so registering there only files a load error.
+  if not isGen2 and mod.content and mod.content.map_scripts and mod.content.map_scripts.register then
     pcall(function()
       mod.content.map_scripts:register("GAME_CORNER", { talk = {
         TEXT_GAMECORNER_CLERK1 = UI.coinClerk,
