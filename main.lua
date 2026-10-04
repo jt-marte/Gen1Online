@@ -60,7 +60,18 @@
   local storageRead, storageWrite, storageRemove
   do
     local SaveSerializer = require("src.core.SaveSerializer")
+    -- The online character belongs to one game.  Crystal keeps the names it
+    -- has always used; a Gen 1 game gets its own pair (save_online_red.lua and
+    -- gen1online_online_account_red.lua), so no game loads another's progress.
     local PERSIST_FILES = { online_save = "save_online_crystal.lua" }
+    do
+      local okGv, Gv = pcall(require, "src.core.GameVersion")
+      local gameId = okGv and Gv and Gv.get and tostring(Gv.get() or "") or ""
+      if not isGen2 and gameId:match("^%w+$") then
+        PERSIST_FILES.online_save = "save_online_" .. gameId .. ".lua"
+        PERSIST_FILES.online_account = "gen1online_online_account_" .. gameId .. ".lua"
+      end
+    end
     local function persistFs()
       local fs = love and love.filesystem
       if fs and fs.read and fs.write and fs.getInfo then return fs end
@@ -252,7 +263,9 @@
     return 1
   end
 
-  local AVAILABLE_AVATARS = {
+  -- Online avatars, per generation (Gen 1 sprite ids are pokered's).
+  -- GtsUI.avatarChoices drops any the running game has no sprite for.
+  local AVAILABLE_AVATARS = isGen2 and {
     { id = "SPRITE_CHRIS", label = "CRYSTAL / PROTAGONIST" },
     { id = "SPRITE_RIVAL", label = "SILVER / RIVAL" },
     { id = "SPRITE_RED", label = "RED" },
@@ -292,7 +305,57 @@
     { id = "SPRITE_ROCKET_GIRL", label = "ROCKET GIRL" },
     { id = "SPRITE_OAK", label = "PROF. OAK" },
     { id = "SPRITE_ELM", label = "PROF. ELM" }
+  } or {
+    { id = "SPRITE_RED", label = "RED / PROTAGONIST" },
+    { id = "SPRITE_BLUE", label = "BLUE / RIVAL" },
+    { id = "SPRITE_OAK", label = "PROF. OAK" },
+    { id = "SPRITE_GIOVANNI", label = "GIOVANNI" },
+    { id = "SPRITE_LANCE", label = "LANCE" },
+    { id = "SPRITE_LORELEI", label = "LORELEI" },
+    { id = "SPRITE_BRUNO", label = "BRUNO" },
+    { id = "SPRITE_AGATHA", label = "AGATHA" },
+    { id = "SPRITE_KOGA", label = "KOGA" },
+    { id = "SPRITE_DAISY", label = "DAISY" },
+    { id = "SPRITE_COOLTRAINER_M", label = "COOLTRAINER M" },
+    { id = "SPRITE_COOLTRAINER_F", label = "COOLTRAINER F" },
+    { id = "SPRITE_YOUNGSTER", label = "YOUNGSTER" },
+    { id = "SPRITE_SUPER_NERD", label = "SUPER NERD" },
+    { id = "SPRITE_BEAUTY", label = "BEAUTY" },
+    { id = "SPRITE_GENTLEMAN", label = "GENTLEMAN" },
+    { id = "SPRITE_HIKER", label = "HIKER" },
+    { id = "SPRITE_BIKER", label = "BIKER" },
+    { id = "SPRITE_SAILOR", label = "SAILOR" },
+    { id = "SPRITE_ROCKER", label = "ROCKER" },
+    { id = "SPRITE_FISHER", label = "FISHER" },
+    { id = "SPRITE_SWIMMER", label = "SWIMMER" },
+    { id = "SPRITE_SCIENTIST", label = "SCIENTIST" },
+    { id = "SPRITE_CHANNELER", label = "CHANNELER" },
+    { id = "SPRITE_GAMBLER", label = "GAMBLER" },
+    { id = "SPRITE_ROCKET", label = "TEAM ROCKET" },
+    { id = "SPRITE_GAMEBOY_KID", label = "GAMEBOY KID" },
+    { id = "SPRITE_CAPTAIN", label = "CAPTAIN" },
+    { id = "SPRITE_MR_FUJI", label = "MR. FUJI" },
   }
+
+  -- The avatars this game can actually draw: a sprite missing from its data
+  -- would leave the trainer invisible.
+  function GtsUI.avatarChoices(game)
+    local sprites = game and game.data and (isGen2 and game.data.gen2Sprites or game.data.sprites)
+    if type(sprites) ~= "table" or next(sprites) == nil then return AVAILABLE_AVATARS end
+    local out = {}
+    for _, av in ipairs(AVAILABLE_AVATARS) do
+      if sprites[av.id] then out[#out + 1] = av end
+    end
+    return #out > 0 and out or AVAILABLE_AVATARS
+  end
+
+  -- Shown when the server hosts the other generation's world.
+  function GtsUI.wrongWorldText(serverGen)
+    local worlds = { [1] = "GEN 1 (RED, BLUE AND YELLOW)", [2] = "GEN 2 (CRYSTAL)" }
+    return string.format("THIS SERVER IS A %s WORLD.\nYOUR GAME IS %s.\nASK THE HOST FOR A %s SERVER.",
+      worlds[tonumber(serverGen)] or "DIFFERENT", isGen2 and "CRYSTAL" or "GEN 1",
+      isGen2 and "CRYSTAL" or "GEN 1")
+  end
 
   -- Global Trade Station (GTS) Database
   _G.GEN1ONLINE_GTS = _G.GEN1ONLINE_GTS or {
@@ -550,6 +613,7 @@
     local rel = (path or ""):gsub("^/+", "")
     local separator = rel:find("?") and "&" or "?"
     local fullUrl = base .. "/" .. rel .. separator .. "version=" .. MOD_VERSION .. "&modVersion=" .. MOD_VERSION
+      .. "&gen=" .. (isGen2 and "2" or "1")
     local ok, res, code, headers, status = makeHttpRequest({
       url = fullUrl,
       method = "GET",
@@ -580,6 +644,7 @@
     payload.version = MOD_VERSION
     payload.gameVersion = gName
     payload.recompVersion = rVer
+    payload.generation = isGen2 and 2 or 1
     local jsonStr = Json.encode(payload)
     local response_body = {}
     local sent = false
@@ -755,7 +820,7 @@
     if fetch and fetch.available and fetch:available() then
       if ChatState.fetchJob then return end -- the last poll is still in flight
       local url = getServerUrl():gsub("/+$", "") .. "/chat/history?version="
-        .. MOD_VERSION .. "&modVersion=" .. MOD_VERSION
+        .. MOD_VERSION .. "&modVersion=" .. MOD_VERSION .. "&gen=" .. (isGen2 and "2" or "1")
       ChatState.fetchJob = fetch:get(url, { accept = "application/json", maxSeconds = 5 })
       if ChatState.fetchJob then return end
     end
@@ -1495,6 +1560,7 @@
     local gName, rVer = getClientVersionInfo()
     payload.gameVersion = gName
     payload.recompVersion = rVer
+    payload.generation = isGen2 and 2 or 1
     asyncPending[#asyncPending + 1] = {
       url = getServerUrl() .. "/gts",
       body = Json.encode(payload),
@@ -1625,6 +1691,7 @@
             local gName, rVer = getClientVersionInfo()
             decoded.gameVersion = gName
             decoded.recompVersion = rVer
+            decoded.generation = isGen2 and 2 or 1
             req.body = Json.encode(decoded)
 
             if decoded.action == "sync_pos" then
@@ -1731,6 +1798,9 @@
         elseif res.error == "ALREADY_LOGGED_IN" or res.error == "BANNED" then
           handleDisconnect(game, (res.message or "ACCOUNT ALREADY ACTIVE ON ANOTHER DEVICE!\nDISCONNECTED FOR SAFETY."))
           return
+        elseif res.error == "WRONG_GENERATION" then
+          handleDisconnect(game, GtsUI.wrongWorldText(res.serverGeneration))
+          return
         end
 
         if res.success then
@@ -1793,7 +1863,7 @@
               activeParty = res.party
             end
             -- Synchronize RTC Clock with Server
-            if res.serverHour and res.serverMinute and res.serverWeekday and game and game.save then
+            if isGen2 and res.serverHour and res.serverMinute and res.serverWeekday and game and game.save then
               local okClock, Clock = pcall(require, "src.core.gen2.Clock")
               if okClock and Clock and Clock.setTime and Clock.setWeekday then
                 Clock.setTime(game.save, res.serverHour, res.serverMinute)
@@ -2134,8 +2204,9 @@
     end
   end
 
-  -- 2. Gen 2 / Gold Save.save Guard
-  local okGen2Save, Gen2SaveModule = pcall(require, "src.core.gen2.Save")
+  -- 2. Gen 2 / Gold Save.save Guard (the sandbox refuses Gen 2 modules on Gen 1)
+  local okGen2Save, Gen2SaveModule = false, nil
+  if isGen2 then okGen2Save, Gen2SaveModule = pcall(require, "src.core.gen2.Save") end
   if okGen2Save and Gen2SaveModule and Gen2SaveModule.save then
     local origGen2Save = Gen2SaveModule.save
     Gen2SaveModule.save = function(save)
@@ -2442,8 +2513,17 @@
     end
 
     if battle then
+      -- BattleState:finish runs in phases (it calls itself again after the
+      -- evolution check before it closes the screen), so the cleanup below
+      -- runs once however often finish is called, and the result is booked
+      -- once, from onFinish, after the battle screen has closed.
       local origFinish = battle.finish
       battle.finish = function(self)
+        if self.gtsCleanedUp then
+          if origFinish then return origFinish(self) end
+          return
+        end
+        self.gtsCleanedUp = true
         inBattle = false
         activeBattleAdapter = nil
 
@@ -2474,8 +2554,12 @@
         -- GtsNetAdapter:send, but belt-and-suspenders: clear again in case
         -- anything else lands in the room before the opponent polls).
         gtsApiPost({ action = "clear_battle_room", roomId = roomId }, 0.5)
+      end
 
-        if self.result == "win" then
+      local origOnFinish = battle.onFinish
+      battle.onFinish = function(result)
+        if origOnFinish then origOnFinish(result) end
+        if result == "win" then
           addMmoXp(game, "pvp_win", nil, { opponentName = opponentName or "TRAINER", opponentId = opponentId or "0" })
           syncLocalProfile(game, 1)
           performForcedSave(game)
@@ -2659,7 +2743,8 @@
     end
   end
 
-  local okGame2, Game2Mod = pcall(require, "src.core.Game2")
+  local okGame2, Game2Mod = false, nil
+  if isGen2 then okGame2, Game2Mod = pcall(require, "src.core.Game2") end
   for _, cls in ipairs({ Game, (okGame2 and Game2Mod) or nil }) do
     if cls and cls.returnToTitle then
       local origReturnToTitle = cls.returnToTitle
@@ -2671,15 +2756,17 @@
   end
 
   -- MMO speed lock: while connected every player runs at 1x so the online
-  -- world stays in sync.  Game2:speedLocked is the engine's own lock (link
-  -- battles and minigames use it): logicSpeed answers 1 and a fast-forward
-  -- frame in flight is ended cleanly, and the player's saved GAME SPEED
-  -- option is left alone for when they go offline.
-  if okGame2 and Game2Mod and Game2Mod.speedLocked then
-    local origSpeedLocked = Game2Mod.speedLocked
-    Game2Mod.speedLocked = function(self, ...)
-      if isGtsServerConnected then return true, "online" end
-      return origSpeedLocked(self, ...)
+  -- world stays in sync.  speedLocked is the engine's own lock on both Game
+  -- (Gen 1) and Game2 (link battles and minigames use it): logicSpeed
+  -- answers 1 and a fast-forward frame in flight is ended cleanly, and the
+  -- player's saved GAME SPEED option is left alone for when they go offline.
+  for _, cls in ipairs({ Game, (okGame2 and Game2Mod) or nil }) do
+    if cls and cls.speedLocked then
+      local origSpeedLocked = cls.speedLocked
+      cls.speedLocked = function(self, ...)
+        if isGtsServerConnected then return true, "online" end
+        return origSpeedLocked(self, ...)
+      end
     end
   end
 
@@ -2951,10 +3038,12 @@
   -- OVERWORLD POKEMON FOLLOWER SYSTEM (GEN 2 CRYSTAL)
   -- =========================================================================
 
+  -- Crystal's follower system only.  Gen 1's one follower is Yellow's own
+  -- Pikachu (src.world.PikachuFollower), whose spawning, talk and moods are
+  -- the game's, so the mod leaves Gen 1 followers alone.
   local FollowerMod = nil
-  pcall(function() FollowerMod = require("src.world.gen2.Follower") end)
-  if not FollowerMod then
-    pcall(function() FollowerMod = require("src.world.PikachuFollower") end)
+  if isGen2 then
+    pcall(function() FollowerMod = require("src.world.gen2.Follower") end)
   end
 
   local function isMonShiny(mon)
@@ -3047,6 +3136,7 @@
 
   -- Update active follower entity to match lead Pokemon (only updates on actual changes)
   local function updatePlayerFollower(game, world)
+    if not FollowerMod then return end
     if not game or not game.save or not game.save.party or #game.save.party == 0 then return end
     local leadMon = game.save.party[1]
     if not leadMon or not leadMon.species then return end
@@ -3116,6 +3206,7 @@
   -- answers two coordinates, and the counter rule it applies is the one
   -- npcAt needs.
   pcall(function()
+    if not isGen2 then return end -- a Gen 2 engine module
     local World = require("src.world.gen2.World")
     if World and World.interactBody then
       local origInteractBody = World.interactBody
@@ -3168,6 +3259,7 @@
   -- save's RTC every response), so the clock questions are answered for the
   -- player instead of asked.  Offline both screens stay vanilla.
   pcall(function()
+    if not isGen2 then return end -- a Gen 2 engine module
     local InitClock = require("src.ui.gen2.InitClock")
     local Clock = require("src.core.gen2.Clock")
     if InitClock and InitClock.new and Clock then
@@ -3205,6 +3297,7 @@
   end)
 
   pcall(function()
+    if not isGen2 then return end -- a Gen 2 engine module
     local Specials = require("src.script.gen2.Specials")
     local Clock = require("src.core.gen2.Clock")
     if Specials and Specials.HANDLERS and Specials.HANDLERS.SetDayOfWeek and Clock then
@@ -3389,7 +3482,8 @@
     local list = {}
     local save = game and game.save
     if not save then return list end
-    local okMail, Mail = pcall(require, "src.core.gen2.Mail")
+    local okMail, Mail = false, nil
+    if isGen2 then okMail, Mail = pcall(require, "src.core.gen2.Mail") end
 
     -- An egg is not a tradeable listing, and a mon holding MAIL cannot leave:
     -- its letter lives in a party slot the GTS has no way to carry
@@ -4478,7 +4572,7 @@
         label = "CHANGE AVATAR",
         onSelect = function()
           local spriteItems = {}
-          for _, av in ipairs(AVAILABLE_AVATARS) do
+          for _, av in ipairs(GtsUI.avatarChoices(game)) do
             table.insert(spriteItems, {
               label = av.label,
               onSelect = function()
@@ -4598,6 +4692,9 @@
       if gWorld.applySpritePalette then
         pcall(gWorld.applySpritePalette, gWorld, gWorld.player)
       end
+    elseif sDef then
+      -- Gen 1's Player has no setSprite: its walking sheet is player.sprite
+      pcall(function() gWorld.player.sprite = SpriteRenderer.new(sDef, "player") end)
     end
   end
 
@@ -4771,7 +4868,7 @@
 
     local function pickCharacterSprite(chosenName)
       local spriteItems = {}
-      for _, av in ipairs(AVAILABLE_AVATARS) do
+      for _, av in ipairs(GtsUI.avatarChoices(game)) do
         table.insert(spriteItems, {
           label = av.label,
           onSelect = function()
@@ -5399,12 +5496,6 @@
   end
 
   handleConnectToServer = function(game)
-    -- 0. Enforce Pokemon Crystal Only
-    if not isGen2 then
-      game.stack:push(TextBox.new(game, wrapText("THE ONLINE SERVER HAS MIGRATED EXCLUSIVELY TO POKEMON CRYSTAL!\nPLEASE LAUNCH POKEMON CRYSTAL TO PLAY ONLINE.")))
-      return
-    end
-
     -- 1. Verify Mod Version Handshake with Server First
     local srvInfo = gtsApiGet("/server/info", 3.0)
     if srvInfo and (srvInfo.modVersion or srvInfo.version) then
@@ -5417,6 +5508,12 @@
         game.stack:push(TextBox.new(game, wrapText(msg)))
         return
       end
+    end
+    -- One generation per server: a Gen 1 world turns Crystal away, and back.
+    local srvGen = srvInfo and tonumber(srvInfo.generation)
+    if srvGen and srvGen ~= (isGen2 and 2 or 1) then
+      game.stack:push(TextBox.new(game, wrapText(GtsUI.wrongWorldText(srvGen))))
+      return
     end
 
     -- 2. Backup the local offline save in memory and capture exact offline coordinates
@@ -5627,6 +5724,7 @@ return function(mod)
 
   -- Patch Gen 2 CenterPcMenu (Main Pokemon Center PC Menu) to include GTS on the top-level UI
   pcall(function()
+    if not isGen2 then return end -- a Gen 2 engine module
     local CenterPcMenu = require("src.ui.gen2.CenterPcMenu")
     if CenterPcMenu and CenterPcMenu.buildEntries then
       local origBuildEntries = CenterPcMenu.buildEntries
@@ -6011,7 +6109,7 @@ return function(mod)
       findBugHeadButterfreeIndex = Quests.findBugHeadButterfreeIndex,
       addMmoXp = addMmoXp
     }
-    if NPCs.talkTo(self, npc, helpers) then
+    if NPCs.talkTo and NPCs.talkTo(self, npc, helpers) then
       return
     end
     return origTalkTo and origTalkTo(self, npc)
@@ -6110,7 +6208,8 @@ return function(mod)
   -- =========================================================================
   -- GEN 2 (GOLD) WORLD HOOKS (setMap, drawWorldBody, step, interact)
   -- =========================================================================
-  local okGen2World, Gen2World = pcall(require, "src.world.gen2.World")
+  local okGen2World, Gen2World = false, nil
+  if isGen2 then okGen2World, Gen2World = pcall(require, "src.world.gen2.World") end
   if okGen2World and Gen2World then
     -- 1. Gen 2 Map Transition Hook
     local origGen2SetMap = Gen2World.setMap
@@ -6907,6 +7006,33 @@ return function(mod)
     return fn or {}
   end
 
+  -- Load and wire the (currently empty) NPC and quest registries, on every
+  -- generation (before the casino, which Gen 1 skips). Each
+  -- module is `return function(loadModFile, mod) ... return api end`. The
+  -- overworld hooks call NPCs.spawnForMap / NPCs.talkTo / Quests.* at runtime,
+  -- so assigning the top-level locals here (before the factory returns) makes
+  -- the real modules visible to them.
+  local NPCsModule = loadLocal(mod, "npcs/init.lua")
+  local QuestsModule = loadLocal(mod, "quests/init.lua")
+  local function installModule(fn, fallback)
+    if type(fn) == "function" then
+      local ok, res = pcall(fn, loadLocal, mod)
+      if ok and type(res) == "table" then return res end
+    end
+    return fallback
+  end
+  NPCs = installModule(NPCsModule, NPCs)
+  Quests = installModule(QuestsModule, Quests)
+
+  -- The casino (Crash, Tube Flyer, Prize Case, the pawn shop) takes over the
+  -- Celadon Game Corner's clerks and raises the coin cap, which would change
+  -- vanilla Red/Blue/Yellow, so on Gen 1 it is not set up at all.  (Its map
+  -- hookup was GAME_CORNER talk scripts; see git history to restore it.)
+  if not isGen2 then
+    print("[Gen1Online+] Asynchronous Threaded 60FPS Multiplayer Mod initialized successfully.")
+    return
+  end
+
   local paths = { crash = "games/crash/", tube = "games/tube_flyer/", case = "games/prize_case/" }
   local CrashRules, FlappyRules, CaseRules = loadLocal(mod, paths.crash .. "rules.lua"), loadLocal(mod, paths.tube .. "rules.lua"), loadLocal(mod, paths.case .. "rules.lua")
   local ArcadeUI = loadLocal(mod, "games/shared/ui.lua")
@@ -6976,23 +7102,6 @@ return function(mod)
     giveReward = (Service and Service.giveCaseReward),
   }))
 
-  -- Load and wire the (currently empty) Gen 2 NPC and quest registries. Each
-  -- module is `return function(loadModFile, mod) ... return api end`. The
-  -- overworld hooks call NPCs.spawnForMap / NPCs.talkTo / Quests.* at runtime,
-  -- so assigning the top-level locals here (before the factory returns) makes
-  -- the real modules visible to them.
-  local NPCsModule = loadLocal(mod, "npcs/init.lua")
-  local QuestsModule = loadLocal(mod, "quests/init.lua")
-  local function installModule(fn, fallback)
-    if type(fn) == "function" then
-      local ok, res = pcall(fn, loadLocal, mod)
-      if ok and type(res) == "table" then return res end
-    end
-    return fallback
-  end
-  NPCs = installModule(NPCsModule, NPCs)
-  Quests = installModule(QuestsModule, Quests)
-
   if mod.content and mod.content.screens and mod.content.screens.register then
     for screen, class in pairs({
       [ids.crash] = Crash, [ids.tube] = TubeFlyer, [ids.case] = PrizeCase,
@@ -7029,34 +7138,6 @@ return function(mod)
 
   local function openCasino(game, message, screen, done)
     UI.openAfterMessage(game, message, screen, done)
-  end
-
-  -- The casino lives in Gen 1's Celadon GAME_CORNER; Crystal has no such map
-  -- and no map_scripts registry, so registering there only files a load error.
-  if not isGen2 and mod.content and mod.content.map_scripts and mod.content.map_scripts.register then
-    pcall(function()
-      mod.content.map_scripts:register("GAME_CORNER", { talk = {
-        TEXT_GAMECORNER_CLERK1 = UI.coinClerk,
-        TEXT_GAMECORNER_CLERK = UI.coinClerk,
-        TEXT_PAWN_BROKER = UI.pawnBroker,
-        TEXT_PRIZE_CLERK1 = UI.prizeClerk1,
-        TEXT_PRIZE_CLERK2 = UI.prizeClerk2,
-        TEXT_PRIZE_CLERK3 = UI.prizeClerk3,
-        TEXT_CASINO_HOSTESS = function(game, _, _, done)
-          local count = (game.save and game.save.coins) or 0
-          UI.text(game, string.format("Welcome to the\nCasino Lounge!\fYou currently have\n%d coins.", count), done)
-        end,
-        TEXT_CRASH_MACHINE = function(game, _, _, done)
-          openCasino(game, "CRASH MULTIPLIER!\fCash out before it\ncrashes!", ids.crash, done)
-        end,
-        TEXT_FLAPPY_MACHINE = function(game, _, _, done)
-          openCasino(game, "TUBE FLYER!\fTap A to flap and\ndodge obstacles!", ids.tube, done)
-        end,
-        TEXT_CASE_MACHINE = function(game, _, _, done)
-          openCasino(game, "PRIZE CASE!\fSpin for rare items\nand Pokemon!", ids.case, done)
-        end,
-      } })
-    end)
   end
 
   print("[Gen1Online+] Asynchronous Threaded 60FPS Multiplayer Mod initialized successfully.")

@@ -36,6 +36,22 @@ step "synthetic wonder trade" "$(result "$G1O_WORK/wonder.log")"
 DEV=1 "$LUAJIT" "$DEV/harness/gts_test.lua" > "$G1O_WORK/gts.log" 2>&1
 step "synthetic gts" "$(result "$G1O_WORK/gts.log")"
 
+# Gen 1: Red, Blue and Yellow on a Gen 1 server; each generation turned away
+# by the other's server
+for g in red blue yellow; do
+  G1O_GAME=$g "$LUAJIT" "$DEV/harness/gen1_offline_test.lua" > "$G1O_WORK/gen1_offline_$g.log" 2>&1
+  step "synthetic gen1 offline ($g)" "$(result "$G1O_WORK/gen1_offline_$g.log")"
+  GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
+  G1O_GAME=$g DEV=1 "$LUAJIT" "$DEV/harness/gen1_test.lua" > "$G1O_WORK/gen1_$g.log" 2>&1
+  step "synthetic gen1 online ($g)" "$(result "$G1O_WORK/gen1_$g.log")"
+done
+GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
+DEV=1 "$LUAJIT" "$DEV/harness/wrong_world_test.lua" > "$G1O_WORK/wrong_world_crystal.log" 2>&1
+step "synthetic wrong world (crystal on gen 1)" "$(result "$G1O_WORK/wrong_world_crystal.log")"
+GTS_GENERATION=2 "$DEV/server.sh" >/dev/null
+G1O_GAME=red DEV=1 "$LUAJIT" "$DEV/harness/wrong_world_test.lua" > "$G1O_WORK/wrong_world_red.log" 2>&1
+step "synthetic wrong world (red on crystal)" "$(result "$G1O_WORK/wrong_world_red.log")"
+
 if [ "${1:-}" != "quick" ]; then
   if [ ! -f "$PROFILE/crystal/rom-cache.complete" ]; then
     echo "== real Crystal: skipped (run dev/setup.sh <rom> first)"

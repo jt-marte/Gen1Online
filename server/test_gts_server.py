@@ -55,8 +55,12 @@ class ServerTest(unittest.TestCase):
         self.stop()
         shutil.rmtree(self.dir, ignore_errors=True)
 
+    generation = None   # a test class can start its server as --gen 1 or 2
+
     def start(self):
-        self.store = gts_server.GtsStore(self.path, version=VERSION, clock=self.clock)
+        self.store = gts_server.GtsStore(self.path, version=VERSION, clock=self.clock,
+                                         generation=self.generation)
+        self.store.announce = lambda text: None
         self.httpd = gts_server.GtsHTTPServer(("127.0.0.1", 0), self.store)
         self.port = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, args=(0.05,), daemon=True)
@@ -85,11 +89,13 @@ class ServerTest(unittest.TestCase):
         finally:
             conn.close()
 
-    def post(self, action, version=VERSION, **fields):
+    game = "Pokemon Crystal"   # the gameVersion every post carries
+
+    def post(self, action, version=VERSION, game=None, **fields):
         payload = dict(fields, action=action)
         if version is not None:
             payload.update(modVersion=version, version=version,
-                           gameVersion="Pokemon Crystal", recompVersion="v1")
+                           gameVersion=self.game if game is None else game, recompVersion="v1")
         return self.request("POST", "/gts", json.dumps(payload).encode("utf-8"),
                             {"Content-Type": "application/json", "X-Mod-Version": version or ""})
 
@@ -120,7 +126,8 @@ class ServerTest(unittest.TestCase):
 class TransportTests(ServerTest):
     def test_server_info_is_never_version_gated(self):
         res = self.get("/server/info", version=None)
-        self.assertEqual(res, {"success": True, "version": VERSION, "modVersion": VERSION})
+        self.assertEqual(res, {"success": True, "version": VERSION, "modVersion": VERSION,
+                               "generation": None})
         res = self.get("/server/info", version="0.1.0")
         self.assertTrue(res["success"])
 
@@ -817,6 +824,93 @@ class PersistenceTests(ServerTest):
         self.assertTrue(any(n.startswith("data.json.broken-") for n in os.listdir(self.dir)))
 
 
+class GenerationTests(ServerTest):
+    def test_the_first_game_to_connect_claims_the_world(self):
+        self.assertIsNone(self.get("/server/info")["generation"])
+        # a request that names no game (a script) claims nothing
+        self.assertTrue(self.post("get_quests", game="").get("success"))
+        self.assertIsNone(self.get("/server/info")["generation"])
+        # nor does a read
+        self.assertTrue(self.get("/chat/history?gen=1")["success"])
+        self.assertIsNone(self.get("/server/info")["generation"])
+        self.assertTrue(self.post("register_player", name="RED", game="Pokemon Red")["success"])
+        self.assertEqual(self.get("/server/info")["generation"], 1)
+        for game in ("Pokemon Blue", "Pokemon Yellow"):
+            self.assertTrue(self.post("get_quests", game=game)["success"], game)
+
+    def test_the_other_generation_is_turned_away(self):
+        self.post("register_player", name="RED", game="Pokemon Red")
+        for game in ("Pokemon Crystal", "Pokemon Gold", "Pokemon FireRed", "Pokemon Emerald"):
+            res = self.post("register_player", name="GOLD", game=game)
+            self.assertError(res, "WRONG_GENERATION")
+            self.assertEqual(res["serverGeneration"], 1)
+        self.assertError(self.post("sync_pos", trainerId="1", sessionId="s", map="NEW_BARK_TOWN",
+                                   game="Pokemon Crystal"), "WRONG_GENERATION")
+        self.assertError(self.get("/gts/browse?gen=2"), "WRONG_GENERATION")
+        self.assertTrue(self.get("/gts/browse?gen=1")["success"])
+        self.assertTrue(self.get("/gts/browse")["success"], "a read that names no generation")
+        self.assertEqual(self.get("/gts/players")["players"], {})
+
+    def test_an_explicit_generation_wins_over_the_game_name(self):
+        self.post("get_quests", game="Pokemon Crystal")
+        self.assertEqual(self.get("/server/info")["generation"], 2)
+        self.assertError(self.post("get_quests", game="Pokemon Crystal", generation=1),
+                         "WRONG_GENERATION")
+        self.assertTrue(self.post("get_quests", game="", generation=2)["success"])
+
+    def test_gen_3_is_never_admitted(self):
+        res = self.post("register_player", name="MAY", game="Pokemon Emerald")
+        self.assertError(res, "WRONG_GENERATION")
+        self.assertIsNone(res["serverGeneration"])
+        self.assertIsNone(self.get("/server/info")["generation"])
+
+    def test_the_generation_survives_a_restart(self):
+        self.post("get_quests", game="Pokemon Yellow")
+        self.restart()
+        self.assertEqual(self.get("/server/info")["generation"], 1)
+        self.assertError(self.post("get_quests", game="Pokemon Crystal"), "WRONG_GENERATION")
+
+    def test_generation_of(self):
+        cases = {("", "Pokemon Red"): 1, ("", "Pokemon Blue"): 1, ("", "Pokemon Yellow"): 1,
+                 ("", "Pokemon Crystal"): 2, ("", "Pokemon Gold"): 2, ("", "Pokemon Silver"): 2,
+                 ("", "Pokemon FireRed"): 3, ("", "Pokemon LeafGreen"): 3, ("", "Pokemon Emerald"): 3,
+                 ("", ""): None, (None, None): None, (2, "Pokemon Red"): 2, ("1", None): 1,
+                 ("7", "Pokemon Red"): 1}
+        for (explicit, game), gen in cases.items():
+            self.assertEqual(gts_server.generation_of(explicit, game), gen, (explicit, game))
+
+
+class GenOneServerTests(ServerTest):
+    generation = 1
+    game = "Pokemon Red"
+
+    def test_a_gen_1_server_from_the_start(self):
+        self.assertEqual(self.get("/server/info")["generation"], 1)
+        self.assertTrue(self.register("RED")["trainerId"])
+        self.assertError(self.post("get_quests", game="Pokemon Crystal"), "WRONG_GENERATION")
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["generation"], 1)
+
+    def test_gen_1_tokens_can_be_typed_on_the_gen_1_keyboard(self):
+        # Red/Blue/Yellow's naming screen has letters and no digits
+        for name in ("RED", "LEAF", "GARY"):
+            token = self.register(name)["token"]
+            self.assertRegex(token, r"^[A-Z]{8}$")
+            res = self.post("redeem_token", token=token.lower())
+            self.assertEqual(res["account"]["name"], name)
+
+    def test_a_data_file_keeps_its_generation(self):
+        self.stop()
+        with self.assertRaises(ValueError) as caught:
+            gts_server.GtsStore(self.path, generation=2)
+        self.assertIn("different --data", str(caught.exception))
+        self.start()
+
+    def test_the_flag_rejects_other_generations(self):
+        with self.assertRaises(ValueError):
+            gts_server.GtsStore(os.path.join(self.dir, "other.json"), generation=3)
+
+
 class CommandLineTests(unittest.TestCase):
     def test_defaults(self):
         self.assertEqual(gts_server.DEFAULT_PORT, 7779)
@@ -829,6 +923,17 @@ class CommandLineTests(unittest.TestCase):
         store = gts_server.GtsStore(os.path.join(tempfile.mkdtemp(), "d.json"))
         text = gts_server.banner("0.0.0.0", 7779, store)
         self.assertIn("server_url=http://127.0.0.1:7779", text)
+        self.assertIn("the first game to connect decides", text)
+        store = gts_server.GtsStore(os.path.join(tempfile.mkdtemp(), "d.json"), generation=1)
+        self.assertIn("World: Gen 1 (Red/Blue/Yellow)", gts_server.banner("127.0.0.1", 7779, store))
+
+    def test_main_refuses_a_data_file_of_the_other_generation(self):
+        path = os.path.join(tempfile.mkdtemp(), "d.json")
+        gts_server.GtsStore(path, generation=2)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(gts_server.main(["--data", path, "--gen", "1", "--port", "0"]), 1)
+        self.assertIn("Gen 2 (Crystal) world", err.getvalue())
 
 
 if __name__ == "__main__":
