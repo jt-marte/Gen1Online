@@ -8,6 +8,6 @@ WORK=${G1O_WORK:-/tmp/gen1online-dev}
 P=$WORK/xdg/love/gen1online-test
 DEST=$P/mods/${1:-gen1online-plus}
 rm -rf "$P/mods"; mkdir -p "$DEST"
-(cd "$REPO" && tar --exclude=.git --exclude='*.modpkg' --exclude=dev -cf - .) | (cd "$DEST" && tar -xf -)
+(cd "$REPO" && tar --exclude=.git --exclude='*.modpkg' --exclude=dev --exclude=server -cf - .) | (cd "$DEST" && tar -xf -)
 printf 'server_url=http://127.0.0.1:%s\n' "${GTS_PORT:-17781}" > "$DEST/gts_config.txt"
 echo "installed to $DEST"

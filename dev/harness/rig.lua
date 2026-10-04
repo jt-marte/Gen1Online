@@ -1,10 +1,13 @@
 -- Shared rig for the synthetic tests: boots the mod through gen1recomp's real
--- Loader and sandbox on a Crystal version, with a real gen2 World over a
--- synthetic map, a real StateStack and a real Crystal new-game save.  No ROM.
+-- Loader and sandbox, with a real StateStack and a real new-game save over a
+-- synthetic map.  No ROM.  Crystal (the default) gets a real gen2 World; a
+-- Gen 1 game (G1O_GAME=red|blue|yellow) gets the real Gen 1 Game and
+-- overworld modules with stand-ins for the parts that need ROM data.
 -- Run from the gen1recomp checkout (dev/run_tests.sh does this).
 --
--- env: G1O_WORK (toolchain root), MOD_DIR (this repo), DEV=1 (mod developer
--- mode, which turns the mod's diag() lines on), VERBOSE=1 (echo engine log)
+-- env: G1O_WORK (toolchain root), MOD_DIR (this repo), G1O_GAME (default
+-- crystal), DEV=1 (mod developer mode, which turns the mod's diag() lines
+-- on), VERBOSE=1 (echo engine log)
 local Rig = {}
 
 local WORK = assert(os.getenv("G1O_WORK"), "G1O_WORK")
@@ -18,7 +21,9 @@ love.timer = love.timer or {}
 love.timer.getTime = socket.gettime
 
 local GameVersion = require("src.core.GameVersion")
-GameVersion.set("crystal")
+Rig.gameId = os.getenv("G1O_GAME") or "crystal"
+GameVersion.set(Rig.gameId)
+Rig.generation = GameVersion.generation(Rig.gameId)
 
 -- ------- swallowed-error capture: the mod pcall()s nearly everything, so the
 -- sandbox's pcall is wrapped to record every error it would have hidden
@@ -157,7 +162,7 @@ function Rig.newInput()
   return input
 end
 
-function Rig.newGame()
+local function newGame2()
   local save = Gen2Save.newGame({ playerName = "KRIS", trainerId = 4242 })
   save.party = {
     { species = "CYNDAQUIL", nickname = "CYNDAQUIL", level = 7, hp = 24,
@@ -205,9 +210,75 @@ function Rig.newGame()
   return game
 end
 
+-- Gen 1: the engine's Game, StateStack and overworld are singleton modules,
+-- and the overworld sits on the stack.  Its map loading, update, input and
+-- drawing need ROM data, so those methods are replaced with plain stand-ins
+-- BEFORE the mod loads and wraps them: the mod's wrappers run for real.
+local function newGame1()
+  local Game = require("src.core.Game")
+  local SaveData = require("src.core.SaveData")
+  local OW = require("src.world.OverworldController")
+  local Collision = require("src.world.Collision")
+  function OW:enter(mapId, x, y, facing) self:setMap(mapId, x, y, facing) end
+  function OW:exit() end
+  function OW:setMap(mapId, x, y, facing)
+    self.map = Rig.fakeMap(mapId)
+    local p = self.player
+    p.cellX, p.cellY = x or p.cellX, y or p.cellY
+    p.px, p.py = p.cellX * 16, p.cellY * 16
+    p.facing = facing or p.facing
+  end
+  function OW:update() self.vanillaUpdates = (self.vanillaUpdates or 0) + 1 end
+  function OW:interact() self.vanillaInteracts = (self.vanillaInteracts or 0) + 1 end
+  function OW:talkTo(npc) self.vanillaTalks = (self.vanillaTalks or 0) + 1 end
+  function OW:drawWorld() end
+  function OW:captureSave(save)
+    save.player.map, save.player.x, save.player.y = self.map.id, self.player.cellX, self.player.cellY
+    save.player.facing = self.player.facing
+  end
+
+  local save = SaveData.newGame({ version = Rig.gameId })
+  save.player.name, save.player.id = "RED", 4242
+  save.player.map, save.player.x, save.player.y = "PALLET_TOWN", 5, 6
+  save.party = {
+    { species = "PIKACHU", nickname = "PIKACHU", level = 7, hp = 24, maxHp = 24,
+      moves = { { id = "TACKLE", pp = 35 } },
+      dvs = { attack = 9, defense = 8, speed = 7, special = 6 } },
+  }
+  Game.data = { pokemon = { PIKACHU = { name = "PIKACHU", dex = 25 } }, sprites = {},
+                moves = {}, audio = { cries = {}, sfx = {} }, field = {} }
+  Game.save = save
+  Game.input = Rig.newInput()
+  Game.options = { speed = 3 }
+  Game.stack = StateStack
+  StateStack:init()
+  Game.overworld = OW
+  OW.map = Rig.fakeMap("PALLET_TOWN")
+  OW.player = {
+    cellX = 5, cellY = 6, px = 80, py = 96, facing = "down", moving = false,
+    facingCell = function(self) return Collision.target(self.cellX, self.cellY, self.facing) end,
+    walkPhase = function() return 0 end,
+    draw = function(self) self.drawn = (self.drawn or 0) + 1 end,
+  }
+  OW.npcs, OW.camera = {}, { x = 0, y = 0 }
+  StateStack.states[#StateStack.states + 1] = OW   -- on the stack, without enter()
+  -- the real ones rebuild ROM-bound state
+  function Game:adoptSave(s) self.save = s end
+  function Game:returnToTitle() self.returnedToTitle = true end
+  return Game
+end
+
+function Rig.newGame()
+  if Rig.generation == 1 then return newGame1() end
+  return newGame2()
+end
+
+-- the overworld: Crystal's World is game.world, Gen 1's is game.overworld
+function Rig.world(game) return game.world or game.overworld end
+
 function Rig.load(game)
   local Loader = require("src.mods.Loader")
-  local loader = Loader.new({ fs = fs, generation = 2, version = "crystal",
+  local loader = Loader.new({ fs = fs, generation = Rig.generation, version = Rig.gameId,
     dev = os.getenv("DEV") == "1" })
   loader.game = game
   local ok, err = pcall(function() return loader:load(game.data) end)

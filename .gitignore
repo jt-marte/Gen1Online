@@ -1,7 +1,7 @@
 /dist/
 *.zip
 private_ip_ledger.json
-server/gts_data.json
+server/gts_data*.json
 server/gts_data.json.broken-*
 server/.gts_data.*.tmp
 __pycache__/

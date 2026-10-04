@@ -13,5 +13,8 @@
 #     server_url=http://100.101.102.103:7779
 #
 # Use http://, not https://: the server speaks plain HTTP.
+#
+# A server hosts one generation: point Red, Blue and Yellow at a Gen 1 server
+# and Crystal at a Crystal server (the game tells you if it's the wrong one).
 
 server_url=http://127.0.0.1:7779

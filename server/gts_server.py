@@ -7,9 +7,15 @@ standard library only: nothing to install.
     python3 server/gts_server.py                 # 0.0.0.0:7779, data next to this file
     python3 server/gts_server.py --port 8000 --data /srv/gen1online.json
 
-Options can also come from the environment: PORT, GTS_DB_PATH and
-GTS_MOD_VERSION (the version this server speaks; clients with the same
-major.minor are accepted).
+Options can also come from the environment: PORT, GTS_DB_PATH,
+GTS_GENERATION and GTS_MOD_VERSION (the version this server speaks; clients
+with the same major.minor are accepted).
+
+A server, or more exactly its data file, is one world for one generation:
+Gen 1 (Red/Blue/Yellow) or Gen 2 (Crystal).  `--gen 1` or `--gen 2` picks it;
+without it the first game to connect decides.  Games of the other generation
+are turned away with WRONG_GENERATION.  To host both, run two servers with
+different --port and --data.
 
 The wire protocol is the one the mod's client (main.lua) speaks, written up
 in CLAUDE.md: plain HTTP, `POST /gts` with a JSON body dispatched on
@@ -84,6 +90,17 @@ XP_TABLE = {
     "party_share": 50,
 }
 XP_DEFAULT = 10
+
+GENERATION_NAMES = {1: "Gen 1 (Red/Blue/Yellow)", 2: "Gen 2 (Crystal)"}
+# Recovery tokens are typed on the game's own keyboard: Crystal's box keyboard
+# has digits, Gen 1's naming screen has letters only.
+TOKEN_LENGTH = 8
+TOKEN_ALPHABETS = {1: "ABCDEFGHIJKLMNOPQRSTUVWXYZ", 2: "0123456789ABCDEF"}
+# the client sends GameVersion's displayName ("Pokemon Red"); the Gen 3 names
+# go first because "firered" contains "red"
+GAME_GENERATIONS = (("firered", 3), ("leafgreen", 3), ("emerald", 3), ("ruby", 3),
+                    ("sapphire", 3), ("crystal", 2), ("gold", 2), ("silver", 2),
+                    ("red", 1), ("blue", 1), ("yellow", 1))
 XP_MAX_DELTA = 500
 MAX_LEVEL = 100
 
@@ -175,6 +192,18 @@ def valid_mon(mon):
     return isinstance(mon, dict) and bool(mon.get("species"))
 
 
+def generation_of(explicit, game_version):
+    """1, 2 or 3 for a client, or None when it does not say (a script, a test)."""
+    gen = to_int(explicit, 0)
+    if gen in (1, 2, 3):
+        return gen
+    name = str(game_version or "").lower().replace(" ", "")
+    for key, value in GAME_GENERATIONS:
+        if key in name:
+            return value
+    return None
+
+
 def empty_data():
     return {
         "schema": 1,
@@ -188,6 +217,7 @@ def empty_data():
         "nextChatId": 1,
         "nextListingId": 1001,
         "nextClaimId": 1,
+        "generation": None,    # 1 or 2 once set: this world's generation
     }
 
 
@@ -197,13 +227,27 @@ def empty_data():
 class GtsStore:
     """All server state behind one lock.  HTTP-agnostic, so tests can drive it."""
 
-    def __init__(self, path, version=DEFAULT_VERSION, clock=time.time, rng=None):
+    def __init__(self, path, version=DEFAULT_VERSION, clock=time.time, rng=None,
+                 generation=None):
         self.path = path
         self.version = version
         self.clock = clock
         self.rng = rng or random.SystemRandom()
         self.lock = threading.RLock()
+        self.announce = lambda text: print(text, flush=True)
         self.data = self._load()
+        if generation is not None:
+            if generation not in GENERATION_NAMES:
+                raise ValueError("generation must be 1 or 2")
+            current = self.data["generation"]
+            if current is None:
+                self.data["generation"] = generation
+                self.save()
+            elif current != generation:
+                raise ValueError(
+                    "%s is a %s world, not %s. Use a different --data file for a %s server."
+                    % (self.path, GENERATION_NAMES[current], GENERATION_NAMES[generation],
+                       GENERATION_NAMES[generation]))
         # memory only
         self.presence = {}      # tid -> {"entry": {...}, "session": str, "seen": t}
         self.last_seen = {}     # tid -> t, for parties
@@ -238,8 +282,10 @@ class GtsStore:
             return data
         for key, default in data.items():
             value = loaded.get(key)
-            if isinstance(value, type(default)):
+            if default is not None and isinstance(value, type(default)):
                 data[key] = value
+        if loaded.get("generation") in GENERATION_NAMES:
+            data["generation"] = loaded["generation"]
         return data
 
     def save(self):
@@ -270,10 +316,29 @@ class GtsStore:
     def mismatch(self):
         return {"success": False, "error": "VERSION_MISMATCH", "serverVersion": self.version}
 
+    def wrong_generation(self):
+        return {"success": False, "error": "WRONG_GENERATION",
+                "serverGeneration": self.data["generation"]}
+
+    def _admit(self, gen, may_claim):
+        """Whether a client of generation `gen` belongs in this world.  The
+        first known client of a world with no generation yet claims it."""
+        if gen is None:
+            return True     # not a game (a script or a test): nothing to check
+        if gen not in GENERATION_NAMES:
+            return False    # Gen 3: the mod does not run there
+        if self.data["generation"] is None and may_claim:
+            self.data["generation"] = gen
+            self.save()
+            self.announce("This server is now a %s world (the first game to connect decided)."
+                          % GENERATION_NAMES[gen])
+        return self.data["generation"] in (None, gen)
+
     def handle_get(self, path, query, header_version=None):
         if path == "/server/info":
             # never version-gated: the client compares versions itself
-            return {"success": True, "version": self.version, "modVersion": self.version}
+            return {"success": True, "version": self.version, "modVersion": self.version,
+                    "generation": self.data["generation"]}
         route = self.GET_ROUTES.get(path)
         if route is None:
             return {"success": False, "error": "NOT_FOUND"}
@@ -281,6 +346,9 @@ class GtsStore:
         if not self.compatible(version):
             return self.mismatch()
         with self.lock:
+            # reads never claim a world; a client that names the wrong one is refused
+            if not self._admit(generation_of(query.get("gen"), None), False):
+                return self.wrong_generation()
             self._sweep()
             try:
                 # a copy: the answer is serialized after the lock is released
@@ -299,6 +367,8 @@ class GtsStore:
         if handler is None:
             return {"success": False, "error": "UNKNOWN_ACTION"}
         with self.lock:
+            if not self._admit(generation_of(req.get("generation"), req.get("gameVersion")), True):
+                return self.wrong_generation()
             self._sweep()
             try:
                 return copy.deepcopy(handler(self, req))
@@ -476,8 +546,9 @@ class GtsStore:
             if tid not in accounts:
                 break
         tokens = {a.get("token") for a in accounts.values()}
+        alphabet = TOKEN_ALPHABETS.get(self.data["generation"], TOKEN_ALPHABETS[2])
         while True:
-            token = secrets.token_hex(4).upper()
+            token = "".join(secrets.choice(alphabet) for _ in range(TOKEN_LENGTH))
             if token not in tokens:
                 break
         now = self._now()
@@ -1104,7 +1175,10 @@ class GtsHandler(BaseHTTPRequestHandler):
 
 class GtsHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = True
+    # On Windows SO_REUSEADDR lets a second server bind a port that is already
+    # in use, so two servers would silently share one data file: there the
+    # second start must fail instead.
+    allow_reuse_address = os.name != "nt"
 
     def __init__(self, address, store):
         self.store = store
@@ -1141,8 +1215,12 @@ def tailscale_ip():
 
 
 def banner(host, port, store):
+    gen = store.data["generation"]
+    world = (GENERATION_NAMES[gen] if gen else
+             "not set yet: the first game to connect decides (or start with --gen 1 or --gen 2)")
     lines = ["Gen1Online+ server %s on %s:%d" % (store.version, host, port),
              "Data: %s" % os.path.abspath(store.path),
+             "World: %s" % world,
              "",
              "Put one of these lines in gts_config.txt (next to the mod's main.lua):"]
     urls = [("this PC", "127.0.0.1")]
@@ -1171,9 +1249,18 @@ def main(argv=None):
                         help="TCP port (default 7779, or $PORT)")
     parser.add_argument("--data", default=os.environ.get("GTS_DB_PATH") or DEFAULT_DATA,
                         help="JSON data file (default server/gts_data.json, or $GTS_DB_PATH)")
+    env_gen = to_int(os.environ.get("GTS_GENERATION"), 0) or None
+    parser.add_argument("--gen", type=int, choices=(1, 2), default=env_gen,
+                        help="the world's generation: 1 = Red/Blue/Yellow, 2 = Crystal "
+                             "(default: the first game to connect decides, or $GTS_GENERATION)")
     args = parser.parse_args(argv)
 
-    store = GtsStore(args.data, version=os.environ.get("GTS_MOD_VERSION") or DEFAULT_VERSION)
+    try:
+        store = GtsStore(args.data, version=os.environ.get("GTS_MOD_VERSION") or DEFAULT_VERSION,
+                         generation=args.gen)
+    except ValueError as err:
+        print(err, file=sys.stderr)
+        return 1
     try:
         httpd = GtsHTTPServer((args.host, args.port), store)
     except OSError as err:

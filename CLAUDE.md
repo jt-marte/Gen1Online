@@ -1,9 +1,11 @@
 # Gen1Online+ (mod id `gen1online-plus`)
 
-Online multiplayer mod for **Pokémon Crystal** on the gen1recomp engine (a
-LÖVE2D re-implementation). Live co-op overworld, GTS trading, PVP link
-battles, global chat, co-op parties, true-color followers, a separate online
-save. Crystal only (`manifest.json` `"games": ["crystal"]`).
+Online multiplayer mod for **Pokémon Red, Blue, Yellow and Crystal** on the
+gen1recomp engine (a LÖVE2D re-implementation). Live co-op overworld, GTS
+trading, PVP link battles, global chat, co-op parties, a separate online save;
+true-color followers and the server RTC on Crystal only, face-to-face link
+trades on Gen 1 only. `manifest.json` `"games": ["red", "blue", "yellow",
+"crystal"]`. A server hosts one generation's world (see "Server").
 
 ## Ground rules
 
@@ -16,7 +18,10 @@ save. Crystal only (`manifest.json` `"games": ["crystal"]`).
   push to `master` directly and never force-push.
 - **Authentic Pokémon experience.** Overworld wild-Pokémon roaming was removed
   on purpose (0.5.1); wild encounters are the game's own tall-grass ones. Don't
-  add gameplay that changes vanilla Crystal outside the online features.
+  add gameplay that changes the vanilla game outside the online features. On
+  Gen 1 that is why the casino is never set up (it would take over the
+  Celadon Game Corner and raise the coin cap) and why the mod leaves Yellow's
+  own Pikachu follower (`src.world.PikachuFollower`) alone.
 - **The server is for friends**, with no Cloudflare. See "Server" below.
 - The user's Crystal ROM (v1.1, verified SHA-1) is at
   `/home/jt/Desktop/Pokemon/Pokemon - Crystal Version (UE) (V1.1) [C][!].zip`.
@@ -29,7 +34,7 @@ save. Crystal only (`manifest.json` `"games": ["crystal"]`).
 | --- | --- |
 | `main.lua` | ~6,800 lines, nearly the whole mod. **CRLF line endings.** |
 | `pvp/` | Fallback Gen 2 PVP engine, used only against pre-0.5.1 peers. |
-| `other/`, `games/` | Gen 1 casino (Crash, Tube Flyer, Prize Case, pawn). Inert on Crystal: its maps don't exist there. |
+| `other/`, `games/` | Gen 1 casino (Crash, Tube Flyer, Prize Case, pawn). Off: main.lua returns before setting it up on Gen 1, and on Crystal its maps don't exist. |
 | `npcs/`, `quests/` | Registries (empty). `npcs/{quest,trade}/*` are dead Gen 1 leftovers. |
 | `assets/followers/` | Follower sheets (16x96, 6 frames), from pokeemerald via `tools/import_emerald_follower.py`. |
 | `gts_config.txt` | `server_url=...`, read at startup through `mod:read`. |
@@ -63,12 +68,22 @@ save. Crystal only (`manifest.json` `"games": ["crystal"]`).
 - **Persistence** goes through `storageRead`/`storageWrite`/`storageRemove`.
   They are installation-wide (`mod_compat/gen1online-plus/` via the engine's
   legacy compat store), because `mod.storage` is per-playthrough and the online
-  character spans playthroughs. The online save is `save_online_crystal.lua`.
+  character spans playthroughs. The online save is per game:
+  `save_online_crystal.lua` (with `gen1online_online_account.lua`) on Crystal,
+  `save_online_<red|blue|yellow>.lua` (with
+  `gen1online_online_account_<game>.lua`) on Gen 1.
 - **Online-only code must check `isGtsServerConnected`.** Offline, the account
   helpers once renamed the offline player and diverted offline SAVEs into the
   online file.
 - On Crystal the overworld is an **empty** `game.stack`: the world isn't a
   stack state.
+- **Generations.** `isGen2` picks the branch. On Gen 1 the engine's `Game`
+  (`src.core.Game`), `StateStack` and overworld (`src.world.OverworldController`)
+  are singleton modules, the overworld sits on the stack, the save keeps the
+  position in `save.player.map/x/y`, and `Player` has no `setSprite`. The
+  sandbox refuses Gen 2 engine modules (`src.*.gen2.*`, `src.core.Game2`) on
+  Gen 1 with an error: guard such requires with `isGen2`, as the existing
+  ones are (the Gen 1 tests fail on any swallowed error).
 
 ## Testing
 
@@ -107,6 +122,18 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     to another trainer or device first; the player's Pokémon must stay put.
   - Both stub `Gen2TradeAnim` and `Gen2NamingScreen` (no art in the rig) and
     give `game.data.pokemon` minimal defs so `unpackMon2` works.
+  - **Gen 1**: `G1O_GAME=red|blue|yellow` makes the rig boot the real Gen 1
+    `Game`, `StateStack` and overworld modules, with stand-ins for the
+    overworld methods that need ROM data (`setMap`, `update`, `interact`,
+    `drawWorld`, ...) installed before the mod wraps them.
+    `gen1_offline_test.lua` checks the vanilla game is intact (casino off,
+    Pikachu follower untouched); `gen1_test.lua` runs the whole online flow
+    on a Gen 1 server, including an accepted PVP battle (booked once) and a
+    link trade opening over the room. `run_tests.sh` runs both for Red, Blue
+    and Yellow.
+  - `wrong_world_test.lua`: each generation's CONNECT is turned away by the
+    other generation's server (run as Crystal on Gen 1, and as Red on Crystal).
+  - `dev/server.sh` passes `GTS_GENERATION` through to the server.
 - **Real-Crystal drivers** (`dev/drivers/`) boot the actual game from the
   imported ROM in the engine's `POKEPORT_DRIVER` mode.
   - `follower.lua`: follower and offline checks.
@@ -131,7 +158,20 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
 **Status (2026-10-04).** `server/gts_server.py` is the server, rewritten from
 scratch on branch `server-rewrite` against the protocol below. `dev/server.sh`
 runs it for the tests. The legacy-server stand-in (`dev/make_test_server.py`)
-is gone, and the original 0.5.x server was never in this repo.
+is gone, and the original 0.5.x server was never in this repo. Gen 1 support
+(client and the server's generation lock) followed; both are on `master`.
+
+**One generation per server.** The data file records its world's generation
+(`"generation": 1 | 2`). `--gen 1|2` (or `GTS_GENERATION`) sets it; without
+it, the first request from a known game claims the world (reads never do).
+A request's generation is its `generation` field (GET: `gen` query param),
+else read off `gameVersion` ("Pokemon Red" → 1, "Pokemon Crystal" → 2, Gen 3
+names → 3, refused). A known generation that doesn't match gets
+`{"success":false,"error":"WRONG_GENERATION","serverGeneration":N}`; a request
+naming no game (a script) is let through. `/server/info` answers
+`generation` (null until claimed), and the client checks it on CONNECT. A
+Gen 1 world's recovery tokens are 8 letters A–Z (Gen 1's naming keyboard has
+no digits); a Crystal world's stay 8 hex characters.
 
 ### Wire protocol (the client defines it, so a server must match exactly)
 
@@ -147,7 +187,10 @@ Transport and framing:
   when its major.minor matches the server's. Otherwise answer
   `{"success":false,"error":"VERSION_MISMATCH","serverVersion":...}`.
 - Errors are `{"success":false,"error":"CODE"}`. The client acts on
-  `VERSION_MISMATCH`, `ALREADY_LOGGED_IN`, `BANNED` and `NAME_TAKEN`.
+  `VERSION_MISMATCH`, `WRONG_GENERATION`, `ALREADY_LOGGED_IN`, `BANNED` and
+  `NAME_TAKEN`.
+- POST bodies also carry `generation` (1 or 2) and GETs `&gen=<1|2>`; see
+  "One generation per server".
 - **Send every JSON answer, errors included, with HTTP 200.** `makeHttpRequest`
   (main.lua ~354) treats any status of 400 or more as a dead transport. It
   re-sends the request over raw TCP and appends that body to the first one,
@@ -163,7 +206,7 @@ Transport and framing:
 GET:
 | Path | Answer |
 | --- | --- |
-| `/server/info` | `{success, version, modVersion}` (the client compares major.minor) |
+| `/server/info` | `{success, version, modVersion, generation}` (the client compares major.minor, and the generation: 1, 2 or null) |
 | `/chat/history` | `{success, messages:[{id, trainerId, name, text, scope, time}]}`, the last 50 with ascending `id` |
 | `/gts/browse` | `{success, listings:{id: listing}, history:[{text, time}]}`, where listing = `{id, trainerId, trainerName, offeredMon, wanted:[species], timestamp}` |
 | `/gts/claims?trainerId=` | `{success, claims:[{mon, fromName, fromId, originalOffered, timestamp}]}` |
@@ -177,7 +220,8 @@ Accounts and profile:
 - `register_player` `{isNewCharacter, name, spriteId, title, badges, pokedexCount}` →
   `{success, account}`, where account = `{trainerId, name, token, level, xp,
   spriteId, title, favoriteMon, ...}`. A fresh 6-digit `trainerId` and an
-  8-hex `token`. Names are unique, case-insensitive (`NAME_TAKEN`).
+  8-character `token` (hex on Crystal, letters on Gen 1). Names are unique,
+  case-insensitive (`NAME_TAKEN`).
 - `login_player` `{trainerId, token}` → `{success, account}`.
 - `redeem_token` `{token}` → `{success, account}`, for restoring on a new device.
 - `update_profile` `{trainerId, token, name, title, spriteId, badges,
@@ -420,13 +464,28 @@ off the open internet.
 
 ## Known gaps
 
+- Gen 1 is verified synthetically only: there is no Gen 1 real-game driver
+  (`dev/drivers/` boots Crystal), and the ROM here is Crystal. A real
+  Red/Blue/Yellow run is still owed, especially a full PVP battle and a
+  link trade between two real games (the tests stop once each has started).
+- For 5 s after a battle the client drops incoming challenge answers as stale
+  (`lastBattleEndTime`), on both generations, so an offer made right after a
+  battle times out.
+- Gen 1 link battles and trades run over `GtsNetAdapter`, which polls the
+  server synchronously on the main thread every 0.15 s (Crystal's native
+  battle uses the async engine, `pvpBattleSend`). Fine on a LAN; over
+  Tailscale or the internet each poll can stall a frame.
+- On Gen 1, remote players are drawn after the world (the `drawWorld`
+  wrapper), without name tags and without the SGB palette tint.
+
 - Every GTS and Wonder Trade arrival runs through
   `performTradeWithAnimationAndEvolution`, which awards `gts_trade` (100 XP)
   on top of the caller's own award (`gts_claim` 50, `wonder_trade` 75). The
   server adds whatever the client reports, so the totals agree; whether a
   claim should earn both is a design call.
-- The README promises shared party XP, but no client code shares XP and the
-  server always answers `partyXp: []` (see the design notes).
+- No client code shares party XP, and the server always answers
+  `partyXp: []` (see the design notes); the README and mod card no longer
+  promise it.
 
 - In-world link trades don't work on Crystal (the engine's `LinkState` trade
   is Gen 1 only); the GTS covers trading.

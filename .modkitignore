@@ -25,6 +25,9 @@ dev/harness/offline_test.lua
 dev/harness/online_test.lua
 dev/harness/wonder_test.lua
 dev/harness/gts_test.lua
+dev/harness/gen1_test.lua
+dev/harness/gen1_offline_test.lua
+dev/harness/wrong_world_test.lua
 dev/drivers/online.lua
 dev/drivers/follower.lua
 # The server (server/) is hosted separately and never ships inside the mod.
@@ -33,3 +36,4 @@ server/test_gts_server.py
 server/start.sh
 server/start.bat
 server/gts_data.json
+server/gts_data_gen1.json

@@ -17,6 +17,15 @@ A server of our own, built for playing with friends.
   waiting each trainer is dealt another's (never their own). The client reads
   the real pool, and a claim shows the player's own Pokémon leaving.
 - README: hosting for friends on a LAN, over Tailscale, or with a port forward.
+- **Pokémon Red, Blue and Yellow.** The mod runs on Gen 1 again (it has been
+  Crystal-only since 0.4.0): connect, overworld sync, chat, GTS, Wonder Trade,
+  PVP link battles, co-op parties and, on Gen 1 only, face-to-face link
+  trades. Each game keeps its own online save (`save_online_red.lua`, ...).
+- **One generation per server.** A server is a Gen 1 world (Red, Blue and
+  Yellow together) or a Crystal world: `--gen 1` / `--gen 2`, or the first
+  game to connect decides. The other generation gets `WRONG_GENERATION`, and
+  the game says the server is not for it before anything changes. A Gen 1
+  world's recovery tokens are 8 letters, which the Gen 1 keyboard can type.
 
 ### Changed
 
@@ -34,6 +43,20 @@ A server of our own, built for playing with friends.
 - Answers over 2048 bytes (the GTS listings, once a few are up) were cut off
   and dropped: the HTTP sink stopped LuaSocket after its first block.
 - The 10-listing cap counts the server's listings, not this session's deposits.
+- A Gen 1 PVP win was booked twice (the engine finishes a battle in two
+  calls); it is now booked once, after the battle screen closes.
+- On Gen 1 the casino stays off (the Celadon Game Corner and its coin cap are
+  vanilla), Yellow's own Pikachu follower is left alone, the avatar applies to
+  the Gen 1 player sprite, and the 1x speed lock covers Gen 1 too.
+- A Pokémon received from the GTS or Wonder Trade is saved the moment it
+  arrives. It was saved only after the trade animation, so a crash during the
+  animation lost a Pokémon the server had already handed over.
+- On Gen 1 a full party and full PC boxes now refuse a GTS claim or withdrawal
+  (the server keeps the Pokémon) instead of losing it.
+- On Windows a second server can no longer start on a port that is already in
+  use (`SO_REUSEADDR` let two servers share it, and one data file).
+- The README, the mod card and the in-game party messages no longer promise
+  shared party XP, which no client code has ever shared.
 
 ## [0.5.1] - 2026-10-04
 
