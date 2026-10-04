@@ -66,27 +66,39 @@ The mod supports loading true-color overworld follower sprite sheets directly fr
 
 ---
 
-## 🛠️ Server Installation & Hosting
+## 🛠️ Hosting a Server for Friends
 
-1. **Server Location**:
-   The server backend resides in `server/gen1online/gts_server.py` outside of the client mod archive to keep security keys and private databases protected.
+The server is one Python file with nothing to install. One person hosts it, and everyone (the host too) points their game at it.
 
-2. **Configure Admin Key**:
-   Create `server/gen1online/server_secrets.json`:
-   ```json
-   { "adminKey": "YOUR_SECURE_RANDOM_KEY" }
-   ```
+### 1. Start the server
 
-3. **Start the Server**:
-   ```bash
-   cd server/gen1online
-   python gts_server.py
-   ```
+You need Python 3.8 or newer ([python.org](https://www.python.org/downloads/); on Windows, tick "Add python.exe to PATH" in the installer).
 
-4. **Expose with Cloudflare Tunnel (Optional)**:
-   ```bash
-   cloudflared tunnel --url http://127.0.0.1:7779
-   ```
+- **Linux / macOS**: `server/start.sh` (the same as `python3 server/gts_server.py`)
+- **Windows**: double-click `server\start.bat`
+
+It listens on port **7779** and keeps accounts, GTS listings, chat and the Wonder Trade pool in `server/gts_data.json` (copy that file to back up your world). When it starts, it prints the `server_url=...` lines to hand out. Options: `--port 8000`, `--host 127.0.0.1` (this PC only), `--data path/to/file.json`. Stop it with **Ctrl+C**.
+
+### 2. Point each game at it
+
+Edit `gts_config.txt` in the mod's folder (next to `main.lua`) and restart the game. The host uses:
+```text
+server_url=http://127.0.0.1:7779
+```
+Friends use one of the addresses from step 3. The server speaks plain HTTP, so write `http://`, not `https://`.
+
+### 3. Let your friends reach it (pick one)
+
+**Same Wi-Fi / LAN.** Friends use the host's LAN address, which the server prints (for example `server_url=http://192.168.1.23:7779`). Let the port through the host's firewall:
+- Fedora: `sudo firewall-cmd --add-port=7779/tcp` (add `--permanent` to keep it after a reboot)
+- Ubuntu: `sudo ufw allow 7779/tcp`
+- Windows: when the firewall prompt asks about Python, allow it on **private networks**.
+
+**Tailscale (recommended over the internet).** Everyone installs [Tailscale](https://tailscale.com/download) and joins the host's tailnet (the host invites friends, or shares the machine with them). Friends use the host's `100.x.y.z` address (`tailscale ip -4`, also printed by the server): `server_url=http://100.x.y.z:7779`. Nothing to forward, and the server stays off the open internet.
+
+**Router port forwarding.** Forward TCP port 7779 on the router to the host's LAN address, and give friends `server_url=http://<your public IP>:7779`. Share that address only with friends: the server is built for people you trust, with no passwords beyond each player's recovery token.
+
+A player's recovery token (shown when the character is created) restores the online character on a new device through **ENTER RECOVERY TOKEN**.
 
 ---
 

@@ -1,5 +1,40 @@
 # Changelog
 
+## [Unreleased]
+
+A server of our own, built for playing with friends.
+
+### Added
+
+- `server/gts_server.py`: a single-file, standard-library Python 3.8+ server
+  that speaks the client's protocol. `python3 server/gts_server.py` (or
+  `server/start.sh`, or double-clicking `server/start.bat`) listens on port
+  7779 and prints the `server_url=` lines for this PC, the LAN and Tailscale.
+  Every answer is HTTP 200 JSON, keep-alive connections are reused, and the
+  data is saved atomically to `server/gts_data.json`. No Cloudflare, analytics,
+  IP logging or anti-cheat.
+- Wonder Trade runs on the server: one Pokémon per trainer, and once 5 are
+  waiting each trainer is dealt another's (never their own). The client reads
+  the real pool, and a claim shows the player's own Pokémon leaving.
+- README: hosting for friends on a LAN, over Tailscale, or with a port forward.
+
+### Changed
+
+- `gts_config.txt` and the built-in default point at `http://127.0.0.1:7779`
+  instead of a dead Cloudflare tunnel.
+- `sync_xp` sends the XP the client awarded, so the server's total matches.
+
+### Fixed
+
+- GTS buy, withdraw and claim changed the game before the server answered:
+  withdrawing a listing someone had just bought handed the Pokémon back while
+  the buyer also got it. Each now waits for the server, and a refused trade or
+  deposit leaves the Pokémon with the player (a refused deposit used to leave
+  a listing only this client could see).
+- Answers over 2048 bytes (the GTS listings, once a few are up) were cut off
+  and dropped: the HTTP sink stopped LuaSocket after its first block.
+- The 10-listing cap counts the server's listings, not this session's deposits.
+
 ## [0.5.1] - 2026-10-04
 
 Brought up to date with the current gen1recomp engine and tested on a real
