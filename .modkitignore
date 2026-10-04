@@ -1,7 +1,7 @@
 tests/pawn_test.lua
 tests/arcade_rules_test.lua
-# Server files live in server/gen1online (outside the mod) and must NEVER be
-# packed or zipped into a player-facing release.
+# Legacy server files (from before server/) must NEVER be packed or zipped
+# into a player-facing release.
 gts_server.py
 gts_admin.py
 Dockerfile
@@ -20,9 +20,16 @@ dev/setup.sh
 dev/run_tests.sh
 dev/server.sh
 dev/install_mod.sh
-dev/make_test_server.py
 dev/harness/rig.lua
 dev/harness/offline_test.lua
 dev/harness/online_test.lua
+dev/harness/wonder_test.lua
+dev/harness/gts_test.lua
 dev/drivers/online.lua
 dev/drivers/follower.lua
+# The server (server/) is hosted separately and never ships inside the mod.
+server/gts_server.py
+server/test_gts_server.py
+server/start.sh
+server/start.bat
+server/gts_data.json

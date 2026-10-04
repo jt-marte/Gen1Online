@@ -33,6 +33,7 @@ save. Crystal only (`manifest.json` `"games": ["crystal"]`).
 | `npcs/`, `quests/` | Registries (empty). `npcs/{quest,trade}/*` are dead Gen 1 leftovers. |
 | `assets/followers/` | Follower sheets (16x96, 6 frames), from pokeemerald via `tools/import_emerald_follower.py`. |
 | `gts_config.txt` | `server_url=...`, read at startup through `mod:read`. |
+| `server/` | The server (`gts_server.py`, stdlib Python), its unittest, `start.sh`/`start.bat`. Never packaged. |
 | `dev/` | Test harness (excluded from packages by `.modkitignore`). |
 
 ### main.lua structure
@@ -78,23 +79,34 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
 ```
 
 - **`setup.sh`** builds `$G1O_WORK` (default `/tmp/gen1online-dev`). It
-  extracts LuaJIT, LÖVE 11.5 and luasocket from Fedora RPMs (no sudo), imports
-  the ROM into a throwaway LÖVE profile, and builds a stand-in server. The
-  user's real game profile is never touched. It also clones gen1recomp next
-  to this repo if it's missing, pinned to the verified commit.
+  extracts LuaJIT, LÖVE 11.5 and luasocket from Fedora RPMs (no sudo) and
+  imports the ROM into a throwaway LÖVE profile. The user's real game profile
+  is never touched. It also clones gen1recomp next to this repo if it's
+  missing, pinned to the verified commit. The tests run `server/gts_server.py`
+  through `dev/server.sh` (fresh database each start).
 - **Cloud / no ROM** (Ubuntu, claude.ai/code): run `dev/setup.sh` with no
   argument, then `dev/run_tests.sh quick`. Without `dnf` it apt-installs
   `luajit` and `lua-socket` and uses them. Verified in a clean `ubuntu:24.04`
-  container: both synthetic suites pass. The real-Crystal drivers need the
+  container: the synthetic suites pass. The real-Crystal drivers need the
   user's ROM, which must never leave their machine, so they're skipped there.
   Say so in the PR, and ask the user to run the full `dev/run_tests.sh`
   locally before merging.
+- **Server unittest**: `python3 -m unittest server/test_gts_server.py` (also
+  the first step of `run_tests.sh`). Real HTTP on a free port with a fake
+  clock: every action, HTTP 200 on errors, keep-alive, persistence.
 - **Synthetic tests** (`dev/harness/`) load the mod through the engine's real
   Loader and sandbox, with a real gen2 `World` on a fake map. The sandbox's
   `pcall` is wrapped so the mod's swallowed errors are reported.
   - `offline_test.lua`: mod installed, never connected.
   - `online_test.lua`: the full online flow against the local server, with a
     second trainer, BUDDY, played over raw HTTP.
+  - `wonder_test.lua`: Wonder Trade with the real client and five raw-HTTP
+    trainers: pool count, withdraw, a refused deposit, matching (nobody gets
+    their own), CLAIM_PENDING, claim, and client/server XP agreement.
+  - `gts_test.lua`: GTS deposit, buy, withdraw and claim, each losing a race
+    to another trainer or device first; the player's Pokémon must stay put.
+  - Both stub `Gen2TradeAnim` and `Gen2NamingScreen` (no art in the rig) and
+    give `game.data.pokemon` minimal defs so `unpackMon2` works.
 - **Real-Crystal drivers** (`dev/drivers/`) boot the actual game from the
   imported ROM in the engine's `POKEPORT_DRIVER` mode.
   - `follower.lua`: follower and offline checks.
@@ -116,13 +128,10 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
 
 ## Server
 
-**Status (2026-10-04).** The rewrite is next, on branch `server-rewrite`. The
-protocol research is done and written up below; no server code exists yet.
-No server is committed. `dev/setup.sh` rebuilds a stand-in from
-the legacy v0.3.5.59 `gts_server.py` in git history (commit `97e502f`),
-patched by `dev/make_test_server.py`. `dev/server.sh` runs
-`server/gts_server.py` when it exists, otherwise the stand-in. The original
-0.5.x server was never in this repo.
+**Status (2026-10-04).** `server/gts_server.py` is the server, rewritten from
+scratch on branch `server-rewrite` against the protocol below. `dev/server.sh`
+runs it for the tests. The legacy-server stand-in (`dev/make_test_server.py`)
+is gone, and the original 0.5.x server was never in this repo.
 
 ### Wire protocol (the client defines it, so a server must match exactly)
 
@@ -194,8 +203,8 @@ Presence:
   for the same `trainerId`.
 
 Chat:
-- `send_chat` `{trainerId, name, text, scope}` → `{success, message}`.
-  Profanity-filter the text.
+- `send_chat` `{trainerId, name, text, scope}` → `{success, message}`. The
+  client profanity-filters the text before sending; the server does not.
 
 Challenges and battles:
 - `send_challenge` `{targetId, fromId, fromName, challengeType, party?, seed?, roomId}`.
@@ -216,19 +225,16 @@ GTS:
   A per-trainer cap is fine; the client allows 10.
 - `trade` `{listingId, buyerId, buyerName, sentMon}` → `{success, receivedMon}`.
   Moves `sentMon` into the seller's claim box and removes the listing.
-- `withdraw` `{listingId, trainerId}` and `claim` `{trainerId, index}`
-  (0-based) → `{success}`.
+- `withdraw` `{listingId, trainerId}` → `{success, mon}` (`LISTING_GONE` once
+  it was bought). `claim` `{trainerId, index, claimId?}` (index 0-based;
+  `claimId`, each claim's `id`, wins when given) → `{success, claimed}`.
 - Mons are opaque `Protocol.packMon2` tables. Store and relay them; never
   rebuild them.
 
 Wonder Trade:
 - `wonder_trade_status`, `wonder_trade_deposit` `{trainerId, trainerName,
   offeredMon}`, `wonder_trade_withdraw` and `wonder_trade_claim`, all keyed on
-  `trainerId`.
-- The client still keeps a local pool in `GtsUI.openWonderTradeMenu`. A real
-  pool must be server-side, with matching once 5+ are waiting. The status
-  answer carries `claim: {mon, fromName, fromId}`, and the client needs to
-  read the pool from the server.
+  `trainerId`. The pool is server-side; see the design notes below.
 
 Parties:
 - `party_create`, `party_invite {targetId}`, `party_accept`, `party_decline`,
@@ -239,16 +245,37 @@ Parties:
 Quests:
 - `get_quests` → `{success, quests: []}`. There is no quest content yet.
 
-### Next task: rewrite the server from scratch (recommended)
+### The server (`server/gts_server.py`)
 
-**Why rewrite.** The legacy server is about 2,700 lines, and most of it is
+**Why a rewrite.** The legacy server was about 2,700 lines, and most of it was
 dead weight for a friends' server: Texas Hold'em tables, anti-cheat audits,
 an IP ledger, an HTML analytics dashboard, rate limiting, Cloudflare
-assumptions and a Gold-only game gate. It also predates 0.5.x, and Wonder
+assumptions and a Gold-only game gate. It also predated 0.5.x, and Wonder
 Trade was never server-side. The client fully specifies the protocol above,
 so a small server built against it is simpler to trust and to run.
 
-Prompt to use:
+How it is built: `GtsStore` holds all state behind one `RLock` and has one
+`act_<action>` method per POST action (collected into `GtsStore.ACTIONS`)
+and one route per GET; it knows nothing about HTTP, and takes an injectable
+clock for the tests. `GtsHandler` is the `BaseHTTPRequestHandler`
+(HTTP/1.1, always 200, `Content-Length` on every answer, chunked request
+bodies accepted, `//gts` from a trailing-slash `server_url` normalized, no
+request log). Strings round-trip byte-exact (`surrogateescape`). Expiry runs
+lazily on requests: presence, challenges and invites every second, GTS
+listings and claims every minute.
+
+Beyond the protocol as first written: `withdraw` answers `mon`; `claim` takes
+`claimId`; `trade` refuses `OWN_LISTING` and `NOT_WANTED` (species not on the
+wanted list); `deposit` answers `LISTING_LIMIT` at 10; a listing that expires
+after 30 days goes back to its owner's claim box instead of vanishing.
+`report_battle_stat` is acknowledged and nothing more (`sync_xp` counts the
+same battles). Other error codes: `BAD_REQUEST`, `BAD_JSON`, `BAD_MON`,
+`BAD_NAME`, `UNKNOWN_ACTION`, `NOT_FOUND`, `UNKNOWN_TRAINER`,
+`INVALID_TOKEN` (a token was sent and is wrong), `INVALID_LOGIN`,
+`TOKEN_NOT_FOUND`, `EMPTY_MESSAGE`, `NOT_YOUR_LISTING`, `NO_CLAIM`,
+`NOT_ONLINE`, `NO_INVITE`, `PARTY_FULL`, `ALREADY_IN_PARTY`, `SERVER_ERROR`.
+
+The prompt the rewrite was done from (kept for the record):
 
 > Write `server/gts_server.py`: a single-file, stdlib-only Python 3 server for
 > Gen1Online+ that speaks the wire protocol in CLAUDE.md exactly. Follow the
@@ -291,8 +318,8 @@ with a single command and then either port-forward or use Tailscale. So:
 - Exclude `server/` from the mod package. `.modkitignore` matches exact paths
   only, so list each file.
 
-**Findings from reading main.lua** (session of 2026-10-04; line numbers are
-approximate):
+**Design notes from reading main.lua** (session of 2026-10-04; line numbers
+are approximate). All of these are implemented:
 - *Accounts.* `trainerId` is a 6-digit string (100001–999999), unique. The
   token is 8 uppercase hex characters (`secrets.token_hex(4).upper()`). The
   recovery prompt is Crystal's box keyboard, which has letters and digits.
@@ -345,8 +372,8 @@ approximate):
   `{success, receivedMon}` and adds a claim for the seller. `claim` should
   echo `{success, claimed}`. `/gts/claims` answers `{success, claims}`.
   Expire listings after 30 days and claims after 60.
-- *GTS client races (fix in main.lua).* Withdraw (~4108), claim (~4140) and
-  buy (~3705) change the local state before the server answers. Withdrawing
+- *GTS client races (fixed in main.lua).* Withdraw (~4108), claim (~4140) and
+  buy (~3705) changed the local state before the server answered. Withdrawing
   a listing someone just bought hands the mon back while the buyer also has
   it. Make each one wait for `res.success`. On failure, buy restores the sent
   mon and shows that the listing is gone, withdraw and claim show an error,
@@ -375,19 +402,16 @@ approximate):
   id counters. Keep in memory: presence, challenges, battle rooms, parties
   and invites.
 - *Leftovers.* The repo-root `gts_database.json` is a legacy database (one
-  test account, three profiles). The new server must not read it: suggest
-  deleting it in the PR. `gts_config.txt` still points at a dead
-  trycloudflare URL; switch it to `http://127.0.0.1:7779`, with comments for
-  LAN and Tailscale. `dev/make_test_server.py` and the stand-in become dead
-  once `server/gts_server.py` exists: drop them, and the stand-in step in
-  `setup.sh`.
-- *Tests to add.* A synthetic Wonder Trade test (`dev/harness/`, wired into
-  `run_tests.sh`), with five trainers over raw HTTP plus the real client,
-  covering pool count, withdraw, matching (nobody gets their own),
-  CLAIM_PENDING and claim. Also a stdlib `unittest` file for the server
-  alone (`python3 -m unittest server/test_gts_server.py`), covering
-  every action, HTTP 200 on errors, keep-alive, and persistence across a
-  restart.
+  test account, three profiles). The server never reads it; delete it when
+  convenient. `gts_config.txt` and main.lua's `DEFAULT_SERVER_URL` now point
+  at `http://127.0.0.1:7779` (they pointed at a dead trycloudflare URL).
+- *Tests.* `dev/harness/wonder_test.lua` and `dev/harness/gts_test.lua`
+  (wired into `run_tests.sh`), and `server/test_gts_server.py`. See Testing.
+- *HTTP sinks (fixed in main.lua).* The LTN12 sinks in `gtsApiGet`,
+  `gtsApiPost` and the sync fallback returned nil, which stops LuaSocket's
+  pump after the first 2048-byte block: any bigger answer (the GTS browse
+  with a handful of listings) was cut off and failed to decode. They return 1
+  now. The async engine (`Content-Length` framing) was never affected.
 
 Why not Cloudflare: friends on one Wi-Fi need only the host's LAN IP. Over
 the internet, Tailscale gives everyone a stable private IP with no port
@@ -395,6 +419,14 @@ forwarding, and it keeps plain HTTP, which the client needs without LuaSec,
 off the open internet.
 
 ## Known gaps
+
+- Every GTS and Wonder Trade arrival runs through
+  `performTradeWithAnimationAndEvolution`, which awards `gts_trade` (100 XP)
+  on top of the caller's own award (`gts_claim` 50, `wonder_trade` 75). The
+  server adds whatever the client reports, so the totals agree; whether a
+  claim should earn both is a design call.
+- The README promises shared party XP, but no client code shares XP and the
+  server always answers `partyXp: []` (see the design notes).
 
 - In-world link trades don't work on Crystal (the engine's `LinkState` trade
   is Gen 1 only); the GTS covers trading.

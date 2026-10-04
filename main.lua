@@ -150,11 +150,9 @@
   if not hasLtn12 then ltn12 = nil end
 
   -- GTS Server URL: read from gts_config.txt next to main.lua (per-device,
-  -- edit without rebuilding). Falls back to a storage value, then the default
-  -- Cloudflare-tunnel server. Localhost is only used as a last-ditch local
-  -- server when nothing else is configured (mobile builds often cannot read
-  -- the config file, so the tunnel URL is the reliable default).
-  local DEFAULT_SERVER_URL = "https://barcelona-default-weblog-earl.trycloudflare.com/"
+  -- edit without rebuilding). Falls back to a storage value, then a server
+  -- on this machine (server/gts_server.py's default port).
+  local DEFAULT_SERVER_URL = "http://127.0.0.1:7779"
   local GTS_SERVER_URL = DEFAULT_SERVER_URL
   local function readServerUrlFromConfig()
     local content = nil
@@ -302,8 +300,6 @@
     user_counts = {},    -- trainerId -> active deposit count
     history = {},        -- array of last 50 trade receipts
     claim_boxes = {},    -- trainerId -> list of completed traded mons
-    wonder_pool = {},    -- array of { trainerId, trainerName, offeredMon, timestamp }
-    wonder_claims = {},  -- trainerId -> { mon, fromName, fromId, timestamp }
     next_id = 1001,
   }
   local gtsDb = _G.GEN1ONLINE_GTS
@@ -562,6 +558,7 @@
       },
       sink = function(chunk)
         if chunk then table.insert(response_body, chunk) end
+        return 1 -- keep pumping: nil cut answers off at the first 2048 bytes
       end,
       timeout = timeout or 4.0
     })
@@ -601,6 +598,7 @@
       end,
       sink = function(chunk)
         if chunk then table.insert(response_body, chunk) end
+        return 1 -- keep pumping: nil cut answers off at the first 2048 bytes
       end,
       timeout = timeout or 4.0
     })
@@ -1698,7 +1696,7 @@
               if not sent then sent = true; return req.body end
               return nil
             end,
-            sink = function(chunk) if chunk then table.insert(resp, chunk) end end
+            sink = function(chunk) if chunk then table.insert(resp, chunk) end return 1 end
           })
           if ok and #resp > 0 and netInChannel then
             netInChannel:push(table.concat(resp))
@@ -1952,6 +1950,12 @@
       gtsDb.history = data.history or {}
 
       if trainerId then
+        -- the 10-listing cap counts what the server holds, not this session
+        local mine = 0
+        for _, listing in pairs(gtsDb.listings) do
+          if tostring(listing.trainerId) == tostring(trainerId) then mine = mine + 1 end
+        end
+        gtsDb.user_counts[tostring(trainerId)] = mine
         local claimData = gtsApiGet("/gts/claims?trainerId=" .. tostring(trainerId), 3.0)
         if claimData and claimData.success then
           gtsDb.claim_boxes[tostring(trainerId)] = claimData.claims or {}
@@ -2253,6 +2257,8 @@
         trainerId = tid,
         token = mmoToken,
         xpType = xpType,
+        -- the amount awarded here, so the server's total matches this one
+        xp = delta,
         badges = getBadgeCount(game.save),
         pokedexCount = getPokedexCount(game.save)
       }
@@ -3455,6 +3461,27 @@
     return nil
   end
 
+  -- Undo removePlayerMon when the server refuses what the mon was taken for:
+  -- a box mon goes back to its slot, a party mon to the end of the party
+  -- (the party mail behind its slot has already moved up with the party).
+  function GtsUI.restorePlayerMon(game, item, mon)
+    local save = game and game.save
+    if not save or not item or not mon then return end
+    if item.source == "box" then
+      local boxes = save.boxes
+      if not isGen2 then
+        local okB, BoxesMod = pcall(require, "src.pokemon.Boxes")
+        boxes = (okB and BoxesMod and BoxesMod.ensure and BoxesMod.ensure(save)) or save.boxes
+      end
+      local box = boxes and boxes[item.boxIndex]
+      if box then
+        table.insert(box, math.min(item.slotIndex or (#box + 1), #box + 1), mon)
+        return
+      end
+    end
+    GtsUI.addPlayerMon(game, mon)
+  end
+
   -- Is there a party slot or box space for one more Pokémon?
   function GtsUI.hasRoom(game)
     local save = game and game.save
@@ -3704,9 +3731,11 @@
 
                 -- Remove chosen mon
                 local sentMon = GtsUI.removePlayerMon(game, choice)
+                if not sentMon then return end
                 local packedSent = GtsUI.packMon(sentMon)
 
-                -- Post trade to server
+                -- Post trade to server.  Nothing is final until it agrees:
+                -- the listing may have been bought or withdrawn meanwhile.
                 local res = gtsApiPost({
                   action = "trade",
                   listingId = listing.id,
@@ -3714,6 +3743,20 @@
                   buyerName = buyerName,
                   sentMon = packedSent
                 }, 2.0)
+                if not (res and res.success) then
+                  GtsUI.restorePlayerMon(game, choice, sentMon)
+                  game.stack:pop() -- close summary card
+                  local why = "COULD NOT REACH THE GTS SERVER!"
+                  if res and res.error == "LISTING_GONE" then
+                    gtsDb.listings[listing.id] = nil
+                    why = "THAT LISTING IS GONE! SOMEONE GOT THERE FIRST."
+                  elseif res then
+                    why = string.format("THE GTS REFUSED THE TRADE (%s).", tostring(res.error))
+                  end
+                  game.stack:push(TextBox.new(game, wrapText(why .. " YOUR POKéMON STAYS WITH YOU.")))
+                  return
+                end
+                local receivedPacked = res.receivedMon or offered
 
                 -- Update local database
                 gtsDb.claim_boxes[tostring(listing.trainerId)] = gtsDb.claim_boxes[tostring(listing.trainerId)] or {}
@@ -3732,7 +3775,7 @@
                 game.stack:pop() -- close summary card
 
                 -- Run Trade Animation & Trade Evolution
-                GtsUI.performTradeWithAnimationAndEvolution(game, sentMon, offered, otName, otId, function(receivedMon)
+                GtsUI.performTradeWithAnimationAndEvolution(game, sentMon, receivedPacked, otName, otId, function(receivedMon)
                   local rName = receivedMon.nickname or (game.data.pokemon[receivedMon.species] and game.data.pokemon[receivedMon.species].name) or receivedMon.species
                   game.stack:push(TextBox.new(game, wrapText(string.format("GTS TRADE COMPLETE!\nRECEIVED %s!", rName))))
                 end)
@@ -3996,20 +4039,19 @@
           wanted = wantedList
         }, 2.0)
 
-        if res and res.success and res.listing then
-          gtsDb.listings[res.listing.id] = res.listing
-        else
-          local listId = "GTS_" .. tostring(gtsDb.next_id or 1001)
-          gtsDb.next_id = (gtsDb.next_id or 1001) + 1
-          gtsDb.listings[listId] = {
-            id = listId,
-            trainerId = tostring(trainerId),
-            trainerName = trainerName,
-            offeredMon = packedMon,
-            wanted = wantedList,
-            timestamp = os.time()
-          }
+        if not (res and res.success and res.listing) then
+          -- the server holds the listing or nobody does: the mon comes back
+          GtsUI.restorePlayerMon(game, chosenItem, depositMon)
+          local why = "COULD NOT REACH THE GTS SERVER!"
+          if res and res.error == "LISTING_LIMIT" then
+            why = "YOU REACHED THE MAXIMUM OF 10 GTS LISTINGS!"
+          elseif res then
+            why = string.format("THE GTS REFUSED THE DEPOSIT (%s).", tostring(res.error))
+          end
+          game.stack:push(TextBox.new(game, wrapText(why .. " YOUR POKéMON STAYS WITH YOU.")))
+          return
         end
+        gtsDb.listings[res.listing.id] = res.listing
 
         gtsDb.user_counts[tostring(trainerId)] = (gtsDb.user_counts[tostring(trainerId)] or 0) + 1
         GtsUI.addGtsReceipt(string.format("%s DEPOSITED %s", trainerName, depositMon.nickname or depositMon.species))
@@ -4107,10 +4149,19 @@
             end
             performForcedSave(game)
 
-            local returnedMon = GtsUI.unpackMon(game, offered)
-            if returnedMon then GtsUI.addPlayerMon(game, returnedMon) end
+            -- the server decides first: a listing someone just bought must
+            -- not also come back to its owner
+            local res = gtsApiPost({ action = "withdraw", listingId = id, trainerId = trainerId }, 2.0)
+            if not (res and res.success) then
+              if res then gtsDb.listings[id] = nil end
+              game.stack:push(TextBox.new(game, wrapText(res
+                and "COULD NOT WITHDRAW! IT MAY HAVE JUST BEEN TRADED. CHECK MY LISTINGS FOR A CLAIM."
+                or "COULD NOT REACH THE GTS SERVER!")))
+              return
+            end
 
-            gtsApiPost({ action = "withdraw", listingId = id, trainerId = trainerId }, 2.0)
+            local returnedMon = GtsUI.unpackMon(game, res.mon or offered)
+            if returnedMon then GtsUI.addPlayerMon(game, returnedMon) end
 
             gtsDb.listings[id] = nil
             gtsDb.user_counts[tostring(trainerId)] = math.max(0, (gtsDb.user_counts[tostring(trainerId)] or 1) - 1)
@@ -4139,13 +4190,20 @@
             game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
             return
           end
-          gtsApiPost({ action = "claim", trainerId = trainerId, index = idx - 1 }, 2.0)
+          local res = gtsApiPost({ action = "claim", trainerId = trainerId, index = idx - 1, claimId = claim.id }, 2.0)
+          if not (res and res.success and res.claimed and res.claimed.mon) then
+            game.stack:push(TextBox.new(game, wrapText(res
+              and "COULD NOT CLAIM! IT IS NO LONGER IN YOUR CLAIM BOX."
+              or "COULD NOT REACH THE GTS SERVER!")))
+            return
+          end
           table.remove(gtsDb.claim_boxes[tostring(trainerId)], idx)
+          packed = res.claimed.mon
           GtsUI.addGtsReceipt(string.format("%s CLAIMED TRADED %s", trainerName, cName))
 
           -- Run Trade Animation & Trade Evolution
           local dummySent = { species = "PIKACHU", level = 5 }
-          GtsUI.performTradeWithAnimationAndEvolution(game, dummySent, packed, fromStr, claim.fromId, function(claimedMon)
+          GtsUI.performTradeWithAnimationAndEvolution(game, dummySent, packed, fromStr, res.claimed.fromId or claim.fromId, function(claimedMon)
             if addMmoXp then addMmoXp(game, "gts_claim", 50) end
             performForcedSave(game)
             local msg = string.format("CLAIMED %s FROM GTS!", cName)
@@ -4165,7 +4223,9 @@
     game.stack:push(menu)
   end
 
-  -- GTS Wonder Trade Submenu (5+ Pokemon pool threshold, randomized trade, 1 per trainer)
+  -- GTS Wonder Trade Submenu.  The pool lives on the server: one Pokémon per
+  -- trainer, and once 5 are waiting the server deals each trainer another's
+  -- (never their own) as a claim.  Every step waits for the server's answer.
   function GtsUI.openWonderTradeMenu(game)
     if not isGtsServerConnected then
       game.stack:push(TextBox.new(game, wrapText("YOU ARE NOT CONNECTED TO GTS SERVER! SELECT CONNECT GTS SERVER FIRST.")))
@@ -4173,88 +4233,85 @@
     end
 
     local trainerId, trainerName = getTrainerInfo(game.save)
-    gtsDb.wonder_pool = gtsDb.wonder_pool or {}
-    gtsDb.wonder_claims = gtsDb.wonder_claims or {}
-
-    -- Server sync for wonder trade status
     local wStatus = gtsApiPost({ action = "wonder_trade_status", trainerId = trainerId }, 1.5)
-    if wStatus and wStatus.success then
-      if wStatus.poolCount then
-        -- sync pool count if provided
-      end
-      if wStatus.claim then
-        gtsDb.wonder_claims[tostring(trainerId)] = wStatus.claim
-      end
+    if not (wStatus and wStatus.success) then
+      game.stack:push(TextBox.new(game, wrapText("COULD NOT REACH THE WONDER TRADE POOL! TRY AGAIN LATER.")))
+      return
     end
-
-    -- Check if trainer already has a Pokémon in the pool
-    local trainerInPoolIndex = nil
-    for idx, entry in ipairs(gtsDb.wonder_pool) do
-      if tostring(entry.trainerId) == tostring(trainerId) then
-        trainerInPoolIndex = idx
-        break
-      end
-    end
-
+    local poolCount = tonumber(wStatus.poolCount) or 0
+    local threshold = tonumber(wStatus.threshold) or 5
     local items = {}
 
-    -- 1. Claim ready wonder trade
-    local claim = gtsDb.wonder_claims[tostring(trainerId)]
-    if claim then
-      local packed = claim.mon or {}
-      local cName = packed.nickname or (game.data.pokemon[packed.species] and game.data.pokemon[packed.species].name) or packed.species or "MON"
-      local fromStr = claim.fromName or "MYSTERY"
+    -- 1. A matched trade waiting to be claimed
+    local claim = wStatus.claim
+    if claim and claim.mon then
       table.insert(items, {
-        label = string.format("CLAIM %s!", cName:sub(1, 9)),
+        label = string.format("CLAIM %s!", GtsUI.monLabelName(game, claim.mon):sub(1, 9)),
         onSelect = function()
           if not GtsUI.hasRoom(game) then
             game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
             return
           end
-          gtsDb.wonder_claims[tostring(trainerId)] = nil
-          gtsApiPost({ action = "wonder_trade_claim", trainerId = trainerId }, 2.0)
-
-          local dummySent = { species = "PIKACHU", level = 5 }
-          GtsUI.performTradeWithAnimationAndEvolution(game, dummySent, packed, fromStr, claim.fromId, function(claimedMon)
+          local res = gtsApiPost({ action = "wonder_trade_claim", trainerId = trainerId }, 2.0)
+          local got = res and res.success and res.claim
+          if not (got and got.mon) then
+            game.stack:push(TextBox.new(game, wrapText(res
+              and "THERE IS NO WONDER TRADE TO CLAIM!"
+              or "COULD NOT REACH THE WONDER TRADE POOL!")))
+            return
+          end
+          local gotName = GtsUI.monLabelName(game, got.mon)
+          local fromStr = got.fromName or "MYSTERY"
+          -- the Pokémon this trainer put in is the one seen leaving
+          local okSent, sentMon = pcall(GtsUI.unpackMon, game, got.sentMon)
+          if not (okSent and sentMon) then sentMon = { species = "PIKACHU", level = 5 } end
+          GtsUI.performTradeWithAnimationAndEvolution(game, sentMon, got.mon, fromStr, got.fromId, function()
             if addMmoXp then addMmoXp(game, "wonder_trade", 75) end
             performForcedSave(game)
-            local msg = string.format("WONDER TRADE COMPLETE!\nRECEIVED %s FROM %s!", cName, fromStr)
+            local msg = string.format("WONDER TRADE COMPLETE!\nRECEIVED %s FROM %s!", gotName, fromStr)
             game.stack:push(TextBox.new(game, wrapText(msg)))
           end)
         end
       })
     end
 
-    -- 2. If already in pool: view status / withdraw
-    if trainerInPoolIndex then
-      local entry = gtsDb.wonder_pool[trainerInPoolIndex]
-      local pMon = entry.offeredMon or {}
-      local mName = pMon.nickname or pMon.species or "MON"
+    local mine = wStatus.mine
+    if mine and mine.offeredMon then
+      -- 2. Already in the pool: status / withdraw
+      local pMon = mine.offeredMon
+      local mName = GtsUI.monLabelName(game, pMon)
       table.insert(items, {
-        label = string.format("STATUS: (%d/5 POOL)", #gtsDb.wonder_pool),
+        label = string.format("STATUS: (%d/%d POOL)", poolCount, threshold),
         onSelect = function()
-          local msg = string.format("WONDER TRADE POOL:\n%d/5 POKéMON READY.\nYOUR OFFER: %s LV%d.\nWAITING FOR 5 POKéMON...", #gtsDb.wonder_pool, mName, pMon.level or 1)
+          local msg = string.format("WONDER TRADE POOL:\n%d/%d POKéMON READY.\nYOUR OFFER: %s LV%d.\nWAITING FOR %d POKéMON...", poolCount, threshold, mName, pMon.level or 1, threshold)
           game.stack:push(TextBox.new(game, wrapText(msg)))
         end
       })
       table.insert(items, {
         label = "WITHDRAW FROM POOL",
         onSelect = function()
-          performForcedSave(game)
-          local entry = table.remove(gtsDb.wonder_pool, trainerInPoolIndex)
-          if entry and entry.offeredMon then
-            local returnedMon = GtsUI.unpackMon(game, entry.offeredMon)
-            if returnedMon then GtsUI.addPlayerMon(game, returnedMon) end
+          if not GtsUI.hasRoom(game) then
+            game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
+            return
           end
-          gtsApiPost({ action = "wonder_trade_withdraw", trainerId = trainerId }, 2.0)
+          performForcedSave(game)
+          local res = gtsApiPost({ action = "wonder_trade_withdraw", trainerId = trainerId }, 2.0)
+          if not (res and res.success and res.mon) then
+            game.stack:push(TextBox.new(game, wrapText((res and res.error == "NOT_IN_POOL")
+              and "TOO LATE! YOUR POKéMON WAS JUST MATCHED. OPEN WONDER TRADE AGAIN TO CLAIM YOUR NEW ONE."
+              or "COULD NOT WITHDRAW FROM THE WONDER TRADE POOL!")))
+            return
+          end
+          local returnedMon = GtsUI.unpackMon(game, res.mon)
+          if returnedMon then GtsUI.addPlayerMon(game, returnedMon) end
           performForcedSave(game)
           game.stack:push(TextBox.new(game, wrapText(string.format("WITHDREW %s FROM WONDER TRADE POOL!", mName))))
         end
       })
-    else
-      -- 3. Deposit for wonder trade
+    elseif not claim then
+      -- 3. Deposit (one per trainer, and not while a claim waits)
       table.insert(items, {
-        label = string.format("DEPOSIT (%d/5 POOL)", #gtsDb.wonder_pool),
+        label = string.format("DEPOSIT (%d/%d POOL)", poolCount, threshold),
         onSelect = function()
           local allMons = GtsUI.getAllPlayerMons(game)
           local monItems = {}
@@ -4271,48 +4328,32 @@
                 performForcedSave(game)
                 local depositMon = GtsUI.removePlayerMon(game, choice)
                 if not depositMon then return end
-
-                local packedMon = GtsUI.packMon(depositMon)
-                table.insert(gtsDb.wonder_pool, {
-                  trainerId = tostring(trainerId),
-                  trainerName = trainerName,
-                  offeredMon = packedMon,
-                  timestamp = os.time()
-                })
-
-                gtsApiPost({
+                local res = gtsApiPost({
                   action = "wonder_trade_deposit",
                   trainerId = trainerId,
                   trainerName = trainerName,
-                  offeredMon = packedMon
+                  offeredMon = GtsUI.packMon(depositMon)
                 }, 2.0)
-
-                -- Check Wonder Trade Pool Threshold (minimum 5 Pokemon to execute match)
-                if #gtsDb.wonder_pool >= 5 then
-                  local pool = gtsDb.wonder_pool
-                  gtsDb.wonder_pool = {}
-                  local n = #pool
-                  local indices = {}
-                  for i = 1, n do indices[i] = i end
-                  for i = n, 2, -1 do
-                    local j = math.random(1, i)
-                    indices[i], indices[j] = indices[j], indices[i]
+                if not (res and res.success) then
+                  -- the pool did not take it: it stays with the player
+                  GtsUI.restorePlayerMon(game, choice, depositMon)
+                  local why = "COULD NOT REACH THE WONDER TRADE POOL!"
+                  if res and res.error == "CLAIM_PENDING" then
+                    why = "CLAIM YOUR LAST WONDER TRADE FIRST!"
+                  elseif res and res.error == "ALREADY_IN_POOL" then
+                    why = "YOU ALREADY HAVE A POKéMON IN THE WONDER TRADE POOL!"
+                  elseif res then
+                    why = string.format("WONDER TRADE REFUSED (%s).", tostring(res.error))
                   end
-                  for i = 1, n do
-                    local giver = pool[indices[i]]
-                    local receiver = pool[indices[(i % n) + 1]]
-                    gtsDb.wonder_claims[tostring(receiver.trainerId)] = {
-                      mon = giver.offeredMon,
-                      fromName = giver.trainerName,
-                      fromId = giver.trainerId,
-                      timestamp = os.time()
-                    }
-                  end
-                  GtsUI.addGtsReceipt(string.format("WONDER TRADE POOL MATCHED %d TRAINERS!", n))
+                  game.stack:push(TextBox.new(game, wrapText(why)))
+                  return
                 end
 
                 performForcedSave(game)
-                local msg = string.format("%s DEPOSITED INTO WONDER TRADE!\n(POOL: %d/5)", depositMon.nickname or depositMon.species, #gtsDb.wonder_pool)
+                local dName = GtsUI.monLabelName(game, depositMon)
+                local msg = res.matched
+                  and string.format("%s DEPOSITED INTO WONDER TRADE!\nA MATCH WAS FOUND! OPEN WONDER TRADE TO CLAIM.", dName)
+                  or string.format("%s DEPOSITED INTO WONDER TRADE!\n(POOL: %d/%d)", dName, tonumber(res.poolCount) or (poolCount + 1), threshold)
                 game.stack:push(TextBox.new(game, wrapText(msg)))
               end
             })

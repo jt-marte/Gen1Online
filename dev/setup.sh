@@ -13,9 +13,7 @@
 #                                drivers need it, and they need the ROM too).
 #   xdg/love/gen1online-test/    a throwaway LOVE profile with the Crystal
 #                                cache imported (only when a ROM is given)
-#   server/gts_test_server.py    the legacy v0.3.5.59 server from this repo's
-#                                git history, patched to speak to 0.5.x
-#                                (a stand-in until server/ is rewritten)
+# The tests run this repo's own server (server/gts_server.py, stdlib Python 3).
 # Also clones gen1recomp next to this repo when it isn't there, at the
 # commit the suite was last verified against ($G1O_RECOMP_REF).
 set -eu
@@ -63,14 +61,9 @@ fi
 "$WORK/bin/luajit" -e 'require("socket.http")' && echo "luasocket: ok"
 [ -x "$WORK/bin/love" ] && "$WORK/bin/love" --version || echo "LOVE: not installed (real-game drivers unavailable)"
 
-# --- stand-in server ------------------------------------------------------------
-if [ -f "$REPO/server/gts_server.py" ]; then
-  echo "server/gts_server.py exists: dev/server.sh will run it"
-elif git -C "$REPO" show 97e502f:gts_server.py > "$WORK/server/gts_server_legacy.py" 2>/dev/null; then
-  python3 "$DEV/make_test_server.py" "$WORK/server/gts_server_legacy.py" "$WORK/server/gts_test_server.py"
-else
-  echo "legacy server not in git history (shallow clone?): no stand-in server"
-fi
+# --- server -----------------------------------------------------------------------
+python3 -c 'import sys; assert sys.version_info >= (3, 8), sys.version' \
+  && echo "python3: ok ($(python3 -V 2>&1)); dev/server.sh runs server/gts_server.py"
 
 # --- test profile with the Crystal cache ------------------------------------------
 PROFILE="$WORK/xdg/love/gen1online-test"

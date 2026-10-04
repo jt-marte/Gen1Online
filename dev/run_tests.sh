@@ -15,6 +15,12 @@ status=0
 step() { echo "== $1: $2"; [ "$2" = "ALL PASS" ] || status=1; }
 result() { grep -E 'ALL PASS|FAILED' "$1" | tail -1; }
 
+if (cd "$REPO" && python3 -m unittest server/test_gts_server.py) > "$G1O_WORK/server_unittest.log" 2>&1; then
+  step "server unittest" "ALL PASS"
+else
+  step "server unittest" "FAILED (see $G1O_WORK/server_unittest.log)"
+fi
+
 cd "$RECOMP" || exit 1
 "$LUAJIT" -e "local f=io.open('$REPO/main.lua','rb'); local c,e=loadstring(f:read('*a'),'@main.lua'); print(c and 'main.lua compiles' or e)"
 
@@ -23,6 +29,12 @@ step "synthetic offline" "$(result "$G1O_WORK/offline.log")"
 "$DEV/server.sh" >/dev/null
 DEV=1 "$LUAJIT" "$DEV/harness/online_test.lua" > "$G1O_WORK/online.log" 2>&1
 step "synthetic online" "$(result "$G1O_WORK/online.log")"
+"$DEV/server.sh" >/dev/null
+DEV=1 "$LUAJIT" "$DEV/harness/wonder_test.lua" > "$G1O_WORK/wonder.log" 2>&1
+step "synthetic wonder trade" "$(result "$G1O_WORK/wonder.log")"
+"$DEV/server.sh" >/dev/null
+DEV=1 "$LUAJIT" "$DEV/harness/gts_test.lua" > "$G1O_WORK/gts.log" 2>&1
+step "synthetic gts" "$(result "$G1O_WORK/gts.log")"
 
 if [ "${1:-}" != "quick" ]; then
   if [ ! -f "$PROFILE/crystal/rom-cache.complete" ]; then

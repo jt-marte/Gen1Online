@@ -1,13 +1,17 @@
-# Gen1Online++ server configuration.
-# Edit this file to point the game at your GTS server, then restart the game.
+# Gen1Online+ server configuration.
+# Point the game at a Gen1Online+ server (server/gts_server.py), then restart
+# the game. No rebuild is needed.
 #
-# For a local server on the same PC:
-#   server_url=http://127.0.0.1:7779
+# The server prints the exact line to use when it starts. Typical values:
 #
-# For a Cloudflare tunnel (give this URL to remote test devices):
-#   server_url=https://barcelona-default-weblog-earl.trycloudflare.com/
+#   This PC runs the server:
+#     server_url=http://127.0.0.1:7779
+#   The server is on another PC on the same Wi-Fi/LAN (its LAN address):
+#     server_url=http://192.168.1.23:7779
+#   The server is on a friend's PC over Tailscale (its 100.x address,
+#   from `tailscale ip -4`):
+#     server_url=http://100.101.102.103:7779
 #
-# The value is read from this file at game startup. No rebuild is needed.
-# Just edit this file and restart the game.
+# Use http://, not https://: the server speaks plain HTTP.
 
-server_url=https://barcelona-default-weblog-earl.trycloudflare.com/
+server_url=http://127.0.0.1:7779
