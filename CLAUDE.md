@@ -1,0 +1,404 @@
+# Gen1Online+ (mod id `gen1online-plus`)
+
+Online multiplayer mod for **Pokémon Crystal** on the gen1recomp engine (a
+LÖVE2D re-implementation). Live co-op overworld, GTS trading, PVP link
+battles, global chat, co-op parties, true-color followers, a separate online
+save. Crystal only (`manifest.json` `"games": ["crystal"]`).
+
+## Ground rules
+
+- **Work only in this repo.** `../gen1recomp` is the engine, used as
+  reference and as the test host. Never edit it.
+- **Local sessions: never commit or push** unless the user asks in that
+  message. **Cloud sessions** (claude.ai/code, GitHub agents) only keep work
+  that is pushed: commit to the session's branch (the server rewrite lives on
+  `server-rewrite`), push it, and open a PR into `master` when done. Never
+  push to `master` directly and never force-push.
+- **Authentic Pokémon experience.** Overworld wild-Pokémon roaming was removed
+  on purpose (0.5.1); wild encounters are the game's own tall-grass ones. Don't
+  add gameplay that changes vanilla Crystal outside the online features.
+- **The server is for friends**, with no Cloudflare. See "Server" below.
+- The user's Crystal ROM (v1.1, verified SHA-1) is at
+  `/home/jt/Desktop/Pokemon/Pokemon - Crystal Version (UE) (V1.1) [C][!].zip`.
+  It is the user's own copy: never commit it, copy it into the repo, or
+  share it.
+
+## Layout
+
+| Path | What |
+| --- | --- |
+| `main.lua` | ~6,800 lines, nearly the whole mod. **CRLF line endings.** |
+| `pvp/` | Fallback Gen 2 PVP engine, used only against pre-0.5.1 peers. |
+| `other/`, `games/` | Gen 1 casino (Crash, Tube Flyer, Prize Case, pawn). Inert on Crystal: its maps don't exist there. |
+| `npcs/`, `quests/` | Registries (empty). `npcs/{quest,trade}/*` are dead Gen 1 leftovers. |
+| `assets/followers/` | Follower sheets (16x96, 6 frames), from pokeemerald via `tools/import_emerald_follower.py`. |
+| `gts_config.txt` | `server_url=...`, read at startup through `mod:read`. |
+| `dev/` | Test harness (excluded from packages by `.modkitignore`). |
+
+### main.lua structure
+
+- Lines before `return function(mod)` run at load with `mod` from `...`: helpers,
+  networking, persistence, GTS UI, connect/disconnect flows, engine patches.
+  The factory after it registers hooks (`core.update`, `ui.start_menu.items`,
+  `ui.pc.items`, `input.key`) and the Gen 2 `World` wrappers (`setMap`, `step`,
+  `interact`, `interactBody`, `drawPeople`, `applyPlayerState`).
+- **Lua limits are tight.** The top-level chunk is within about 5 locals of
+  Lua's 200-local cap. Put new helpers inside `do ... end` blocks, or as fields
+  on an existing table (`GtsUI.x`, `NativePvp.x`). The factory closure is near
+  LuaJIT's 60-upvalue cap. Check every edit compiles:
+  `luajit -e "assert(loadstring(io.open('main.lua','rb'):read('*a')))"`.
+- **Use-before-`local` bugs have bitten this file.** A name used above its
+  `local` line silently reads a nil global. Check with the bytecode scan:
+  `LUA_PATH="$G1O_WORK/root/usr/share/luajit-2.1/?.lua;;" luajit -bl main.lua | grep -oE '(GGET|GSET) .*"[A-Za-z_]+"'`.
+  Every GGET name must also have a GSET, or be a builtin.
+- **Preserve CRLF** in `main.lua`, `other/coin_case.lua`, `other/ui.lua` and
+  `README.md`. Python's text mode silently rewrites them to LF and turns the
+  diff into thousands of lines. Edit with exact-match replacements done in
+  binary.
+- The mod runs in the engine's **sandbox**. Read its own files with `mod:read`,
+  `mod:info` and `requireLocal("pvp/x.lua")`. Never use `io`,
+  `require("mods.gen1online-plus...")` or hardcoded `mods/gen1online-plus/`
+  paths (the install folder name varies). Images use `mod.path .. "/..."`.
+- **Persistence** goes through `storageRead`/`storageWrite`/`storageRemove`.
+  They are installation-wide (`mod_compat/gen1online-plus/` via the engine's
+  legacy compat store), because `mod.storage` is per-playthrough and the online
+  character spans playthroughs. The online save is `save_online_crystal.lua`.
+- **Online-only code must check `isGtsServerConnected`.** Offline, the account
+  helpers once renamed the offline player and diverted offline SAVEs into the
+  online file.
+- On Crystal the overworld is an **empty** `game.stack`: the world isn't a
+  stack state.
+
+## Testing
+
+```bash
+dev/setup.sh "/home/jt/Desktop/Pokemon/Pokemon - Crystal Version (UE) (V1.1) [C][!].zip"  # once, or after /tmp is wiped
+dev/run_tests.sh          # everything (~3 min)
+dev/run_tests.sh quick    # synthetic only, no ROM needed
+```
+
+- **`setup.sh`** builds `$G1O_WORK` (default `/tmp/gen1online-dev`). It
+  extracts LuaJIT, LÖVE 11.5 and luasocket from Fedora RPMs (no sudo), imports
+  the ROM into a throwaway LÖVE profile, and builds a stand-in server. The
+  user's real game profile is never touched. It also clones gen1recomp next
+  to this repo if it's missing, pinned to the verified commit.
+- **Cloud / no ROM** (Ubuntu, claude.ai/code): run `dev/setup.sh` with no
+  argument, then `dev/run_tests.sh quick`. Without `dnf` it apt-installs
+  `luajit` and `lua-socket` and uses them. Verified in a clean `ubuntu:24.04`
+  container: both synthetic suites pass. The real-Crystal drivers need the
+  user's ROM, which must never leave their machine, so they're skipped there.
+  Say so in the PR, and ask the user to run the full `dev/run_tests.sh`
+  locally before merging.
+- **Synthetic tests** (`dev/harness/`) load the mod through the engine's real
+  Loader and sandbox, with a real gen2 `World` on a fake map. The sandbox's
+  `pcall` is wrapped so the mod's swallowed errors are reported.
+  - `offline_test.lua`: mod installed, never connected.
+  - `online_test.lua`: the full online flow against the local server, with a
+    second trainer, BUDDY, played over raw HTTP.
+- **Real-Crystal drivers** (`dev/drivers/`) boot the actual game from the
+  imported ROM in the engine's `POKEPORT_DRIVER` mode.
+  - `follower.lua`: follower and offline checks.
+  - `online.lua`: run twice (fresh install, then returning player). Covers
+    connect, PVP with non-default moves on both sides, a GTS trade with
+    Kadabra→Alakazam trade evolution, save routing, and disconnect.
+  - Screenshots go to `$G1O_WORK/shots`. Look at them: they caught misplaced
+    name tags that every assertion missed.
+- Driver gotchas:
+  - Driver mode skips the `core.update` hook, so drivers re-route
+    `game.update` through it.
+  - The engine treats a driver like a mod: take `socket.http` from
+    `package.loaded`.
+- **Never `pkill -f <name>`** where the name appears in your own command. It
+  kills your shell. Use `dev/server.sh stop`, or kill by port.
+- The engine's own checks: from `../gen1recomp`, run
+  `python3 tools/modkit.py validate|lint|gen2check ../Gen1Online` (needs
+  `luajit` on PATH: `$G1O_WORK/bin`).
+
+## Server
+
+**Status (2026-10-04).** The rewrite is next, on branch `server-rewrite`. The
+protocol research is done and written up below; no server code exists yet.
+No server is committed. `dev/setup.sh` rebuilds a stand-in from
+the legacy v0.3.5.59 `gts_server.py` in git history (commit `97e502f`),
+patched by `dev/make_test_server.py`. `dev/server.sh` runs
+`server/gts_server.py` when it exists, otherwise the stand-in. The original
+0.5.x server was never in this repo.
+
+### Wire protocol (the client defines it, so a server must match exactly)
+
+Transport and framing:
+- Plain HTTP. Without LuaSec the client rewrites `https://` to `http://`, so
+  serve plain HTTP.
+- `POST /gts` with a JSON body dispatched on `action`. Answers are JSON with
+  a `Content-Length`.
+- The client's async engine reuses keep-alive connections; it also copes with
+  close-after-response.
+- Every request carries the `X-Mod-Version` header, and POST bodies carry
+  `modVersion`, `version`, `gameVersion` and `recompVersion`. Accept a client
+  when its major.minor matches the server's. Otherwise answer
+  `{"success":false,"error":"VERSION_MISMATCH","serverVersion":...}`.
+- Errors are `{"success":false,"error":"CODE"}`. The client acts on
+  `VERSION_MISMATCH`, `ALREADY_LOGGED_IN`, `BANNED` and `NAME_TAKEN`.
+- **Send every JSON answer, errors included, with HTTP 200.** `makeHttpRequest`
+  (main.lua ~354) treats any status of 400 or more as a dead transport. It
+  re-sends the request over raw TCP and appends that body to the first one,
+  so the client can't decode the error, and a write action can run twice. The
+  legacy server's 4xx statuses were a latent bug.
+- The synchronous helpers send `Connection: close` and read until the socket
+  closes. The async engine sends `Connection: keep-alive` and frames answers
+  by `Content-Length`. `ThreadingHTTPServer` with `protocol_version =
+  "HTTP/1.1"` handles both.
+- GETs also carry `?version=<v>&modVersion=<v>` in the query. Don't
+  version-gate `/server/info`: the client reads it to compare versions itself.
+
+GET:
+| Path | Answer |
+| --- | --- |
+| `/server/info` | `{success, version, modVersion}` (the client compares major.minor) |
+| `/chat/history` | `{success, messages:[{id, trainerId, name, text, scope, time}]}`, the last 50 with ascending `id` |
+| `/gts/browse` | `{success, listings:{id: listing}, history:[{text, time}]}`, where listing = `{id, trainerId, trainerName, offeredMon, wanted:[species], timestamp}` |
+| `/gts/claims?trainerId=` | `{success, claims:[{mon, fromName, fromId, originalOffered, timestamp}]}` |
+| `/gts/players` | `{success, players:{trainerId: {name, level, map, ...}}}`, the active players |
+| `/gts/profile?trainerId=` | `{success, profile:{name, level, xp, pvpWins, pvpLosses, gtsTrades, serverRank, totalPlayers, rank, badges, pokedexCount, favoriteMon}}` |
+| `/player/check_name?name=` | `{taken: bool}` (the name arrives URL-encoded) |
+
+POST `action`s (request fields → answer):
+
+Accounts and profile:
+- `register_player` `{isNewCharacter, name, spriteId, title, badges, pokedexCount}` →
+  `{success, account}`, where account = `{trainerId, name, token, level, xp,
+  spriteId, title, favoriteMon, ...}`. A fresh 6-digit `trainerId` and an
+  8-hex `token`. Names are unique, case-insensitive (`NAME_TAKEN`).
+- `login_player` `{trainerId, token}` → `{success, account}`.
+- `redeem_token` `{token}` → `{success, account}`, for restoring on a new device.
+- `update_profile` `{trainerId, token, name, title, spriteId, badges,
+  pokedexCount, pvpWins (a delta), blackouts, favoriteMon}` → `{success, profile}`.
+- `sync_xp` `{trainerId, token, xpType, badges, pokedexCount, opponentName?, opponentId?}` →
+  `{success, level, xp}`. The server owns XP (the client mirrors it).
+- `report_battle_stat` `{trainerId, battleType, species?, caught?}` → `{success}`.
+- `logout` `{trainerId}` → drop the player from the active players.
+
+Presence:
+- `sync_pos` `{trainerId, sessionId, name, spriteId, title, level, map, x, y,
+  px, py, fx, fy, facing, moving, species}`, sent every 0.1–2 s, plus a 4 s
+  keepalive. The answer is:
+  ```
+  {success,
+   players: [same-map entries, EXCLUDING the requester; the client does not filter itself],
+   challenge: {fromId, fromName, type, party, seed, roomId} | null,
+   partyInvite, partyXp: [{xp, fromName}], party,
+   serverHour, serverMinute, serverWeekday (0 = Sunday)}
+  ```
+  The clock fields drive the online RTC. Drop players after about 30 s
+  without a sync. Answer `ALREADY_LOGGED_IN` when another `sessionId` is live
+  for the same `trainerId`.
+
+Chat:
+- `send_chat` `{trainerId, name, text, scope}` → `{success, message}`.
+  Profanity-filter the text.
+
+Challenges and battles:
+- `send_challenge` `{targetId, fromId, fromName, challengeType, party?, seed?, roomId}`.
+  `challengeType` is one of `PVP`, `TRADE`, `ACCEPT_PVP`, `ACCEPT_TRADE` or
+  `DECLINE`. Store it as the target's pending challenge, and return it on
+  every `sync_pos` until `clear_challenge {trainerId}` or about 15 s pass.
+  **Relay `roomId` verbatim.** Native-PVP negotiation rides on it: the
+  challenger offers `..._L2`, and an accepting 0.5.1+ client answers on
+  `..._L2K`.
+- `send_battle_msg` `{roomId, targetId, msg}` appends `msg` (opaque JSON) to
+  that player's inbox in the room.
+- `poll_battle_msgs` `{roomId, myId}` → `{success, msgs}`, which drains the
+  inbox. `clear_battle_room {roomId}` deletes it. The native battle sends
+  `{type: action|hash|replace|bye|forfeit}` messages and polls every 0.25 s.
+
+GTS:
+- `deposit` `{trainerId, trainerName, offeredMon, wanted}` → `{success, listing}`.
+  A per-trainer cap is fine; the client allows 10.
+- `trade` `{listingId, buyerId, buyerName, sentMon}` → `{success, receivedMon}`.
+  Moves `sentMon` into the seller's claim box and removes the listing.
+- `withdraw` `{listingId, trainerId}` and `claim` `{trainerId, index}`
+  (0-based) → `{success}`.
+- Mons are opaque `Protocol.packMon2` tables. Store and relay them; never
+  rebuild them.
+
+Wonder Trade:
+- `wonder_trade_status`, `wonder_trade_deposit` `{trainerId, trainerName,
+  offeredMon}`, `wonder_trade_withdraw` and `wonder_trade_claim`, all keyed on
+  `trainerId`.
+- The client still keeps a local pool in `GtsUI.openWonderTradeMenu`. A real
+  pool must be server-side, with matching once 5+ are waiting. The status
+  answer carries `claim: {mon, fromName, fromId}`, and the client needs to
+  read the pool from the server.
+
+Parties:
+- `party_create`, `party_invite {targetId}`, `party_accept`, `party_decline`,
+  `party_leave` and `party_warp_target {targetId}` → `{success, map, x, y}`.
+  Parties hold up to 4, as `{leaderId, members: {tid: {name, level, map}}}`.
+  Invites and shared XP reach the target through `sync_pos`.
+
+Quests:
+- `get_quests` → `{success, quests: []}`. There is no quest content yet.
+
+### Next task: rewrite the server from scratch (recommended)
+
+**Why rewrite.** The legacy server is about 2,700 lines, and most of it is
+dead weight for a friends' server: Texas Hold'em tables, anti-cheat audits,
+an IP ledger, an HTML analytics dashboard, rate limiting, Cloudflare
+assumptions and a Gold-only game gate. It also predates 0.5.x, and Wonder
+Trade was never server-side. The client fully specifies the protocol above,
+so a small server built against it is simpler to trust and to run.
+
+Prompt to use:
+
+> Write `server/gts_server.py`: a single-file, stdlib-only Python 3 server for
+> Gen1Online+ that speaks the wire protocol in CLAUDE.md exactly. Follow the
+> "One command to host" notes and "Findings from reading main.lua" under
+> "Next task" too. It's for playing with friends: no Cloudflare, no analytics,
+> no IP logging, no anti-cheat. Use `http.server.ThreadingHTTPServer` with
+> `protocol_version = "HTTP/1.1"` (keep-alive, `Content-Length` on every
+> answer, HTTP 200 even for errors). One lock around the state. Persist to
+> JSON with an atomic write (tmp + rename). Options: `--host` (default
+> 0.0.0.0), `--port` (7779), `--data` (default `server/gts_data.json`), also
+> settable through the env vars `PORT`, `GTS_DB_PATH` and `GTS_MOD_VERSION`,
+> which `dev/server.sh` already sets. The version is `0.5.1`, and any client
+> with the same major.minor is accepted. Implement Wonder Trade server-side,
+> and update the client to use it and to fix the GTS races. Edit `main.lua`
+> byte-exact: it is CRLF and near Lua's local and upvalue limits. Add
+> `server/start.sh` and `server/start.bat`. Add a README section on hosting for
+> friends: same network (LAN IP, plus `sudo firewall-cmd --add-port=7779/tcp`
+> or the Windows firewall prompt), Tailscale (everyone joins the tailnet and
+> uses the host's 100.x IP; recommended), or router port forwarding (TCP
+> 7779, and share the public IP only with friends). Point the default
+> `gts_config.txt` at `http://127.0.0.1:7779`. Done means `python3 -m
+> unittest` for the server passes and `dev/run_tests.sh quick` passes with
+> `dev/server.sh` running the new server, including the new Wonder Trade
+> test. In a cloud session, commit to `server-rewrite`, push, and open a PR
+> into `master` that says the real-Crystal drivers still need a local run by
+> the user. Locally, don't commit.
+
+**One command to host.** The user wants to start the server on any machine
+with a single command and then either port-forward or use Tailscale. So:
+- `python3 server/gts_server.py` with no arguments must just work: Python
+  3.8+, stdlib only, nothing to install, and listening on `0.0.0.0:7779`. Data
+  goes to `server/gts_data.json`, next to the script rather than the current
+  directory. Gitignore it.
+- Add thin wrappers: `server/start.sh` (Linux/macOS) and `server/start.bat`
+  (Windows, double-clickable). Both run the script and pass arguments through.
+- On start, print the URLs to give friends: `http://127.0.0.1:7779` for the
+  host itself, the LAN IP (UDP-connect trick, no packets sent), and the
+  Tailscale IP when `tailscale ip -4` answers. Print each as the
+  `server_url=...` line for `gts_config.txt`.
+- Exclude `server/` from the mod package. `.modkitignore` matches exact paths
+  only, so list each file.
+
+**Findings from reading main.lua** (session of 2026-10-04; line numbers are
+approximate):
+- *Accounts.* `trainerId` is a 6-digit string (100001–999999), unique. The
+  token is 8 uppercase hex characters (`secrets.token_hex(4).upper()`). The
+  recovery prompt is Crystal's box keyboard, which has letters and digits.
+  Compare tokens case-insensitively. The client reads `trainerId, token,
+  level, xp, spriteId, title, favoriteMon, name` off `account`.
+  `login_player` succeeds only when the token matches. `check_name` and
+  `NAME_TAKEN` compare case-insensitively. The client already
+  profanity-filters names, nicknames and chat (`other/profanity.lua`), so a
+  friends' server needs no filter of its own.
+- *XP drift.* `addMmoXp` (~2235) awards its own amounts: catch 50, wild_battle
+  15, trainer_battle 40, pvp_win 100, pvp_loss 25, breeding 50, gts_trade 100,
+  gts_deposit 25, gts_claim 50, wonder_trade 75, party_share N. The legacy
+  server ignored them and used its own table (unknown types got 10), so the
+  two disagreed, and on the next login the client adopts the server's
+  numbers. Fix: add `xp = delta` to the `sync_xp` payload in `addMmoXp`, and
+  have the server add it, clamped to 0..500, falling back to the table when
+  it's absent. The level curve is `xpForLevel(l) = floor(50*(l-1)^1.8)`,
+  capped at 100. `sync_xp` also keeps the stats: pvp_win bumps `pvpWins` and
+  writes the history line `"<A> DEFEATED <B> IN PVP!"`, pvp_loss bumps
+  `pvpLosses`, plus the wild/trainer battle counters. It answers `{success,
+  level, xp, leveledUp}`.
+- *Wins are counted once.* After a PVP win the client sends `sync_xp`
+  pvp_win and then `update_profile` with `pvpWins = 1`. Count the win in
+  `sync_xp` only. `gtsTrades` is never sent: count it on `trade`, for buyer
+  and seller.
+- *Profile.* `/gts/profile` answers `{success, profile}`, where `serverRank`
+  is the 1-based position among all accounts sorted by (level, xp, pvpWins,
+  badges, pokedexCount) descending, and `totalPlayers` is the account count.
+  `rank` titles go by level: 100 POKéMON LEGEND, 90 GRAND MASTER, 80
+  CHAMPION, 70 ELITE FOUR, 60 VETERAN, 50 MASTER, 40 ACE TRAINER, 30 EXPERT,
+  20 TRAINER, 10 ROOKIE, else NOVICE. Also return `title`, `blackouts`,
+  `favoriteMon` and `gtsTrades`.
+- *Presence.* A `sync_pos` player entry is the request's presence fields plus
+  `trainerId` and a timestamp. Echo it to others **without** `sessionId`, at
+  most 16 per map. `ALREADY_LOGGED_IN` fires only if the other session synced
+  within the last 10 s, so a crashed client can reconnect at once. `/gts/players`
+  is keyed by trainerId, and the party menu reads `name` and `level`.
+  Challenges live 15 s, party invites 30 s.
+- *Party XP never happens.* No client code asks the server to share XP, and
+  the legacy server's `party_share_xp` was never called. Always answer
+  `partyXp: []`. Don't invent sharing: each event pops a text box mid-game.
+  `party` is the caller's party or `null`, and `party_warp_target` answers
+  `{success, map, x, y}` from the target's last sync.
+- *Chat.* Ids must keep increasing. The legacy `len(chat)+1` repeated ids
+  once the log was trimmed to 100, and the client drops any id at or below
+  its `lastId`. Keep a persisted `next_chat_id`. Trim text to 200 characters
+  (the client's limit).
+- *GTS.* The deposit cap is 10 per trainer, matching the client (the legacy
+  server allowed 3). Listing ids look like `GTS_<n>`. `trade` answers
+  `{success, receivedMon}` and adds a claim for the seller. `claim` should
+  echo `{success, claimed}`. `/gts/claims` answers `{success, claims}`.
+  Expire listings after 30 days and claims after 60.
+- *GTS client races (fix in main.lua).* Withdraw (~4108), claim (~4140) and
+  buy (~3705) change the local state before the server answers. Withdrawing
+  a listing someone just bought hands the mon back while the buyer also has
+  it. Make each one wait for `res.success`. On failure, buy restores the sent
+  mon and shows that the listing is gone, withdraw and claim show an error,
+  and claim uses `res.claimed.mon`.
+- *Wonder Trade design* (client: `GtsUI.openWonderTradeMenu` ~4169; drop its
+  local pool and matching):
+  - `wonder_trade_status {trainerId}` → `{success, poolCount, threshold: 5,
+    mine: {offeredMon, timestamp} | null, claim: {mon, fromName, fromId,
+    sentMon} | null}`.
+  - `wonder_trade_deposit {trainerId, trainerName, offeredMon}`: one per
+    trainer (`ALREADY_IN_POOL`). Refuse while a claim is unclaimed
+    (`CLAIM_PENDING`), or a new match would overwrite it. Once the pool
+    reaches 5 or more, shuffle it and give each entry's mon to the next entry
+    in the cycle, so nobody gets their own. Answer `{success, poolCount,
+    matched}`.
+  - `wonder_trade_withdraw` → `{success, mon}`, or `NOT_IN_POOL` when it was
+    already matched (the client then shows the claim). The client returns
+    `res.mon` only on success.
+  - `wonder_trade_claim` → `{success, claim}`, or `NO_CLAIM`. The client posts
+    first, then animates with `claim.sentMon` as the outgoing mon instead of
+    the dummy Pikachu.
+  - Deposit removes the mon locally, posts, and puts it back if the answer
+    isn't `success`.
+- *Persisted vs memory.* Persist accounts (and stats), listings, claims,
+  history (newest first, 50), chat (100), the Wonder pool and claims, and the
+  id counters. Keep in memory: presence, challenges, battle rooms, parties
+  and invites.
+- *Leftovers.* The repo-root `gts_database.json` is a legacy database (one
+  test account, three profiles). The new server must not read it: suggest
+  deleting it in the PR. `gts_config.txt` still points at a dead
+  trycloudflare URL; switch it to `http://127.0.0.1:7779`, with comments for
+  LAN and Tailscale. `dev/make_test_server.py` and the stand-in become dead
+  once `server/gts_server.py` exists: drop them, and the stand-in step in
+  `setup.sh`.
+- *Tests to add.* A synthetic Wonder Trade test (`dev/harness/`, wired into
+  `run_tests.sh`), with five trainers over raw HTTP plus the real client,
+  covering pool count, withdraw, matching (nobody gets their own),
+  CLAIM_PENDING and claim. Also a stdlib `unittest` file for the server
+  alone (`python3 -m unittest server/test_gts_server.py`), covering
+  every action, HTTP 200 on errors, keep-alive, and persistence across a
+  restart.
+
+Why not Cloudflare: friends on one Wi-Fi need only the host's LAN IP. Over
+the internet, Tailscale gives everyone a stable private IP with no port
+forwarding, and it keeps plain HTTP, which the client needs without LuaSec,
+off the open internet.
+
+## Known gaps
+
+- In-world link trades don't work on Crystal (the engine's `LinkState` trade
+  is Gen 1 only); the GTS covers trading.
+- Online saves use the engine's legacy compat store, which logs a "migrate to
+  mod.storage" warning. Moving to `mod.cache` or `mod.storage` needs a
+  migration that keeps existing players' `save_online_crystal.lua`.
+- `gen1online-plus-0.4.0.0.modpkg` is a stale release file in the repo.

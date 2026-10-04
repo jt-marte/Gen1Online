@@ -13,3 +13,16 @@ server_secrets.json
 # a rebuilt archive (they are the output, not the source).
 mod.zip
 *.modpkg
+# Developer tooling and notes (dev/, CLAUDE.md) never ship to players.
+# modkit matches exact paths only, so each file is listed.
+CLAUDE.md
+dev/setup.sh
+dev/run_tests.sh
+dev/server.sh
+dev/install_mod.sh
+dev/make_test_server.py
+dev/harness/rig.lua
+dev/harness/offline_test.lua
+dev/harness/online_test.lua
+dev/drivers/online.lua
+dev/drivers/follower.lua
