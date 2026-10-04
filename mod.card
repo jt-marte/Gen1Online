@@ -1,15 +1,15 @@
 -- Sharing metadata for the mod manager and tooling; never read by the
 -- loader's merge.
 return {
-  summary = "Online multiplayer for Crystal: live co-op overworld, GTS trading, PVP battles and chat.",
+  summary = "Online multiplayer for Red, Blue, Yellow and Crystal: live co-op overworld, GTS trading, PVP battles and chat.",
   author = "Gamecorner33 & Antigravity",
   contact = "https://github.com/gamecorner-033/Gen1Online",
-  tags = { "multiplayer", "coop", "online", "pvp", "gts", "crystal" },
+  tags = { "multiplayer", "coop", "online", "pvp", "gts", "red", "blue", "yellow", "crystal" },
   differences = {
     changed = {
       "the START menu gains CONNECT (ONLINE while connected); SAVE is hidden while online",
       "the bedroom and Pokemon Center PCs gain a GTS row",
-      "while online the game runs at 1x speed and the clock follows the server",
+      "while online the game runs at 1x speed and, on Crystal, the clock follows the server",
     },
     added = {
       "live overworld sync of other trainers, with name tags",

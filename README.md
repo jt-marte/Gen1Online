@@ -2,9 +2,11 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Mod Version: v0.5.1](https://img.shields.io/badge/version-0.5.1-green.svg)](manifest.json)
-[![Game: Pokemon Crystal](https://img.shields.io/badge/target-Pokemon%20Crystal-blue.svg)](https://github.com/bryanthaboi/gen1recomp)
+[![Games: Red, Blue, Yellow, Crystal](https://img.shields.io/badge/target-Red%20%7C%20Blue%20%7C%20Yellow%20%7C%20Crystal-blue.svg)](https://github.com/bryanthaboi/gen1recomp)
 
-**Gen1Online+** brings a complete real-time multiplayer co-op experience with true-color overworld follower sprites, a real-time authoritative server clock, and a 24/7 Global Trade Station (GTS) to *Pokémon Crystal*.
+**Gen1Online+** brings a complete real-time multiplayer co-op experience and a 24/7 Global Trade Station (GTS) to *Pokémon Red*, *Blue*, *Yellow* and *Crystal*, plus true-color overworld follower sprites and a real-time authoritative server clock on Crystal.
+
+A server hosts one generation's world: Gen 1 players (Red, Blue and Yellow together) play with each other, and Crystal players with each other.
 
 ---
 
@@ -13,13 +15,13 @@
 ### 🌐 1. Real-Time 60FPS Threaded Multiplayer
 - **Seamless Overworld Co-op**: Live player movement synchronization across Johto and Kanto with zero stutter or lag.
 - **Player Customization**: Walkable character avatars (`RED`, `BLUE`, `LEAF`, `PROF. OAK`, `COOLTRAINER`, `TEAM ROCKET`, and various trainer classes).
-- **Dedicated Dual-Save Architecture**: Online progress writes strictly to `save_online_crystal.lua` in the mod's private storage, leaving your offline Crystal save untouched.
+- **Dedicated Dual-Save Architecture**: Online progress writes strictly to its own file in the mod's private storage (`save_online_crystal.lua`, `save_online_red.lua`, ...), leaving your offline save untouched.
 
-### 🕒 2. Authoritative Server RTC Clock & Day/Night Sync
+### 🕒 2. Authoritative Server RTC Clock & Day/Night Sync (Crystal)
 - **Synchronized Real-Time Clock**: Server broadcasts canonical time, minute, second, and day-of-week on every sync heartbeat.
 - **Unified Day/Night Cycles**: Ensures all players in the world experience synchronized morning, day, night lighting and encounter tables. Manual clock manipulation is locked out for fair gameplay.
 
-### 🐾 3. 1:1 True-Color PokeEmerald Follower Sprites
+### 🐾 3. 1:1 True-Color PokeEmerald Follower Sprites (Crystal; Yellow keeps its own Pikachu)
 - **Authentic Gen 3 Follower Sprites**: True-color overworld follower sprites for all Generation 1 & 2 Pokémon.
 - **Dynamic Directional Walking**: Followers mirror the player's movements with full 4-direction animations.
 
@@ -29,7 +31,7 @@
 
 ### 🏪 5. 24/7 Global Trade Station (GTS) & Overworld PVP
 - **Persistent GTS Network**: Deposit and search for Pokémon listings asynchronously.
-- **Overworld Direct PVP Battles**: Walk up to any trainer in the world, face them, and press **`A`** to challenge them. Battles run on the recomp's native lockstep link battle. (In-world link trades are not available on Crystal yet; trade through the GTS.)
+- **Overworld Direct PVP Battles**: Walk up to any trainer in the world, face them, and press **`A`** to challenge them. Battles run on the recomp's native lockstep link battle. On Red, Blue and Yellow you can also link-trade face to face; on Crystal, trade through the GTS.
 
 ### 👥 6. Co-Op Party System & Shared XP
 - **Party System (Up to 4 Players)**: Invite nearby trainers, view live teammate locations and levels.
@@ -77,7 +79,13 @@ You need Python 3.8 or newer ([python.org](https://www.python.org/downloads/); o
 - **Linux / macOS**: `server/start.sh` (the same as `python3 server/gts_server.py`)
 - **Windows**: double-click `server\start.bat`
 
-It listens on port **7779** and keeps accounts, GTS listings, chat and the Wonder Trade pool in `server/gts_data.json` (copy that file to back up your world). When it starts, it prints the `server_url=...` lines to hand out. Options: `--port 8000`, `--host 127.0.0.1` (this PC only), `--data path/to/file.json`. Stop it with **Ctrl+C**.
+It listens on port **7779** and keeps accounts, GTS listings, chat and the Wonder Trade pool in `server/gts_data.json` (copy that file to back up your world). When it starts, it prints the `server_url=...` lines to hand out. Options: `--port 8000`, `--host 127.0.0.1` (this PC only), `--data path/to/file.json`, `--gen 1` or `--gen 2`. Stop it with **Ctrl+C**.
+
+**One generation per server.** A server is either a Gen 1 world (Red, Blue and Yellow) or a Crystal world. The first game to connect decides, or start it with `--gen 1` (Gen 1) or `--gen 2` (Crystal) to decide up front. A game of the other generation is told the server isn't for it and never joins. To host both, run two servers with their own port and data file:
+```text
+server/start.sh --gen 2
+server/start.sh --gen 1 --port 7780 --data server/gts_data_gen1.json
+```
 
 ### 2. Point each game at it
 
