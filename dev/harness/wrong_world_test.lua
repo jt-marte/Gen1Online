@@ -29,6 +29,10 @@ end
 
 local items = Rig.hook("ui.start_menu.items", function(g, l) return l end, game, {})
 for _, it in ipairs(items) do if it.label == "CONNECT" then it.onSelect() end end
+-- CONNECT opens the server menu; JOIN connects
+for _, it in ipairs((game.stack:top() or {}).items or {}) do
+  if tostring(it.label):find("^JOIN") then game.stack:pop(); it.onSelect() break end
+end
 local top = game.stack:top()
 local text = (top and getmetatable(top) == TextBox) and textOf(top) or tostring(top)
 local other = Rig.generation == 1 and "GEN 2 %(CRYSTAL%)" or "GEN 1 %(RED, BLUE AND YELLOW%)"

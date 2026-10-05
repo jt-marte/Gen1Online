@@ -190,23 +190,51 @@
     end
     return nil
   end
+  -- A server typed in-game (START > CONNECT > SERVER ADDRESS) wins; the
+  -- config file is the default, for the host and for first-time players.
   local function loadServerUrl()
-    local fromFile = readServerUrlFromConfig()
     local stored = storageRead and storageRead("gts_server_url")
-    if fromFile then
-      GTS_SERVER_URL = fromFile
-    elseif stored and type(stored) == "string" and #stored > 0 then
-      GTS_SERVER_URL = stored
-    else
-      GTS_SERVER_URL = DEFAULT_SERVER_URL
-    end
+    if not (type(stored) == "string" and #stored > 0) then stored = nil end
+    local fromFile = (not stored) and readServerUrlFromConfig() or nil
+    GTS_SERVER_URL = stored or fromFile or DEFAULT_SERVER_URL
+    GtsUI.serverUrlTyped = stored ~= nil
     _G.GTS_SERVER_URL = GTS_SERVER_URL
     print("[Gen1Online++] server url = " .. tostring(GTS_SERVER_URL)
-      .. (fromFile and " (from gts_config.txt)" or (GTS_SERVER_URL == DEFAULT_SERVER_URL and " (DEFAULT)" or " (stored)")))
+      .. (stored and " (typed in-game)" or fromFile and " (from gts_config.txt)" or " (DEFAULT)"))
     return GTS_SERVER_URL
   end
   local function getServerUrl()
     return GTS_SERVER_URL
+  end
+  -- "192.168.1.23", "100.64.0.7:8000" or "http://host:7779/" ->
+  -- "http://host:port" (port 7779 when none is given); nil and a reason
+  -- when the text isn't an address.
+  function GtsUI.normalizeServerAddress(text)
+    local s = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    s = s:gsub("^[Hh][Tt][Tt][Pp][Ss]?://", ""):gsub("/+$", "")
+    if s == "" then return nil, "TYPE THE HOST'S ADDRESS." end
+    local host, port = s:match("^([%w%.%-]+):(%d+)$")
+    if not host then host = s:match("^([%w%.%-]+)$") end
+    if not host then return nil, "USE ONLY LETTERS, DIGITS, . - AND :PORT." end
+    if host:find("..", 1, true) or host:sub(1, 1) == "." or host:sub(-1) == "." then
+      return nil, "THAT ADDRESS HAS A STRAY DOT."
+    end
+    if host:match("^[%d%.]+$") then
+      local parts = {}
+      for n in host:gmatch("%d+") do parts[#parts + 1] = tonumber(n) end
+      if #parts ~= 4 then return nil, "AN IP HAS 4 NUMBERS, LIKE 192.168.1.23." end
+      for _, n in ipairs(parts) do
+        if n > 255 then return nil, "EACH IP NUMBER IS 0 TO 255." end
+      end
+    end
+    port = tonumber(port or "7779")
+    if not port or port < 1 or port > 65535 then return nil, "THE PORT IS 1 TO 65535." end
+    return "http://" .. host:lower() .. ":" .. port
+  end
+  -- what menus show: no scheme, no default port
+  function GtsUI.displayAddress(url)
+    local s = tostring(url or ""):gsub("^%a+://", ""):gsub("/+$", ""):gsub(":7779$", "")
+    return s:upper()
   end
   local isGtsServerConnected = false -- Explicit manual connection required via menu
   -- The live game instance (set every frame in core.update) so writeOnlineSave
@@ -227,6 +255,12 @@
   local isWaitingForChallenge, challengeWaitTimer, lastBattleEndTime, inBattle = false, 0, -999, false
   local clientSessionId = string.format("%08x%08x", math.random(10000000, 99999999), os.time())
   local netNpcs, netFollowers, netPlayerMap, gtsSpriteDiagWritten = {}, {}, {}, false
+  -- How long a player who isn't moving waits between syncs.  Other players
+  -- only arrive in the answer to our own sync, so with someone else on the
+  -- map this has to stay short or they move in jumps, seconds late.
+  function GtsUI.idleSyncInterval()
+    return next(netNpcs) and 0.25 or 1.0
+  end
 
   -- Inter-mod bridge: expose the LIVE remote-player registry (by reference,
   -- not copy) so companion rendering mods -- e.g. PotatoVoxel's 3D voxel
@@ -890,6 +924,7 @@
   ChatInputScreen = {}
   ChatInputScreen.__index = ChatInputScreen
   ChatInputScreen.isOpaque = true
+  ChatInputScreen.gtsTextInput = true
   function ChatInputScreen.new(game, opts)
     opts = opts or {}
     local self = setmetatable({}, ChatInputScreen)
@@ -1030,7 +1065,7 @@
   if mod and mod.hooks and mod.hooks.wrap then
     mod.hooks:wrap("input.key", function(nextFn, game, ev)
       local top = game and game.stack and game.stack:top()
-      if ev and ev.phase == "pressed" and top and getmetatable(top) == ChatInputScreen then
+      if ev and ev.phase == "pressed" and top and type(top) == "table" and top.gtsTextInput then
         local ok, handled = pcall(top.onKeyPressed, top, ev.key)
         if ok and handled ~= false then return end
       end
@@ -1048,11 +1083,149 @@
     love.textinput = function(t)
       local g = currentGame
       local top = g and g.stack and g.stack:top()
-      if top and getmetatable(top) == ChatInputScreen then
+      if top and type(top) == "table" and top.gtsTextInput then
         pcall(top.textinput, top, t)
         return
       end
       if previous then return previous(t) end
+    end
+  end
+
+  -- Server address entry, on both generations.  Gen 1's naming keyboard has
+  -- no digits and fits about 10 characters, so this is a screen of its own:
+  -- type on a keyboard, or with a controller cycle the last character with
+  -- UP/DOWN, add one with RIGHT and delete with LEFT or B.
+  do
+    local AddressScreen = {}
+    AddressScreen.__index = AddressScreen
+    AddressScreen.isOpaque = true
+    AddressScreen.gtsTextInput = true
+    AddressScreen.MAX = 40
+    AddressScreen.CHARS = "0123456789.:-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    GtsUI.AddressScreen = AddressScreen
+
+    function AddressScreen.new(game, opts)
+      opts = opts or {}
+      local self = setmetatable({}, AddressScreen)
+      self.game = game
+      self.onDone, self.onCancel = opts.onDone, opts.onCancel
+      self.current = opts.current
+      self.buffer = tostring(opts.initial or ""):upper():sub(1, AddressScreen.MAX)
+      self.blink = 0
+      self.message = nil
+      ensureChatTextInputPatch()
+      pcall(function() if love.keyboard and love.keyboard.setTextInput then love.keyboard.setTextInput(true) end end)
+      return self
+    end
+    function AddressScreen:close()
+      pcall(function() if love.keyboard and love.keyboard.setTextInput then love.keyboard.setTextInput(false) end end)
+      if self.game.stack:top() == self then self.game.stack:pop() end
+    end
+    function AddressScreen:add(text)
+      for ch in tostring(text or ""):upper():gmatch("[%w%.%:%-]") do
+        if #self.buffer < AddressScreen.MAX then self.buffer = self.buffer .. ch end
+      end
+      self.message = nil
+    end
+    function AddressScreen:back()
+      if #self.buffer == 0 then
+        self:close()
+        if self.onCancel then self.onCancel() end
+        return
+      end
+      self.buffer = self.buffer:sub(1, -2)
+      self.message = nil
+    end
+    -- UP/DOWN: the last character steps through CHARS
+    function AddressScreen:cycle(step)
+      local chars = AddressScreen.CHARS
+      if #self.buffer == 0 then self.buffer = step > 0 and "1" or "9" return end
+      local last = self.buffer:sub(-1)
+      local i = chars:find(last, 1, true) or 0
+      i = (i - 1 + step) % #chars + 1
+      self.buffer = self.buffer:sub(1, -2) .. chars:sub(i, i)
+      self.message = nil
+    end
+    function AddressScreen:confirm()
+      local url, why = GtsUI.normalizeServerAddress(self.buffer)
+      if not url then
+        self.message = why
+        return
+      end
+      self:close()
+      if self.onDone then self.onDone(url) end
+    end
+    function AddressScreen:textinput(t) self:add(t) end
+    function AddressScreen:onKeyPressed(key)
+      if key == "escape" then
+        self:close()
+        if self.onCancel then self.onCancel() end
+      elseif key == "backspace" then
+        if #self.buffer > 0 then self:back() end
+      elseif key == "return" or key == "kpenter" then
+        self:confirm()
+      elseif key == "delete" then
+        self.buffer, self.message = "", nil
+      elseif key == "up" then
+        self:cycle(1)
+      elseif key == "down" then
+        self:cycle(-1)
+      elseif key == "right" then
+        self:add("0")
+      elseif key == "left" then
+        if #self.buffer > 0 then self:back() end
+      end
+      -- every other key types through textinput; swallowing it here keeps
+      -- letters like Z and X from also pressing A or B underneath
+      return true
+    end
+    function AddressScreen:keypressed(key) return self:onKeyPressed(key) end
+    function AddressScreen:update(dt)
+      self.blink = (self.blink + 1) % 60
+      -- a controller reaches the screen through the game's input
+      local input = self.game and self.game.input
+      if not (input and input.wasPressed) then return end
+      if input:wasPressed("a") or input:wasPressed("start") then return self:confirm() end
+      if input:wasPressed("b") then return self:back() end
+      if input:wasPressed("select") then self.buffer, self.message = "", nil return end
+      if input:wasPressed("up") then return self:cycle(1) end
+      if input:wasPressed("down") then return self:cycle(-1) end
+      if input:wasPressed("right") then return self:add("0") end
+      if input:wasPressed("left") and #self.buffer > 0 then return self:back() end
+    end
+    function AddressScreen:draw()
+      local G = love.graphics
+      G.setColor(1, 1, 1, 1)
+      G.rectangle("fill", 0, 0, 160, 144)
+      G.setColor(0, 0, 0, 1)
+      Font.draw("SERVER ADDRESS?", 8, 8)
+      if self.current and self.current ~= "" then
+        Font.draw(("NOW " .. self.current):sub(1, 19), 8, 24)
+      end
+      Font.drawBox(0, 4, 20, 4)
+      -- the field scrolls: the last 17 characters stay in view
+      local shown = self.buffer
+      if #shown > 17 then shown = shown:sub(-17) end
+      local fx, fy = 16, 48
+      Font.draw(shown, fx, fy)
+      if self.blink < 40 then
+        -- a block cursor (the fonts have no "_" glyph), under the last
+        -- character, which UP/DOWN change
+        local w = Font.width(shown)
+        local cx = (#shown > 0) and (fx + w - 8) or fx
+        G.rectangle("fill", cx, fy + 8, 8, 1)
+      end
+      local lines = self.message and wrapText(self.message, 18)
+        or "EX: 192.168.1.23\nOR 100.64.0.7:7779"
+      local y = 72
+      for line in (lines .. "\n"):gmatch("(.-)\n") do
+        if y <= 88 then Font.draw(line, 8, y) end
+        y = y + 8
+      end
+      Font.draw("UP DOWN: CHANGE", 8, 104)
+      Font.draw("RIGHT:ADD  LEFT:DEL", 8, 112)
+      Font.draw("A:OK  B:BACK", 8, 128)
+      G.setColor(1, 1, 1, 1)
     end
   end
 
@@ -1333,6 +1506,19 @@
     asyncClose(reason)
     asyncPending = {}
     asyncActive = nil
+  end
+
+  -- Store the server typed in-game (nil: back to gts_config.txt).  The
+  -- keep-alive engine caches its host, so it reconnects to the new one.
+  function GtsUI.setServerUrl(url)
+    if url then
+      storageWrite("gts_server_url", url)
+    else
+      storageRemove("gts_server_url")
+    end
+    loadServerUrl()
+    asyncReset("server changed")
+    asyncHost, asyncPort, asyncIsHttps = nil, nil, false
   end
 
   -- Non-blocking socket operations (especially LuaSec TLS with settimeout(0))
@@ -2771,6 +2957,169 @@
   end
 
   -- REAL-TIME SMOOTH VECTOR INTERPOLATION & AUTHENTIC TILE-STEP ANIMATION
+  -- Gen 1 overworld draw.  Remote players join the overworld's entity list
+  -- for the draw only, so the engine draws them like any NPC on every path:
+  -- flat (y-sorted, tall-grass feet), tilt (upright billboards) and a render
+  -- pipeline, which replaces the whole world image -- the voxel mod builds
+  -- its cast from state.entities, and anything drawn after the original
+  -- drawWorld would land on a canvas it never shows.  Collision, NPC updates
+  -- and scripts never see them.
+  function GtsUI.gen1DrawWorld(ow, orig)
+    local list = isGtsServerConnected and next(netNpcs) and ow.entities
+    local added = nil
+    if type(list) == "table" then
+      local present = {}
+      for _, e in ipairs(list) do present[e] = true end
+      for _, pNpc in pairs(netNpcs) do
+        if pNpc.sprite and pNpc.px and pNpc.py and not present[pNpc] then
+          added = added or {}
+          added[pNpc] = true
+          list[#list + 1] = pNpc
+        end
+      end
+    end
+    local ok, res = pcall(orig, ow)
+    if added then
+      for i = #list, 1, -1 do
+        if added[list[i]] then table.remove(list, i) end
+      end
+    end
+    if not ok then error(res, 0) end
+    -- what the HUD tags need: was this frame the flat world canvas?
+    local renderer = currentGame and currentGame.renderer
+    GtsUI.gen1FlatFrame = not (renderer and renderer.worldOverride)
+      and not (GtsUI.tiltActive and GtsUI.tiltActive())
+    GtsUI.gen1DrawnAt = love.timer and love.timer.getTime() or 0
+    return res
+  end
+
+  -- One name tag: a light plate and the name, centred on x with its top at
+  -- y, in the current transform's units (font pixels).
+  function GtsUI.drawTag(name, x, y)
+    name = tostring(name or "TRAINER"):gsub("_", " ")
+    local width = Font.width(name)
+    x, y = math.floor(x - width / 2), math.floor(y)
+    love.graphics.setColor(1, 1, 1, 0.85)
+    love.graphics.rectangle("fill", x - 1, y - 1, width + 2, 10)
+    love.graphics.setColor(1, 1, 1, 1)
+    Font.draw(name, x, y)
+  end
+
+  -- Every Gen 1 tag as (name, world px, world py) of its trainer: the
+  -- remote players and this player.
+  function GtsUI.gen1Tags(ow, fn)
+    for tid, pNpc in pairs(netNpcs) do
+      if pNpc and pNpc.px and pNpc.py then
+        fn((netPlayerMap[tid] or {}).name or pNpc.name, pNpc.px, pNpc.py)
+      end
+    end
+    local p, save = ow and ow.player, Game and Game.save
+    if p and p.px and p.py then
+      fn((save and save.onlineAccount and save.onlineAccount.name)
+        or (save and save.player and save.player.name) or "YOU", p.px, p.py, true)
+    end
+  end
+
+  if not isGen2 then
+    local okTilt, Tilt = pcall(require, "src.render.Tilt")
+    if okTilt and type(Tilt) == "table" and Tilt.active then
+      GtsUI.tiltActive = function() return Tilt.active() end
+    end
+
+    -- Name tags in a render pipeline (voxel): drawn in the pipeline's own
+    -- FX pass, anchored with the projection it hands the engine's field
+    -- effects (the "!" bubble rides the same one), so they sit inside the
+    -- world image, under menus and battles.  Nothing in the pipeline mod
+    -- changes; only the engine's ctx gets one more effect.
+    local okP, Pipelines = pcall(require, "src.render.Pipelines")
+    if okP and type(Pipelines) == "table" and type(Pipelines.drawWorld) == "function" then
+      local origPipelineDraw = Pipelines.drawWorld
+      Pipelines.drawWorld = function(id, ctx)
+        if isGtsServerConnected and type(ctx) == "table" and type(ctx.drawFx) == "function"
+            and ctx.state and ctx.state.player then
+          local drawFx = ctx.drawFx
+          ctx.drawFx = function(project, scale, ...)
+            local res = drawFx(project, scale, ...)
+            pcall(function()
+              -- How big a 16-pixel sprite stands at a point: the on-screen
+              -- span of 16 world pixels along both ground axes, whatever the
+              -- camera's yaw, pitch and zoom.  Measured at this player's
+              -- feet, which the camera follows (the screen centre, where
+              -- perspective skews it least), then carried to every other
+              -- trainer by the projection's depth ratio.
+              local function spanAt(fx, fy, sx)
+                local ax = project(fx + 16, fy)
+                local bx = project(fx, fy + 16)
+                return (ax and bx) and math.sqrt((ax - sx) ^ 2 + (bx - sx) ^ 2) or nil
+              end
+              local limit = 64 * (scale or 1)
+              local me = ctx.state.player
+              local mfx, mfy = (me.px or 0) + 8, (me.py or 0) + 16
+              local msx, _, mdepth = project(mfx, mfy)
+              local w0 = msx and spanAt(mfx, mfy, msx)
+              -- first person: the camera stands at this player's feet
+              local firstPerson = not w0 or w0 > limit
+              GtsUI.gen1Tags(ctx.state, function(name, px, py, isPlayer)
+                if isPlayer and firstPerson then return end
+                local fx, fy = px + 8, py + 16
+                local sx, sy, depth = project(fx, fy)
+                if not sx then return end
+                local w
+                if not firstPerson and tonumber(depth) and tonumber(mdepth) and mdepth > 0 then
+                  w = w0 * depth / mdepth
+                else
+                  w = spanAt(fx, fy, sx) or 16 * (scale or 1)
+                end
+                if w > limit then return end
+                -- one sprite (20 px with its 4 px raise) above the feet; the
+                -- text keeps one readable size
+                local s = (scale or 1) / 2
+                love.graphics.push()
+                love.graphics.translate(sx, sy - w * 20 / 16)
+                love.graphics.scale(s, s)
+                GtsUI.drawTag(name, 0, -16)
+                love.graphics.pop()
+              end)
+            end)
+            love.graphics.setColor(1, 1, 1, 1)
+            return res
+          end
+        end
+        return origPipelineDraw(id, ctx)
+      end
+    end
+
+    -- Name tags on the flat world: over the finished frame, at half the
+    -- world scale like Crystal's, only while the overworld itself is the
+    -- top screen (so never over a menu, a text box or a battle).
+    if mod and mod.hooks and mod.hooks.wrap then
+      mod.hooks:wrap("render.hud", function(nextFn, game, vp)
+        local res = nextFn(game, vp)
+        local ow = game and game.overworld
+        local renderer = game and game.renderer
+        local now = love.timer and love.timer.getTime() or 0
+        if isGtsServerConnected and ow and ow.camera and renderer and GtsUI.gen1FlatFrame
+            and (now - (GtsUI.gen1DrawnAt or 0)) < 0.1
+            and game.stack and game.stack:top() == ow
+            and renderer.wipeWox and renderer.wipeSx then
+          local cam = ow.camera
+          local ox, oy, sx, sy = renderer.wipeWox, renderer.wipeWoy, renderer.wipeSx, renderer.wipeSy
+          pcall(function()
+            GtsUI.gen1Tags(ow, function(name, px, py)
+              love.graphics.push()
+              love.graphics.translate(ox + (px + 8 - (cam.x or 0)) * sx, oy + (py - 12 - (cam.y or 0)) * sy)
+              love.graphics.scale(sx / 2, sy / 2)
+              GtsUI.drawTag(name, 0, 0)
+              love.graphics.pop()
+            end)
+          end)
+          love.graphics.setColor(1, 1, 1, 1)
+        end
+        return res
+      end)
+    end
+  end
+
   local function updateNpcMovement(npc, dt)
     if not npc or not npc.targetPx or not npc.targetPy then return end
 
@@ -2981,6 +3330,7 @@
           local spriteDef = sprites[chosenRemoteSprite] or sprites["SPRITE_CHRIS"] or sprites["SPRITE_RED"]
           if spriteDef then
             pNpc.spriteDef = spriteDef
+            pNpc.spriteId = spriteDef.id or chosenRemoteSprite
             pNpc.sprite = SpriteRenderer.new(spriteDef, tonumber(tid) or 1)
             if ow.applySpritePalette then
               pcall(ow.applySpritePalette, ow, pNpc)
@@ -3019,6 +3369,7 @@
             local spriteDef = sprites[chosenRemoteSprite] or sprites["SPRITE_CHRIS"] or sprites["SPRITE_RED"]
             if spriteDef and (not pNpc.spriteDef or pNpc.spriteDef ~= spriteDef) then
               pNpc.spriteDef = spriteDef
+              pNpc.spriteId = spriteDef.id or chosenRemoteSprite
               pNpc.sprite = SpriteRenderer.new(spriteDef, tonumber(tid) or 1)
               if ow.applySpritePalette then pcall(ow.applySpritePalette, ow, pNpc) end
             end
@@ -4681,6 +5032,7 @@
       {
         label = "DISCONNECT",
         onSelect = function()
+          GtsUI.sendLogout(game)
           handleDisconnect(game)
         end
       },
@@ -5397,10 +5749,39 @@
 
     -- Online Options Menu (Shown in Start Menu once connected)
   openServerUrlMenu = function(game)
-    loadServerUrl()
-    local cur = getServerUrl()
-    local info = string.format("CURRENT SERVER:\n%s\n\nTO CHANGE THE SERVER URL:\nEDIT gts_config.txt NEXT TO\nmain.lua, THEN RESTART\nTHE GAME.\n\nFORMAT:\nserver_url=<URL>", cur)
+    local info = string.format("CURRENT SERVER:\n%s\n\nTO CHANGE IT, DISCONNECT, THEN CHOOSE START > CONNECT > SERVER ADDRESS.",
+      GtsUI.displayAddress(getServerUrl()))
     game.stack:push(TextBox.new(game, wrapText(info)))
+  end
+
+  -- Type a server address; on OK it is saved and the game connects to it.
+  function GtsUI.openAddressEntry(game)
+    game.stack:push(GtsUI.AddressScreen.new(game, {
+      current = GtsUI.displayAddress(getServerUrl()),
+      onDone = function(url)
+        GtsUI.setServerUrl(url)
+        handleConnectToServer(game)
+      end,
+    }))
+  end
+
+  -- START > CONNECT while offline
+  function GtsUI.openConnectMenu(game)
+    local addr = GtsUI.displayAddress(getServerUrl())
+    local items = {
+      { label = (#addr <= 12) and ("JOIN " .. addr) or "JOIN SERVER",
+        onSelect = function() handleConnectToServer(game) end },
+      { label = "SERVER ADDRESS", onSelect = function() GtsUI.openAddressEntry(game) end },
+    }
+    if GtsUI.serverUrlTyped then
+      items[#items + 1] = { label = "USE CONFIG FILE", onSelect = function()
+        GtsUI.setServerUrl(nil)
+        game.stack:push(TextBox.new(game, wrapText("SERVER FROM gts_config.txt:\n"
+          .. GtsUI.displayAddress(getServerUrl()))))
+      end }
+    end
+    items[#items + 1] = { label = "CANCEL", onSelect = function() end }
+    game.stack:push(Menu.new(game, items, { tx = 0, ty = 0, tw = 20, startCloses = true }))
   end
 
   openOnlineOptionsMenu = function(game)
@@ -5473,6 +5854,7 @@
       {
         label = "DISCONNECT",
         onSelect = function()
+          GtsUI.sendLogout(game)
           isGtsServerConnected = false
           netNpcs = {}
           mod.exports.netNpcs = netNpcs
@@ -5508,6 +5890,13 @@
   handleConnectToServer = function(game)
     -- 1. Verify Mod Version Handshake with Server First
     local srvInfo = gtsApiGet("/server/info", 3.0)
+    if not srvInfo then
+      -- nobody answered: say so, rather than offering to create a player
+      GtsUI.openAddressEntry(game)
+      game.stack:push(TextBox.new(game, wrapText("COULDN'T REACH THE SERVER AT "
+        .. GtsUI.displayAddress(getServerUrl()) .. ".\nCHECK THE ADDRESS WITH THE HOST.")))
+      return
+    end
     if srvInfo and (srvInfo.modVersion or srvInfo.version) then
       local srvVer = srvInfo.modVersion or srvInfo.version
       -- the server's own rule (is_version_compatible): major.minor must
@@ -5654,12 +6043,24 @@
   -- Stored on _G so the big returned function below does not need to capture
   -- the extra locals (LuaJIT's 60-upvalue cap on that closure).
   _G.__gtsQuitLogout = function(game)
+    GtsUI.sendLogout(game)
+  end
+
+  -- Tell the server this player left, right now: a DISCONNECT or a QUIT.
+  -- Queued on the async engine it never went out (the disconnected engine
+  -- is reset every frame, and a quitting game is gone), so the server kept
+  -- the session live: friends saw a frozen trainer for 30 s, and coming back
+  -- within 10 s was refused as "ALREADY ACTIVE ON ANOTHER DEVICE".  The
+  -- engine is reset first, so no queued sync can re-add the session after.
+  -- Not for forced disconnects (another device, wrong version or world),
+  -- which must not drop the other device's session.
+  function GtsUI.sendLogout(game)
     if not isGtsServerConnected then return end
     local tid = getTrainerInfo(game and game.save)
-    if tid then
-      pvpBattleSend({ action = "logout", trainerId = tid })
-      pvpBattleSend({ action = "clear_challenge", trainerId = tid })
-    end
+    if not tid then return end
+    asyncReset("logout")
+    gtsApiPost({ action = "logout", trainerId = tid }, 1.5)
+    gtsApiPost({ action = "clear_challenge", trainerId = tid }, 1.5)
   end
 
 
@@ -5714,7 +6115,7 @@ return function(mod)
         if isGtsServerConnected then
           openOnlineOptionsMenu(game)
         else
-          handleConnectToServer(game)
+          GtsUI.openConnectMenu(game)
         end
       end,
     }
@@ -6028,7 +6429,7 @@ return function(mod)
       local movingChanged = (p.moving ~= lastPlayerMoving)
       local isMoving = (p.moving == true) or positionChanged
 
-      if movingChanged or (isMoving and now - lastSendTime >= 0.10) or (now - lastSendTime >= 2.0) then
+      if movingChanged or (isMoving and now - lastSendTime >= 0.10) or (now - lastSendTime >= GtsUI.idleSyncInterval()) then
         lastSendTime = now
         lastPlayerX = p.cellX
         lastPlayerY = p.cellY
@@ -6089,20 +6490,7 @@ return function(mod)
     local origGen1DrawWorld = OverworldState[dwKey]
     if origGen1DrawWorld then
       OverworldState[dwKey] = function(self)
-        local res = origGen1DrawWorld(self)
-        if isGtsServerConnected and self.camera and next(netNpcs) then
-          local cam = self.camera
-          for _, pNpc in pairs(netNpcs) do
-            if pNpc and pNpc.sprite and pNpc.px and pNpc.py then
-              pcall(function()
-                pNpc.sprite:draw(
-                  pNpc.px, pNpc.py, cam.x or 0, cam.y or 0,
-                  pNpc.facing, pNpc:walkPhase(), pNpc.stepFlip)
-              end)
-            end
-          end
-        end
-        return res
+        return GtsUI.gen1DrawWorld(self, origGen1DrawWorld)
       end
     end
   end
@@ -6344,7 +6732,7 @@ return function(mod)
         local movingChanged = (p.moving ~= lastPlayerMoving)
         local isMoving = (p.moving == true) or positionChanged
 
-        if movingChanged or (isMoving and now - lastSendTime >= 0.10) or (now - lastSendTime >= 2.0) then
+        if movingChanged or (isMoving and now - lastSendTime >= 0.10) or (now - lastSendTime >= GtsUI.idleSyncInterval()) then
           lastSendTime = now
           lastPlayerX = p.cellX
           lastPlayerY = p.cellY
@@ -6613,7 +7001,7 @@ return function(mod)
       local ow = gWorld
       local p = ow.player
       local now = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
-      if not p.moving and (now - lastSendTime >= 4.0) then
+      if not p.moving and (now - lastSendTime >= GtsUI.idleSyncInterval()) then
         lastSendTime = now
         lastPlayerX = p.cellX
         lastPlayerY = p.cellY

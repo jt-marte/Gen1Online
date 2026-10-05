@@ -37,7 +37,7 @@ trades on Gen 1 only. `manifest.json` `"games": ["red", "blue", "yellow",
 | `other/`, `games/` | Gen 1 casino (Crash, Tube Flyer, Prize Case, pawn). Off: main.lua returns before setting it up on Gen 1, and on Crystal its maps don't exist. |
 | `npcs/`, `quests/` | Registries (empty). `npcs/{quest,trade}/*` are dead Gen 1 leftovers. |
 | `assets/followers/` | Follower sheets (16x96, 6 frames), from pokeemerald via `tools/import_emerald_follower.py`. |
-| `gts_config.txt` | `server_url=...`, read at startup through `mod:read`. |
+| `gts_config.txt` | `server_url=...`, read at startup through `mod:read`. The default only: an address typed in-game (START > CONNECT > SERVER ADDRESS, stored as `gts_server_url`) wins. |
 | `server/` | The server (`gts_server.py`, stdlib Python), its unittest, `start.sh`/`start.bat`. Never packaged. |
 | `dev/` | Test harness (excluded from packages by `.modkitignore`). |
 
@@ -133,9 +133,26 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     and Yellow.
   - `wrong_world_test.lua`: each generation's CONNECT is turned away by the
     other generation's server (run as Crystal on Gen 1, and as Red on Crystal).
+  - `address_test.lua` (Crystal and Yellow): the CONNECT menu (JOIN / SERVER
+    ADDRESS / USE CONFIG FILE), the address screen by keyboard, `love.textinput`
+    and D-pad, refused addresses, an unreachable server, and a typed address
+    winning over `gts_config.txt`.
+  - CONNECT opens that menu, so every test presses CONNECT, then `^JOIN`.
   - `dev/server.sh` passes `GTS_GENERATION` through to the server.
 - **Real-Crystal drivers** (`dev/drivers/`) boot the actual game from the
   imported ROM in the engine's `POKEPORT_DRIVER` mode.
+- **Real Yellow + voxel** (`dev/drivers/gen1_voxel.lua`): Yellow with
+  DramaticShapeVoxelMod (`BATTLE_ART_VOXEL_FORK`) installed unmodified next to
+  the mod. It types an address, connects, puts BUDDY beside the player and
+  checks the voxel scene draws him at several voxel levels (a read-only probe
+  through the voxel mod's public `characterRenderers` API), with screenshots
+  in `$G1O_WORK/shots/gen1_voxel`. It needs the Yellow cache
+  (`G1O_YELLOW_ROM=<rom> dev/setup.sh ...`, profile `gen1online-yellow`) and
+  the voxel mod (`G1O_VOXEL_MOD`, default
+  `../DramaticShapeVoxelMod-master/DramaticShapeVoxelMod-master`); otherwise
+  `run_tests.sh` skips it. The user's Yellow ROM is
+  `/home/jt/Desktop/Pokemon/Pokemon - Yellow Version (UE) [C][!].gbc` (same
+  rules as the Crystal one). Never edit the voxel mod.
   - `follower.lua`: follower and offline checks.
   - `online.lua`: run twice (fresh install, then returning player). Covers
     connect, PVP with non-default moves on both sides, a GTS trade with
@@ -464,10 +481,10 @@ off the open internet.
 
 ## Known gaps
 
-- Gen 1 is verified synthetically only: there is no Gen 1 real-game driver
-  (`dev/drivers/` boots Crystal), and the ROM here is Crystal. A real
-  Red/Blue/Yellow run is still owed, especially a full PVP battle and a
-  link trade between two real games (the tests stop once each has started).
+- Gen 1 has one real-game driver (`gen1_voxel.lua`: connect, a remote
+  player, voxel views). A full PVP battle and a link trade between two real
+  Gen 1 games are still verified synthetically only (the tests stop once
+  each has started).
 - For 5 s after a battle the client drops incoming challenge answers as stale
   (`lastBattleEndTime`), on both generations, so an offer made right after a
   battle times out.
@@ -475,8 +492,18 @@ off the open internet.
   server synchronously on the main thread every 0.15 s (Crystal's native
   battle uses the async engine, `pvpBattleSend`). Fine on a LAN; over
   Tailscale or the internet each poll can stall a frame.
-- On Gen 1, remote players are drawn after the world (the `drawWorld`
-  wrapper), without name tags and without the SGB palette tint.
+- On Gen 1, remote players are added to the overworld's `entities` for the
+  `drawWorld` call only (`GtsUI.gen1DrawWorld`), so the engine draws them on
+  the flat, tilt and render-pipeline paths; a pipeline draws whatever is in
+  `state.entities` and nothing drawn after `drawWorld` reaches the screen.
+  Name tags: `render.hud` on the flat path; inside a pipeline, an extra
+  effect on the engine's `ctx.drawFx` (the `Pipelines.drawWorld` wrapper),
+  placed with the pipeline's own `project`. Tilt shows no tags.
+- Remote players only arrive in the answer to this client's own `sync_pos`,
+  so an idle client keeps syncing (`GtsUI.idleSyncInterval`: 0.25 s with
+  someone else on the map, 1 s alone). DISCONNECT and QUIT log out
+  synchronously (`GtsUI.sendLogout`); queued on the async engine the logout
+  was never sent.
 
 - Every GTS and Wonder Trade arrival runs through
   `performTradeWithAnimationAndEvolution`, which awards `gts_trade` (100 XP)

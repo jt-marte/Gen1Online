@@ -140,6 +140,7 @@ end
 -- ---- 1. CONNECT, create a character ------------------------------------------
 local offlineName = game.save.player.name
 item(startMenu(), "CONNECT").onSelect()
+pick("^JOIN")
 check(top() and top().items, "no online save yet -> create/redeem menu")
 pick("CREATE NEW PLAYER")
 check(top() and top().naming, "CREATE NEW PLAYER opens Crystal's naming screen")
@@ -243,12 +244,17 @@ item(list, "ONLINE").onSelect()
 pick("DISCONNECT")
 closeTexts()
 check(game.save.player.name == offlineName, "offline save restored on disconnect")
+-- the server hears it at once: no frozen ghost for the others, and
+-- coming straight back is not refused as "already active"
+check(((get("/gts/players") or {}).players or {})[myId] == nil,
+  "DISCONNECT logs out on the server right away")
 check(game.save.onlineAccount == nil, "restored offline save carries no online account")
 check(not Game2.speedLocked({ stack = { states = {} } }), "speed lock released")
 popTo(world)
 frames(120)
 check(game.save.player.name == offlineName, "offline events do not rename the offline player")
 item(startMenu(), "CONNECT").onSelect()
+pick("^JOIN")
 closeTexts()
 check(game.save.player.name == "ETHAN" and game.save.money == 4242, "reconnect restores the online character")
 popTo(world)

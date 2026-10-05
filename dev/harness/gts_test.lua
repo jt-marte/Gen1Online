@@ -178,6 +178,7 @@ end
 
 -- ---- 1. connect -------------------------------------------------------------
 item(Rig.hook("ui.start_menu.items", function(g, l) return l end, game, {}), "CONNECT").onSelect()
+pick("^JOIN")
 pick("CREATE NEW PLAYER")
 top().onDone("SILVER")
 pick("CRYSTAL")
