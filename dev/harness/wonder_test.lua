@@ -156,6 +156,7 @@ end
 
 -- ---- 1. connect with a fresh character ------------------------------------
 item(startMenu(), "CONNECT").onSelect()
+pick("^JOIN")
 pick("CREATE NEW PLAYER")
 top().onDone("WENDY")
 pick("CRYSTAL")

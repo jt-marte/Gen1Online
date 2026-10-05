@@ -36,6 +36,13 @@ step "synthetic wonder trade" "$(result "$G1O_WORK/wonder.log")"
 DEV=1 "$LUAJIT" "$DEV/harness/gts_test.lua" > "$G1O_WORK/gts.log" 2>&1
 step "synthetic gts" "$(result "$G1O_WORK/gts.log")"
 
+# the server address typed in-game, on Crystal and on Gen 1
+for g in crystal yellow; do
+  "$DEV/server.sh" >/dev/null
+  G1O_GAME=$g DEV=1 "$LUAJIT" "$DEV/harness/address_test.lua" > "$G1O_WORK/address_$g.log" 2>&1
+  step "synthetic server address ($g)" "$(result "$G1O_WORK/address_$g.log")"
+done
+
 # Gen 1: Red, Blue and Yellow on a Gen 1 server; each generation turned away
 # by the other's server
 for g in red blue yellow; do
@@ -69,6 +76,30 @@ if [ "${1:-}" != "quick" ]; then
     run follower.lua follower
     run online.lua online_fresh
     run online.lua online_returning
+  fi
+fi
+# Real Yellow with DramaticShapeVoxelMod installed unmodified next to the mod:
+# remote players inside the voxel scene, name tags in every view.  Needs the
+# Yellow cache (G1O_YELLOW_ROM=<rom> dev/setup.sh) and the voxel mod
+# (G1O_VOXEL_MOD, default ../DramaticShapeVoxelMod-master/DramaticShapeVoxelMod-master).
+VOXEL_MOD=${G1O_VOXEL_MOD:-$(dirname "$REPO")/DramaticShapeVoxelMod-master/DramaticShapeVoxelMod-master}
+YPROFILE=$G1O_WORK/xdg/love/gen1online-yellow
+if [ "${1:-}" != "quick" ]; then
+  if [ ! -f "$YPROFILE/yellow/rom-cache.complete" ] || [ ! -f "$VOXEL_MOD/manifest.json" ]; then
+    echo "== real Yellow + voxel: skipped (needs the Yellow cache and the voxel mod)"
+  else
+    GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
+    rm -rf "$YPROFILE/mods" "$YPROFILE/mod_compat" "$YPROFILE/saves" "$YPROFILE"/save_yellow.lua*
+    mkdir -p "$YPROFILE/mods/gen1online-plus" "$YPROFILE/mods/BATTLE_ART_VOXEL_FORK"
+    (cd "$REPO" && tar --exclude=.git --exclude='*.modpkg' --exclude=dev --exclude=server -cf - .) \
+      | (cd "$YPROFILE/mods/gen1online-plus" && tar -xf -)
+    printf 'server_url=http://127.0.0.1:%s\n' "$GTS_PORT" > "$YPROFILE/mods/gen1online-plus/gts_config.txt"
+    (cd "$VOXEL_MOD" && tar --exclude=.git -cf - .) | (cd "$YPROFILE/mods/BATTLE_ART_VOXEL_FORK" && tar -xf -)
+    rm -rf "$G1O_WORK/shots/gen1_voxel"
+    XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=gen1online-yellow POKEPORT_VERSION=yellow \
+      POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_voxel.lua SHOTS=$G1O_WORK/shots/gen1_voxel \
+      timeout 900 "$LOVE" . > "$G1O_WORK/gen1_voxel.log" 2>&1
+    step "real Yellow + voxel" "$(result "$G1O_WORK/gen1_voxel.log" | sed 's/.*\t//')"
   fi
 fi
 "$DEV/server.sh" stop

@@ -1,5 +1,10 @@
 # Gen1Online+ server configuration.
-# Point the game at a Gen1Online+ server (server/gts_server.py), then restart
+#
+# Players can type the server in the game instead: START > CONNECT > SERVER
+# ADDRESS. A typed address wins over this file until USE CONFIG FILE.
+#
+# This file is the default for a game with no typed address, which suits the
+# host. Point it at a Gen1Online+ server (server/gts_server.py), then restart
 # the game. No rebuild is needed.
 #
 # The server prints the exact line to use when it starts. Typical values:

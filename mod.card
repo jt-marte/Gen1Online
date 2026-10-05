@@ -7,7 +7,7 @@ return {
   tags = { "multiplayer", "coop", "online", "pvp", "gts", "red", "blue", "yellow", "crystal" },
   differences = {
     changed = {
-      "the START menu gains CONNECT (ONLINE while connected); SAVE is hidden while online",
+      "the START menu gains CONNECT (join, or type the server address; ONLINE while connected); SAVE is hidden while online",
       "the bedroom and Pokemon Center PCs gain a GTS row",
       "while online the game runs at 1x speed and, on Crystal, the clock follows the server",
     },
@@ -21,7 +21,7 @@ return {
       "a separate online save that never touches the offline save",
     },
     known = {
-      "needs a running Gen1Online server (gts_config.txt)",
+      "needs a running Gen1Online server: type its address under START > CONNECT > SERVER ADDRESS",
       "in-world link trades are not available on Crystal yet; trade through the GTS",
     },
   },

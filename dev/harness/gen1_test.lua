@@ -189,6 +189,7 @@ end
 
 -- ---- 1. CONNECT, create a character ---------------------------------------------
 item(startMenu(), "CONNECT").onSelect()
+pick("^JOIN")
 check(top() and top().items, "no online save yet -> create/redeem menu")
 pick("CREATE NEW PLAYER")
 check(top() and top().naming, "CREATE NEW PLAYER opens the Gen 1 naming screen")
@@ -243,7 +244,38 @@ end
 waitUntil(function() buddySync(); return exports.netNpcs["777777"] ~= nil end, 10)
 local buddy = exports.netNpcs["777777"]
 check(buddy ~= nil and buddy.sprite ~= nil, "remote player BUDDY spawned with a Gen 1 sprite")
+check(buddy and buddy.spriteId == "SPRITE_RED", "BUDDY carries its sprite id (" .. tostring(buddy and buddy.spriteId) .. ")")
+-- remote players join the overworld's entities for the draw only, so the
+-- engine draws them on every path, a render pipeline (the voxel mod) too
+local function hasBuddy(list)
+  for _, e in ipairs(list or {}) do if e == buddy then return true end end
+  return false
+end
+local during, entitiesBefore = nil, #world.entities
+world.drawProbe = function(ow) during = hasBuddy(ow.entities) end
 check(pcall(world.drawWorld, world), "drawWorld with a remote player")
+world.drawProbe = nil
+check(during == true, "BUDDY is in the overworld's entities while the world draws")
+check(not hasBuddy(world.entities) and #world.entities == entitiesBefore,
+  "and gone from them afterwards (" .. #world.entities .. " entities)")
+-- a pipeline's field-effect pass also tags the trainers, anchored through
+-- the pipeline's own projection
+local Pipelines = require("src.render.Pipelines")
+local fxRuns, anchors = 0, {}
+local ctx = { state = world, drawFx = function() fxRuns = fxRuns + 1 end }
+pcall(Pipelines.drawWorld, "g1o-no-such-pipeline", ctx)
+pcall(ctx.drawFx, function(wx, wy) anchors[#anchors + 1] = wx .. "," .. wy; return wx, wy, 1 end, 2)
+check(fxRuns == 1, "the engine's own field effects still run in a pipeline")
+check(table.concat(anchors, " "):find((buddy.px + 8) .. "," .. (buddy.py + 16), 1, true) ~= nil
+  and #anchors >= 4, "name tags projected at BUDDY's and the player's feet (" .. table.concat(anchors, " ") .. ")")
+-- the idle player keeps polling while someone else is on the map, so
+-- BUDDY's steps arrive within a fraction of a second, not 2-4 s late
+buddySync({ x = 6, y = 8, px = 96, py = 128, facing = "right", moving = true })
+local t0 = socket.gettime()
+waitUntil(function() return buddy.targetPx == 96 end, 3)
+local lag = socket.gettime() - t0
+check(buddy.targetPx == 96 and lag < 1.0, ("an idle player sees BUDDY's step in %.2fs"):format(lag))
+buddySync()
 local crystal = buddySync({ trainerId = "888888", gameVersion = "Pokemon Crystal" })
 check(crystal and crystal.error == "WRONG_GENERATION" and crystal.serverGeneration == 1,
   "a Crystal trainer is turned away by this Gen 1 server")
@@ -491,10 +523,15 @@ item(list, "ONLINE").onSelect()
 pick("DISCONNECT")
 closeTexts()
 check(game.save.player.name == offlineName and game.save.onlineAccount == nil, "offline save restored on disconnect")
+-- the server hears it at once: no frozen ghost for the others, and
+-- coming straight back is not refused as "already active"
+check(((get("/gts/players") or {}).players or {})[myId] == nil,
+  "DISCONNECT logs out on the server right away")
 check(not game:speedLocked(), "speed lock released")
 popTo(world)
 frames(60)
 item(startMenu(), "CONNECT").onSelect()
+pick("^JOIN")
 closeTexts()
 check(game.save.player.name == "ASH" and game.save.money == 4242, "reconnect restores the online character")
 popTo(world)

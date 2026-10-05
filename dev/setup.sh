@@ -13,6 +13,8 @@
 #                                drivers need it, and they need the ROM too).
 #   xdg/love/gen1online-test/    a throwaway LOVE profile with the Crystal
 #                                cache imported (only when a ROM is given)
+#   xdg/love/gen1online-yellow/  the same for Yellow, when G1O_YELLOW_ROM
+#                                names a Yellow ROM (for the voxel driver)
 # The tests run this repo's own server (server/gts_server.py, stdlib Python 3).
 # Also clones gen1recomp next to this repo when it isn't there, at the
 # commit the suite was last verified against ($G1O_RECOMP_REF).
@@ -88,3 +90,13 @@ EOF
 fi
 [ -f "$PROFILE/crystal/rom-cache.complete" ] && echo "Crystal cache: ready" \
   || echo "Crystal cache: missing (pass the ROM to run the real-game drivers)"
+
+# --- optional Yellow profile (G1O_YELLOW_ROM=path/to/yellow.gbc) -------------------
+YPROFILE="$WORK/xdg/love/gen1online-yellow"
+if [ -n "${G1O_YELLOW_ROM:-}" ] && [ ! -f "$YPROFILE/yellow/rom-cache.complete" ] && [ -x "$WORK/bin/love" ]; then
+  (cd "$RECOMP" && XDG_DATA_HOME="$WORK/xdg" POKEPORT_IDENTITY=gen1online-yellow \
+    POKEPORT_VERSION=yellow POKEPORT_IMPORT_ONLY=1 POKEPORT_IMPORT_ROM="$G1O_YELLOW_ROM" \
+    "$WORK/bin/love" .)
+fi
+[ -f "$YPROFILE/yellow/rom-cache.complete" ] && echo "Yellow cache: ready" \
+  || echo "Yellow cache: missing (optional: G1O_YELLOW_ROM=<rom> dev/setup.sh for the voxel driver)"

@@ -17,6 +17,21 @@ A server of our own, built for playing with friends.
   waiting each trainer is dealt another's (never their own). The client reads
   the real pool, and a claim shows the player's own Pokémon leaving.
 - README: hosting for friends on a LAN, over Tailscale, or with a port forward.
+- **Type the server in the game.** START > CONNECT opens JOIN, SERVER
+  ADDRESS and (once one is typed) USE CONFIG FILE. The address screen works
+  on Gen 1 and Crystal, with a keyboard or a controller, and adds `:7779` when
+  no port is given. A typed address is remembered and wins over
+  `gts_config.txt`, which stays the default for the host. An unreachable
+  server is now reported as such, with the address screen, instead of
+  offering to create a new player.
+- **Remote players in render pipelines (voxel mods) on Gen 1.** They join the
+  overworld's entity list for the draw only, so the engine draws them like
+  NPCs on every path: flat (depth-sorted, tall-grass feet), tilt, and a
+  pipeline such as DramaticShapeVoxelMod, which replaces the whole world
+  image and used to leave them invisible. Verified on a real Yellow boot with
+  that mod installed unmodified.
+- **Name tags on Gen 1**, in the flat view and in voxel views (placed through
+  the pipeline's own projection, sized to the sprite at any camera).
 - **Pokémon Red, Blue and Yellow.** The mod runs on Gen 1 again (it has been
   Crystal-only since 0.4.0): connect, overworld sync, chat, GTS, Wonder Trade,
   PVP link battles, co-op parties and, on Gen 1 only, face-to-face link
@@ -57,6 +72,14 @@ A server of our own, built for playing with friends.
   use (`SO_REUSEADDR` let two servers share it, and one data file).
 - The README, the mod card and the in-game party messages no longer promise
   shared party XP, which no client code has ever shared.
+- Other players moved seconds late, in jumps. They only arrive in the answer
+  to this player's own position sync, which a player standing still sent
+  every 2 s (4 s in a menu). With someone else on the map it's now every
+  0.25 s (1 s alone), on both generations.
+- DISCONNECT and QUIT never told the server: the logout was queued on the
+  async engine, which a disconnected game resets and a quitting game never
+  sends. Friends saw a frozen trainer for 30 s, and reconnecting within 10 s
+  was refused as "ALREADY ACTIVE ON ANOTHER DEVICE". Both now log out at once.
 
 ## [0.5.1] - 2026-10-04
 

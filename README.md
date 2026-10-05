@@ -88,11 +88,12 @@ server/start.sh --gen 1 --port 7780 --data server/gts_data_gen1.json
 
 ### 2. Point each game at it
 
-Edit `gts_config.txt` in the mod's folder (next to `main.lua`) and restart the game. The host uses:
+In the game: **START > CONNECT > SERVER ADDRESS**, type the host's address from step 3 (for example `192.168.1.23`, or `100.64.0.7` over Tailscale; `:7779` is added when no port is given) and press **A**. The game remembers it and connects. With a controller, **UP/DOWN** change the last character, **RIGHT** adds one and **LEFT** or **B** deletes; with a keyboard just type and press **Enter**. **USE CONFIG FILE** forgets the typed address.
+
+`gts_config.txt` in the mod's folder (next to `main.lua`) is the default for a game that has no typed address, which suits the host:
 ```text
 server_url=http://127.0.0.1:7779
 ```
-Friends use one of the addresses from step 3. The server speaks plain HTTP, so write `http://`, not `https://`.
 
 ### 3. Let your friends reach it (pick one)
 

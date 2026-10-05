@@ -133,6 +133,7 @@ return function(game)
   check(idx ~= nil, "START menu shows CONNECT")
   sm.list.index = idx
   U.tap(game, "a"); U.wait(10)
+  choose("^JOIN"); U.wait(10)
   local returning = not menuItems(top()):find("CREATE NEW PLAYER")
   say("  " .. (returning and "returning player: logging back in" or "fresh install: creating a character"))
   if returning then

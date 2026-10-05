@@ -231,7 +231,8 @@ local function newGame1()
   function OW:update() self.vanillaUpdates = (self.vanillaUpdates or 0) + 1 end
   function OW:interact() self.vanillaInteracts = (self.vanillaInteracts or 0) + 1 end
   function OW:talkTo(npc) self.vanillaTalks = (self.vanillaTalks or 0) + 1 end
-  function OW:drawWorld() end
+  -- a test can watch what the world would draw (drawProbe(self))
+  function OW:drawWorld() if self.drawProbe then self.drawProbe(self) end end
   function OW:captureSave(save)
     save.player.map, save.player.x, save.player.y = self.map.id, self.player.cellX, self.player.cellY
     save.player.facing = self.player.facing
@@ -261,6 +262,7 @@ local function newGame1()
     draw = function(self) self.drawn = (self.drawn or 0) + 1 end,
   }
   OW.npcs, OW.camera = {}, { x = 0, y = 0 }
+  OW.entities = { OW.player }
   StateStack.states[#StateStack.states + 1] = OW   -- on the stack, without enter()
   -- the real ones rebuild ROM-bound state
   function Game:adoptSave(s) self.save = s end
