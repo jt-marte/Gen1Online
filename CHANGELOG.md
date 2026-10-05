@@ -50,6 +50,13 @@ A server of our own, built for playing with friends.
 
 ### Fixed
 
+- Voxel name tags in DramaticShapeVoxelMod's free cameras (1ST and 3RD): a
+  tag was anchored on the south edge of its trainer's cell, so seen from the
+  east or west it hung half a sprite to one side. It is centred on the cell
+  now, where the voxel card stands; the orbit views are unchanged.
+- The menu that A on another player opens (VIEW TRAINER CARD, PVP, LINK
+  TRADE, CANCEL) was a box too short for its four rows, so the first one was
+  drawn over the top border and its cursor hidden. Gen 1 and Crystal.
 - GTS buy, withdraw and claim changed the game before the server answered:
   withdrawing a listing someone had just bought handed the Pokémon back while
   the buyer also got it. Each now waits for the server, and a refused trade or

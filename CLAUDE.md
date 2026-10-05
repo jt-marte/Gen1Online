@@ -142,15 +142,28 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
 - **Real-Crystal drivers** (`dev/drivers/`) boot the actual game from the
   imported ROM in the engine's `POKEPORT_DRIVER` mode.
 - **Real Yellow + voxel** (`dev/drivers/gen1_voxel.lua`): Yellow with
-  DramaticShapeVoxelMod (`BATTLE_ART_VOXEL_FORK`) installed unmodified next to
-  the mod. It types an address, connects, puts BUDDY beside the player and
-  checks the voxel scene draws him at several voxel levels (a read-only probe
-  through the voxel mod's public `characterRenderers` API), with screenshots
-  in `$G1O_WORK/shots/gen1_voxel`. It needs the Yellow cache
+  DramaticShapeVoxelMod (1.9.0: id `DRAMATIC_SHAPE`; older releases were
+  `BATTLE_ART_VOXEL_FORK`) installed unmodified next to the mod, in a folder
+  named after its manifest id. The voxel mod is Gen 1 only. The driver types
+  an address, connects, puts BUDDY beside the player and checks the voxel
+  scene draws him and his name tag on the orbit rungs (50, 15, FULL, 75) and
+  in the free cameras, 1ST and 3RD (`VoxelState.FP_LEVEL`/`TP_LEVEL`). In
+  those it also checks: the player's own card hidden in 1ST and shown in 3RD,
+  BUDDY's tag centred over his head (seen head-on and diagonally) and gone
+  when he is behind the eye, A on BUDDY opening his menu, START opening the
+  start menu, the free (off-grid) walk reaching the server, and BUDDY gliding
+  to an off-grid spot. Probes are read-only: they count `pose()` calls on
+  BUDDY and the player (the voxel scene poses every entity it draws), and
+  record where `Font.draw` puts each name next to `Voxel3D.project` of
+  BUDDY's card, through the voxel mod's `exports.lib`. 1.9.0 has no
+  `characterRenderers` API any more. Screenshots in
+  `$G1O_WORK/shots/gen1_voxel`. It needs the Yellow cache
   (`G1O_YELLOW_ROM=<rom> dev/setup.sh ...`, profile `gen1online-yellow`) and
-  the voxel mod (`G1O_VOXEL_MOD`, default
-  `../DramaticShapeVoxelMod-master/DramaticShapeVoxelMod-master`); otherwise
-  `run_tests.sh` skips it. The user's Yellow ROM is
+  the voxel mod (`G1O_VOXEL_MOD`, default `../DramaticShapeVoxelMod-latest`,
+  else `../DramaticShapeVoxelMod-master/DramaticShapeVoxelMod-master`);
+  otherwise `run_tests.sh` skips it. In a headless container the real-game
+  drivers run under Xvfb (`Xvfb :99 +extension GLX`, `DISPLAY=:99`); Mesa's
+  llvmpipe carries the voxel pipeline. The user's Yellow ROM is
   `/home/jt/Desktop/Pokemon/Pokemon - Yellow Version (UE) [C][!].gbc` (same
   rules as the Crystal one). Never edit the voxel mod.
   - `follower.lua`: follower and offline checks.
@@ -498,7 +511,16 @@ off the open internet.
   `state.entities` and nothing drawn after `drawWorld` reaches the screen.
   Name tags: `render.hud` on the flat path; inside a pipeline, an extra
   effect on the engine's `ctx.drawFx` (the `Pipelines.drawWorld` wrapper),
-  placed with the pipeline's own `project`. Tilt shows no tags.
+  placed with the pipeline's own `project`. Tilt shows no tags. The
+  projection the pipeline hands `drawFx` is ground-only (no height), so a tag
+  is raised by the sprite's on-screen width; its x comes from the cell centre
+  (where a voxel card stands), its y from the cell's south edge (as the orbit
+  views were tuned). Tags have no depth test: in the voxel views, 1ST
+  included, a trainer behind a building still shows a tag over it.
+- In DramaticShapeVoxelMod's 1ST and 3RD the walk is free (off the grid) and
+  `player.moving` stays false, so `sync_pos` goes out on each cell crossed and
+  on the idle interval (0.25 s with someone on the map); remote clients glide
+  between those points (measured: a new position every sample over 1 s).
 - Remote players only arrive in the answer to this client's own `sync_pos`,
   so an idle client keeps syncing (`GtsUI.idleSyncInterval`: 0.25 s with
   someone else on the map, 1 s alone). DISCONNECT and QUIT log out

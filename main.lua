@@ -3064,6 +3064,10 @@
                 local fx, fy = px + 8, py + 16
                 local sx, sy, depth = project(fx, fy)
                 if not sx then return end
+                -- centred on the cell centre, where a voxel card stands:
+                -- the free cameras (1ST, 3RD) turn, and seen from the east
+                -- or west the cell's south edge is half a card to one side
+                local cx = project(fx, py + 8)
                 local w
                 if not firstPerson and tonumber(depth) and tonumber(mdepth) and mdepth > 0 then
                   w = w0 * depth / mdepth
@@ -3075,7 +3079,7 @@
                 -- text keeps one readable size
                 local s = (scale or 1) / 2
                 love.graphics.push()
-                love.graphics.translate(sx, sy - w * 20 / 16)
+                love.graphics.translate(cx or sx, sy - w * 20 / 16)
                 love.graphics.scale(s, s)
                 GtsUI.drawTag(name, 0, -16)
                 love.graphics.pop()
@@ -6596,7 +6600,7 @@ return function(mod)
           },
           { label = "CANCEL", onSelect = function() end }
         }
-        Game.stack:push(Menu.new(Game, items, { tx = 1, ty = 1, tw = 16, th = 8 }))
+        Game.stack:push(Menu.new(Game, items, { tx = 1, ty = 1, tw = 16 }))
         return
       end
     end
@@ -6877,7 +6881,7 @@ return function(mod)
             },
             { label = "CANCEL", onSelect = function() end }
           }
-          curGame.stack:push(Menu.new(curGame, items, { tx = 1, ty = 1, tw = 16, th = 8 }))
+          curGame.stack:push(Menu.new(curGame, items, { tx = 1, ty = 1, tw = 16 }))
           return
         end
       end

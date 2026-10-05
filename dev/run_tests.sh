@@ -79,10 +79,14 @@ if [ "${1:-}" != "quick" ]; then
   fi
 fi
 # Real Yellow with DramaticShapeVoxelMod installed unmodified next to the mod:
-# remote players inside the voxel scene, name tags in every view.  Needs the
-# Yellow cache (G1O_YELLOW_ROM=<rom> dev/setup.sh) and the voxel mod
-# (G1O_VOXEL_MOD, default ../DramaticShapeVoxelMod-master/DramaticShapeVoxelMod-master).
-VOXEL_MOD=${G1O_VOXEL_MOD:-$(dirname "$REPO")/DramaticShapeVoxelMod-master/DramaticShapeVoxelMod-master}
+# remote players inside the voxel scene, name tags in every view, the free
+# cameras (1ST and 3RD).  Needs the Yellow cache (G1O_YELLOW_ROM=<rom>
+# dev/setup.sh) and the voxel mod (G1O_VOXEL_MOD, default
+# ../DramaticShapeVoxelMod-latest, else
+# ../DramaticShapeVoxelMod-master/DramaticShapeVoxelMod-master).
+VOXEL_MOD=${G1O_VOXEL_MOD:-$(dirname "$REPO")/DramaticShapeVoxelMod-latest}
+[ -f "$VOXEL_MOD/manifest.json" ] || [ -n "${G1O_VOXEL_MOD:-}" ] \
+  || VOXEL_MOD=$(dirname "$REPO")/DramaticShapeVoxelMod-master/DramaticShapeVoxelMod-master
 YPROFILE=$G1O_WORK/xdg/love/gen1online-yellow
 if [ "${1:-}" != "quick" ]; then
   if [ ! -f "$YPROFILE/yellow/rom-cache.complete" ] || [ ! -f "$VOXEL_MOD/manifest.json" ]; then
@@ -90,11 +94,12 @@ if [ "${1:-}" != "quick" ]; then
   else
     GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
     rm -rf "$YPROFILE/mods" "$YPROFILE/mod_compat" "$YPROFILE/saves" "$YPROFILE"/save_yellow.lua*
-    mkdir -p "$YPROFILE/mods/gen1online-plus" "$YPROFILE/mods/BATTLE_ART_VOXEL_FORK"
+    VOXEL_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$VOXEL_MOD/manifest.json")
+    mkdir -p "$YPROFILE/mods/gen1online-plus" "$YPROFILE/mods/$VOXEL_ID"
     (cd "$REPO" && tar --exclude=.git --exclude='*.modpkg' --exclude=dev --exclude=server -cf - .) \
       | (cd "$YPROFILE/mods/gen1online-plus" && tar -xf -)
     printf 'server_url=http://127.0.0.1:%s\n' "$GTS_PORT" > "$YPROFILE/mods/gen1online-plus/gts_config.txt"
-    (cd "$VOXEL_MOD" && tar --exclude=.git -cf - .) | (cd "$YPROFILE/mods/BATTLE_ART_VOXEL_FORK" && tar -xf -)
+    (cd "$VOXEL_MOD" && tar --exclude=.git -cf - .) | (cd "$YPROFILE/mods/$VOXEL_ID" && tar -xf -)
     rm -rf "$G1O_WORK/shots/gen1_voxel"
     XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=gen1online-yellow POKEPORT_VERSION=yellow \
       POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_voxel.lua SHOTS=$G1O_WORK/shots/gen1_voxel \
