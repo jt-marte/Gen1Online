@@ -959,7 +959,7 @@ class RulesFileTests(unittest.TestCase):
         view = gts_server.rules_view(gts_server.parse_rules(""))
         self.assertEqual(view, {"nuzlocke": "off", "randomizer": False, "encounters": False,
                                 "items": False, "badges": False, "sharedKeyItems": False,
-                                "active": False})
+                                "multiworld": False, "players": 1, "active": False})
 
     def test_the_shipped_file_parses_to_the_defaults(self):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_config.txt")
@@ -987,6 +987,7 @@ class RulesFileTests(unittest.TestCase):
     def test_mistakes_name_the_line(self):
         for text, fragment in (("nuzlocke = soft", "line 1"), ("\nrandomiser = on", "line 2"),
                                ("seed = 0", "seed"), ("seed = x", "line 1"),
+                               ("players = 1", "players must be 2"), ("players = 9", "2..8"),
                                ("randomizer = maybe", "on or off"), ("randomizer", "key = value")):
             with self.assertRaises(ValueError) as ctx:
                 gts_server.parse_rules(text)
@@ -1067,6 +1068,68 @@ class GameModeTests(ServerTest):
             self.assertTrue(1 <= seed <= gts_server.SEED_MAX)
 
 
+class MultiworldRulesTests(unittest.TestCase):
+    def test_the_split_is_an_option_of_the_randomizer(self):
+        view = gts_server.rules_view(gts_server.parse_rules(
+            "randomizer = on\nmultiworld = on\nplayers = 3\nshared_key_items = off"))
+        self.assertEqual((view["multiworld"], view["players"]), (True, 3))
+        self.assertTrue(view["sharedKeyItems"], "a split world needs the shared finds")
+        off = gts_server.rules_view(gts_server.parse_rules("randomizer = on\nplayers = 3"))
+        self.assertEqual((off["multiworld"], off["players"]), (False, 1), "multiworld = off: one world")
+        alone = gts_server.rules_view(gts_server.parse_rules("multiworld = on\nplayers = 3"))
+        self.assertEqual((alone["multiworld"], alone["players"]), (False, 1), "it needs the randomizer")
+        nothing = gts_server.rules_view(gts_server.parse_rules(
+            "randomizer = on\nmultiworld = on\nrandomize_items = off\nrandomize_badges = off"))
+        self.assertFalse(nothing["multiworld"], "nothing to split")
+
+
+class MultiworldTests(ServerTest):
+    generation = 1
+    game = "Pokemon Yellow"
+    rules = {"nuzlocke": "hardcore", "randomizer": True, "multiworld": True, "players": 2,
+             "seed": 99}
+
+    def join(self, account=None, fingerprint=1234, game="YELLOW"):
+        fields = {"fingerprint": fingerprint, "gameName": game}
+        if account:
+            fields.update(trainerId=account["trainerId"], token=account["token"])
+        return self.post("run_join", **fields)
+
+    def test_worlds_go_first_come_and_stay(self):
+        rules = self.get("/server/info")["rules"]
+        self.assertEqual((rules["multiworld"], rules["players"]), (True, 2))
+        ash, misty, brock = self.register("ASH"), self.register("MISTY"), self.register("BROCK")
+        check = self.join()
+        self.assertTrue(check["success"] and check["world"] is None and check["free"] == 2, check)
+        self.assertEqual(self.join(ash)["world"], 1)
+        self.assertEqual(self.join(ash)["world"], 1, "the same trainer keeps the world")
+        self.assertEqual(self.join(misty)["world"], 2)
+        self.assertError(self.join(brock), "RUN_FULL")
+        self.assertError(self.join(), "RUN_FULL")
+        self.assertEqual(self.join(misty)["world"], 2, "a member is let back in when full")
+        self.assertEqual(self.get("/gts/browse")["history"][0]["text"],
+                         "MISTY JOINED THE RUN AS WORLD 2!")
+
+    def test_one_game_per_multiworld(self):
+        ash, misty = self.register("ASH"), self.register("MISTY")
+        self.assertTrue(self.join(ash, fingerprint=1234, game="YELLOW")["success"])
+        res = self.join(misty, fingerprint=999, game="RED")
+        self.assertError(res, "WRONG_WORLD_DATA")
+        self.assertEqual(res["gameName"], "YELLOW")
+        self.assertError(self.join(fingerprint=999), "WRONG_WORLD_DATA")
+
+    def test_worlds_outlive_restarts_and_wipes(self):
+        ash, misty = self.register("ASH"), self.register("MISTY")
+        self.join(ash)
+        self.join(misty)
+        self.restart()
+        self.assertEqual(self.join(misty)["world"], 2)
+        res = self.post("run_wipe", trainerId=ash["trainerId"], token=ash["token"], runId=1)
+        self.assertEqual(res["run"]["runId"], 2)
+        self.assertEqual(self.join(ash)["world"], 1, "a new run keeps the team's worlds")
+        self.assertError(self.join(self.register("BROCK")), "RUN_FULL")
+
+
 class ModesOffTests(ServerTest):
     generation = 1
     game = "Pokemon Red"
@@ -1078,6 +1141,11 @@ class ModesOffTests(ServerTest):
         self.assertError(self.post("run_wipe", trainerId=red["trainerId"], runId=1),
                          "NOT_NUZLOCKE")
         self.assertIs(self.sync(red["trainerId"])["run"]["active"], False)
+
+    def test_one_world_for_everyone(self):
+        red = self.register("RED")
+        res = self.post("run_join", trainerId=red["trainerId"], fingerprint=5)
+        self.assertEqual((res["success"], res["world"], res["players"]), (True, 1, 1))
 
     def test_a_random_seed_per_run(self):
         seed = self.get("/server/info")["rules"]["seed"]

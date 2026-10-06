@@ -8,9 +8,12 @@
 -- main.lua builds it once (Gen 1 only) with the few things it needs:
 --   ctx = { mod, requireLocal, isOnline(), post(payload, timeout),
 --           trainerId(save), writeOnlineSave(save), getWorld(game),
---           storageWrite(key, value), wrapText(text), home = {map, x, y} }
--- and calls M.connected(game, fresh) after CONNECT and M.synced(game, res)
--- with every sync_pos answer.  M.rules is the server's rules view.
+--           storageWrite(key, value), storedAccount(), wrapText(text),
+--           home = {map, x, y} }
+-- and calls M.precheck(game, rules) on CONNECT (before anything changes),
+-- M.connected(game, rules, fresh) once connected and M.synced(game, res)
+-- with every sync_pos answer.  M.rules is the server's rules view; M.world
+-- is this player's world in a multiworld run (multiworld = on).
 return function(ctx)
   local mod = ctx.mod
   local Rng = ctx.requireLocal("modes/rng.lua")
@@ -26,7 +29,7 @@ return function(ctx)
   local okV, victories = pcall(require, "data.scripts.victories")
   if not (okV and type(victories) == "table") then victories = {} end
 
-  local M = { rules = nil }
+  local M = { rules = nil, world = nil }
   local plan, planKey, undo = nil, nil, nil
   local reports, retryAt = {}, 0     -- shared finds waiting to reach the server
   local notes = {}                   -- texts for when the overworld is free
@@ -84,12 +87,17 @@ return function(ctx)
 
   -- ---- the randomized world: built from the seed, put back when it ends ---------
 
+  local function worlds(r)
+    return (r and r.multiworld and tonumber(r.players)) or 1
+  end
+
   function M.refresh()
     local r = rules()
     local key = nil
-    if r and r.randomizer and r.seed and Game.data then
-      key = ("%s/%s%s%s"):format(tostring(r.seed), tostring(r.encounters), tostring(r.items),
-                                 tostring(r.badges))
+    -- a multiworld player without a world yet (refused, or not joined) plays none
+    if r and r.randomizer and r.seed and Game.data and (worlds(r) == 1 or M.world) then
+      key = ("%s/%s%s%s/%d:%d"):format(tostring(r.seed), tostring(r.encounters), tostring(r.items),
+                                       tostring(r.badges), worlds(r), worlds(r) > 1 and M.world or 1)
     end
     if key == planKey then return end
     if undo then undo(); undo = nil end
@@ -97,13 +105,39 @@ return function(ctx)
     if not key then return end
     plan = Randomizer.build({ seed = r.seed, data = Game.data, victories = victories,
                               logic = L, Rng = Rng, encounters = r.encounters,
-                              items = r.items, badges = r.badges })
+                              items = r.items, badges = r.badges,
+                              worlds = worlds(r), world = M.world })
     undo = Randomizer.apply(plan, Game.data, victories)
     if not plan.ok then
       note("THE RANDOMIZER COULDN'T SHUFFLE THIS GAME'S ITEMS. THEY STAY WHERE THEY ARE.")
     end
   end
   function M.plan() return plan end
+
+  -- Anything that reads the item data for a build or a fingerprint must see
+  -- the vanilla game: while this world's shuffle is applied, the map objects
+  -- hold its items, and another world built from those would differ from
+  -- the one every other client builds.
+  local function withVanilla(fn)
+    if not undo then return fn() end
+    undo()
+    local ok, res = pcall(fn)
+    undo = Randomizer.apply(plan, Game.data, victories)
+    if not ok then error(res, 0) end
+    return res
+  end
+
+  -- another world's plan in this run (the same pure build every client does)
+  function M.planFor(world)
+    local r = M.rules
+    if not (r and r.randomizer and r.seed and Game.data) then return nil end
+    return withVanilla(function()
+      return Randomizer.build({ seed = r.seed, data = Game.data, victories = victories,
+                                logic = L, Rng = Rng, encounters = r.encounters,
+                                items = r.items, badges = r.badges,
+                                worlds = worlds(r), world = world })
+    end)
+  end
 
   local function mapSpecies(species)
     return plan and plan.species and plan.species[species] or nil
@@ -418,7 +452,7 @@ return function(ctx)
     new.position = { map = home.map, x = home.x, y = home.y, facing = "down" }
     new.spawn = "SPAWN_HOME"
     new.onlineAccount = old.onlineAccount
-    new.g1oModes = { run = r.runId, seed = r.seed }
+    new.g1oModes = { run = r.runId, seed = r.seed, world = M.world }
     game.save = new
     if game.adoptSave then game:adoptSave(new) end
     lastTeamRev = nil
@@ -445,6 +479,55 @@ return function(ctx)
     end
   end
 
+  -- ---- the multiworld: one world per player ----------------------------------------
+
+  local function gameName()
+    local ok, id = pcall(GameVersion.get)
+    return ok and tostring(id or "?"):upper() or "?"
+  end
+
+  -- this game's item places, as the server compares them between players
+  local function fingerprint(r)
+    return withVanilla(function()
+      return Randomizer.fingerprint(Randomizer.locations(Game.data, victories, L,
+                                                         { items = r.items, badges = r.badges }))
+    end)
+  end
+
+  local function join(r, account)
+    local res = ctx.post({ action = "run_join", trainerId = account and account.trainerId,
+                           token = account and account.token, fingerprint = fingerprint(r),
+                           gameName = gameName() }, 3.0)
+    if res and not res.success
+        and (res.error == "UNKNOWN_TRAINER" or res.error == "INVALID_TOKEN") and account then
+      return join(r, nil)   -- an account this server forgot: ask as a newcomer
+    end
+    return res
+  end
+
+  local function refusal(res, r)
+    if not res then return "COULDN'T JOIN THE RUN: THE SERVER DIDN'T ANSWER." end
+    if res.error == "RUN_FULL" then
+      return ("THIS RUN IS FULL: ALL %d WORLDS ARE TAKEN. ASK THE HOST FOR A SPOT.")
+        :format(tonumber(res.players) or worlds(r))
+    elseif res.error == "WRONG_WORLD_DATA" then
+      return ("THIS RUN IS PLAYED ON POKéMON %s. YOUR GAME'S WORLD IS DIFFERENT, SO IT CAN'T JOIN.")
+        :format(tostring(res.gameName or "ANOTHER GAME"))
+    end
+    return "COULDN'T JOIN THE RUN: " .. tostring(res.error or "UNKNOWN ERROR") .. "."
+  end
+
+  -- On CONNECT, before the offline save is touched: a full multiworld run or
+  -- another game's item data turns the player away.  Returns the message.
+  function M.precheck(game, serverRules)
+    local r = type(serverRules) == "table" and serverRules or nil
+    if not (r and r.active and r.multiworld and worlds(r) > 1 and Game.data) then return nil end
+    local acc = ctx.storedAccount and ctx.storedAccount()
+    local res = join(r, type(acc) == "table" and acc.token and acc or nil)
+    if res and res.success then return nil end
+    return refusal(res, r)
+  end
+
   -- What the server is playing, in a few words for a text box.
   function M.describe()
     local r = M.rules
@@ -452,6 +535,10 @@ return function(ctx)
     local parts = {}
     if r.nuzlocke == "hardcore" then parts[#parts + 1] = "HARDCORE NUZLOCKE" end
     if r.randomizer then parts[#parts + 1] = "RANDOMIZER" end
+    if r.multiworld then
+      parts[#parts + 1] = ("MULTIWORLD (%s WORLD %s OF %d)"):format("YOU ARE",
+        tostring(M.world or "?"), worlds(r))
+    end
     if r.sharedKeyItems then parts[#parts + 1] = "SHARED KEY ITEMS" end
     return ("MODES: %s. RUN %s."):format(table.concat(parts, ", "), tostring(r.runId))
   end
@@ -466,6 +553,10 @@ return function(ctx)
       for _, g in ipairs(st.graveyard) do dead[#dead + 1] = tostring(g.name) end
       lines[#lines + 1] = #dead > 0 and ("FALLEN: " .. table.concat(dead, ", ") .. ".")
         or "NO POKéMON LOST YET."
+    end
+    if M.rules and M.rules.multiworld and plan and plan.ok then
+      lines[#lines + 1] = ("YOUR WORLD HOLDS %d OF THE TEAM'S %d KEY ITEMS AND BADGES.")
+        :format(plan.myProgression or 0, plan.totalProgression or 0)
     end
     if sharing() then
       local got = {}
@@ -483,9 +574,21 @@ return function(ctx)
   -- `fresh` = a brand-new character, whose new save starts this run.
   function M.connected(game, serverRules, fresh)
     M.rules = (type(serverRules) == "table" and serverRules.active) and serverRules or nil
+    M.world = nil
     lastTeamRev, reports, wipeQueued, pendingRestart = nil, {}, false, false
     if not M.rules or not game or not game.save then return end
+    if M.rules.multiworld and worlds(M.rules) > 1 then
+      local res = join(M.rules, game.save.onlineAccount)
+      if not (res and res.success and res.world) then
+        -- someone took the last world between CONNECT and now: no modes
+        game.stack:push(TextBox.new(game, ctx.wrapText(refusal(res, M.rules))))
+        M.rules = nil
+        return
+      end
+      M.world = res.world
+    end
     local st = state(game.save)
+    st.world = M.world
     if fresh then
       st.run, st.seed = M.rules.runId, M.rules.seed
       ctx.writeOnlineSave(game.save)

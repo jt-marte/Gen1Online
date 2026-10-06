@@ -135,6 +135,14 @@ if [ "${1:-}" != "quick" ]; then
       POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_nuzlocke.lua SHOTS=$G1O_WORK/shots/gen1_nuzlocke \
       timeout 900 "$LOVE" . > "$G1O_WORK/gen1_nuzlocke.log" 2>&1
     step "real Yellow Nuzlocke battles" "$(result "$G1O_WORK/gen1_nuzlocke.log" | sed 's/.*\t//')"
+    # the multiworld split: two worlds, a third player turned away
+    printf 'randomizer = on\nmultiworld = on\nplayers = 2\nseed = 4242\n' > "$G1O_WORK/server/multiworld_config.txt"
+    GTS_CONFIG="$G1O_WORK/server/multiworld_config.txt" GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
+    rm -rf "$YPROFILE/mod_compat" "$YPROFILE/saves" "$YPROFILE"/save_yellow.lua*
+    XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=gen1online-yellow POKEPORT_VERSION=yellow \
+      POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_multiworld.lua SHOTS=$G1O_WORK/shots/gen1_multiworld \
+      timeout 600 "$LOVE" . > "$G1O_WORK/gen1_multiworld.log" 2>&1
+    step "real Yellow multiworld" "$(result "$G1O_WORK/gen1_multiworld.log" | sed 's/.*\t//')"
   fi
 fi
 "$DEV/server.sh" stop

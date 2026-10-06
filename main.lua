@@ -5928,8 +5928,14 @@
       game.stack:push(TextBox.new(game, wrapText(GtsUI.wrongWorldText(srvGen))))
       return
     end
-    -- the server's game modes (modes/init.lua), handed over once connected
+    -- the server's game modes (modes/init.lua), handed over once connected;
+    -- a full multiworld run, or one on another game's data, turns us away here
     GtsUI.serverRules = srvInfo.rules
+    local modesRefusal = GtsUI.Modes and GtsUI.Modes.precheck(game, srvInfo.rules)
+    if modesRefusal then
+      game.stack:push(TextBox.new(game, wrapText(modesRefusal)))
+      return
+    end
 
     -- 2. Backup the local offline save in memory and capture exact offline coordinates
     if game and game.save and not isGtsServerConnected then
@@ -6095,6 +6101,7 @@
         writeOnlineSave = writeOnlineSave,
         getWorld = getWorld,
         storageWrite = storageWrite,
+        storedAccount = function() return storageRead("online_account") end,
         wrapText = wrapText,
         home = { map = defaultStartingIndoor, x = defaultStartingIndoorX, y = defaultStartingIndoorY },
       })

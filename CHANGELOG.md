@@ -26,6 +26,15 @@ A server of our own, built for playing with friends.
   (`dev/drivers/gen1_nuzlocke.lua`): in hardcore, a refused battle item is
   refused before the target picker, and the Safari Zone's own BALL menu
   follows the one-encounter-per-area rule.
+- **Multiworld randomizer** (`multiworld = on`, `players = N` in
+  `server/server_config.txt`, off by default): every player gets their own
+  world and each badge, HM and key item exists in exactly one of them, split
+  evenly, with the team's shared finds keeping every seed finishable. Wild
+  Pokémon are shuffled per world. Worlds go to the first N players to join
+  and outlive Nuzlocke restarts; a full run or another game's item data is
+  refused on CONNECT before anything changes. ONLINE > RUN INFO names your
+  world and how many of the team's key items it holds. Server: `multiworld`
+  and `players` in the rules view, and the `run_join` action.
 - `server/gts_server.py`: a single-file, standard-library Python 3.8+ server
   that speaks the client's protocol. `python3 server/gts_server.py` (or
   `server/start.sh`, or double-clicking `server/start.bat`) listens on port

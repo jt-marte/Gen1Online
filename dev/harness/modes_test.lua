@@ -216,6 +216,103 @@ do
     "undo puts every item, line and text back")
 end
 
+-- ---- multiworld: every progression item in exactly one world -----------------------
+do
+  local isProg = {}
+  for _, id in ipairs(L.PROGRESSION) do isProg[id] = true end
+  local function team(seed, n, opts)
+    opts = opts or {}
+    local plans = {}
+    for w = 1, n do
+      plans[w] = R.build({ seed = seed, data = data, victories = victories, logic = L, Rng = Rng,
+                           encounters = true, items = opts.items ~= false, badges = true,
+                           worlds = n, world = w })
+    end
+    return plans
+  end
+  -- the team collects from every world into one shared inventory
+  local function teamFinishes(plans)
+    local have, got = {}, {}
+    local changed = true
+    while changed do
+      changed = false
+      for w, plan in ipairs(plans) do
+        for _, loc in ipairs(plan.locations) do
+          local c = plan.content[loc.key] or (not loc.shuffled and loc.vanilla)
+          local k = w .. "|" .. loc.key
+          if c and not got[k] and L.satisfied(loc.reqSet, have) then
+            got[k], have[c.item], changed = true, true, true
+          end
+        end
+      end
+    end
+    return L.satisfied(L.expand(L.GOAL), have)
+  end
+  local once, finish, sizes, balanced, ok = true, true, true, true, true
+  for n = 2, 4 do
+    for seed = 1, 40 do
+      local plans = team(seed, n)
+      local count = {}
+      local lo, hi = math.huge, 0
+      for _, plan in ipairs(plans) do
+        if not plan.ok then ok = false end
+        local k = 0
+        for _ in pairs(plan.content) do k = k + 1 end
+        if k ~= #plan.locations then sizes = false end
+        for _, c in pairs(plan.content) do
+          if isProg[c.item] then count[c.item] = (count[c.item] or 0) + 1 end
+        end
+        lo, hi = math.min(lo, plan.myProgression), math.max(hi, plan.myProgression)
+      end
+      for _, id in ipairs(L.PROGRESSION) do if count[id] ~= 1 then once = false end end
+      if hi - lo > 3 then balanced = false end
+      if not teamFinishes(plans) then finish = false end
+    end
+  end
+  check(ok, "multiworld: every plan builds (2 to 4 worlds, 40 seeds each)")
+  check(once, "each badge, HM and key item is in exactly one world")
+  check(sizes, "every world still fills every item place")
+  check(finish, "the team can always finish with its shared finds")
+  check(balanced, "the worlds hold about as much progression as each other")
+
+  local a, b = team(5, 2), team(5, 2)
+  local same, differs = true, false
+  for k, c in pairs(a[1].content) do
+    if b[1].content[k].item ~= c.item then same = false end
+    if a[2].content[k].item ~= c.item then differs = true end
+  end
+  check(same and differs, "a world is the same on every client, and differs from the next")
+  check(a[1].species.MON10 ~= nil and a[1].species ~= a[2].species
+    and (function()
+      for k, v in pairs(a[1].species) do if a[2].species[k] ~= v then return true end end
+    end)(), "wild Pokémon are shuffled per world")
+  check(a[1].totalProgression == #L.PROGRESSION, "the team's total is every progression item once")
+
+  local solo = R.build({ seed = 77, data = data, victories = victories, logic = L, Rng = Rng,
+                         encounters = true, items = true, badges = true })
+  local one = R.build({ seed = 77, data = data, victories = victories, logic = L, Rng = Rng,
+                        encounters = true, items = true, badges = true, worlds = 1, world = 1 })
+  local equal = true
+  for k, c in pairs(solo.content) do if one.content[k].item ~= c.item then equal = false end end
+  for k, v in pairs(solo.species) do if one.species[k] ~= v then equal = false end end
+  check(equal, "one world is exactly the plain randomizer")
+
+  local badgesOnly = team(3, 3, { items = false })
+  local gymsWithBadges = 0
+  for _, plan in ipairs(badgesOnly) do
+    for _, c in pairs(plan.gyms) do if c.item:find("BADGE") then gymsWithBadges = gymsWithBadges + 1 end end
+  end
+  check(gymsWithBadges == 8 and teamFinishes(badgesOnly),
+    "badges only: 8 badges across 3 worlds' gyms, the other leaders hand out filler")
+
+  local fp = R.fingerprint(R.locations(data, victories, L, { items = true, badges = true }))
+  maps.ROUTE_9.objects[1].item = "RARE_CANDY"
+  local fp2 = R.fingerprint(R.locations(data, victories, L, { items = true, badges = true }))
+  maps.ROUTE_9.objects[1].item = "POTION"
+  check(fp == R.fingerprint(R.locations(data, victories, L, { items = true, badges = true }))
+    and fp ~= fp2, "the fingerprint is stable, and changes with the item data")
+end
+
 -- ---- a world the logic does not know --------------------------------------------------
 do
   local strange = { maps = { NOWHERE = { objects = { { index = 1, item = "HM_CUT" } } } },

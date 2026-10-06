@@ -4,11 +4,18 @@
 -- a Red player each get a world their game can finish).
 --
 --   plan = Randomizer.build{ seed=, data=, victories=, logic=, Rng=,
---                            encounters=, items=, badges= }
+--                            encounters=, items=, badges=, worlds=, world= }
 --   plan.species[VANILLA] = REPLACEMENT          (wild, fishing, static)
 --   plan.content[key] = { item=, count= }        (every shuffled place)
 --   plan.gifts[VANILLA_ITEM], plan.gyms[VICTORY_KEY] -> content
 --   local undo = Randomizer.apply(plan, data, victories); undo()
+--
+-- Multiworld (worlds = N > 1): the team plays N worlds, and every badge, HM
+-- and key item exists in exactly one of them.  The fill places all N worlds
+-- at once against the team's one shared inventory (finds are shared), so
+-- the team can always finish, and each client keeps only its own world k.
+-- Wild Pokémon get one shuffle per world.  Every client must hold the same
+-- item data for this (R.fingerprint), which the server checks.
 local R = {}
 
 -- ---- Pokémon ------------------------------------------------------------------
@@ -161,18 +168,32 @@ end
 -- One forward fill: progression first, each item into a spot the items
 -- placed before it already reach, then everything else at random.  nil when
 -- the fill painted itself into a corner (the caller retries).
-local function fill(rng, locs, L)
+local function fill(rng, locs, L, worlds, fallback)
   local contents, pool = {}, {}
   for i, loc in ipairs(locs) do
     if loc.shuffled then pool[#pool + 1] = loc.vanilla else contents[i] = loc.vanilla end
   end
   local isProg = {}
   for _, id in ipairs(L.PROGRESSION) do isProg[id] = true end
-  local prog, filler = {}, {}
+  local prog, filler, seen, spare = {}, {}, {}, 0
   for _, entry in ipairs(pool) do
-    local list = isProg[entry.item] and prog or filler
-    list[#list + 1] = entry
+    if isProg[entry.item] and seen[entry.item] then
+      spare = spare + 1           -- a multiworld keeps one copy for the team
+    elseif isProg[entry.item] then
+      seen[entry.item] = true
+      prog[#prog + 1] = entry
+    else
+      filler[#filler + 1] = entry
+    end
   end
+  -- the other worlds' copies become filler: more of the worlds' own items
+  -- (a POTION when the shuffle holds nothing but badges)
+  local fillerCount = #filler
+  for _ = 1, spare do
+    filler[#filler + 1] = fillerCount > 0 and filler[rng:int(1, fillerCount)] or fallback
+  end
+  local placed = {}
+  local balance = (worlds or 1) > 1
   rng:shuffle(prog)
   for _, entry in ipairs(prog) do
     local have = reachable(locs, contents, L)
@@ -185,7 +206,21 @@ local function fill(rng, locs, L)
       end
     end
     if #open == 0 then return nil end
-    contents[weightedPick(rng, open, locs)] = entry
+    if balance then
+      -- a multiworld fills the worlds evenly: the next item goes to a world
+      -- holding the least progression among those with a spot open for it
+      local least = math.huge
+      for _, i in ipairs(open) do least = math.min(least, placed[locs[i].world] or 0) end
+      local even = {}
+      for _, i in ipairs(open) do
+        if (placed[locs[i].world] or 0) == least then even[#even + 1] = i end
+      end
+      open = even
+    end
+    local at = weightedPick(rng, open, locs)
+    contents[at] = entry
+    local w = locs[at].world or 1
+    placed[w] = (placed[w] or 0) + 1
   end
   local have = reachable(locs, contents, L)
   if not L.satisfied(L.expand(L.GOAL), have) then return nil end
@@ -205,19 +240,49 @@ end
 
 R.ATTEMPTS = 60
 
+-- A checksum of a world's item places and what vanilla puts there: equal
+-- fingerprints mean every client computes the same multiworld.  Pure
+-- arithmetic, like the RNG, so every client agrees on it.
+function R.fingerprint(locs)
+  local h = 5381
+  for _, loc in ipairs(locs or {}) do
+    local s = loc.key .. "=" .. loc.vanilla.item .. ";"
+    for i = 1, #s do h = (h * 33 + s:byte(i)) % 2147483647 end
+  end
+  return h
+end
+
 function R.build(opts)
   local L, Rng = opts.logic, opts.Rng
+  local worlds = math.max(1, math.floor(tonumber(opts.worlds) or 1))
+  local world = math.min(worlds, math.max(1, math.floor(tonumber(opts.world) or 1)))
   local plan = { seed = opts.seed, species = nil, content = {}, gifts = {}, gyms = {},
-                 locations = {}, ok = true }
+                 locations = {}, ok = true, worlds = worlds, world = world,
+                 myProgression = 0, totalProgression = 0 }
   if opts.encounters then
-    plan.species = R.speciesMap(Rng.new(opts.seed, 1), opts.data.pokemon)
+    -- one shuffle per world in a multiworld (a single world keeps salt 1)
+    local salt = worlds > 1 and (1000 + world) or 1
+    plan.species = R.speciesMap(Rng.new(opts.seed, salt), opts.data.pokemon)
   end
+  local base = R.locations(opts.data, opts.victories or {}, L, opts)
+  plan.fingerprint = R.fingerprint(base)
   if not (opts.items or opts.badges) then return plan end
-  local locs = R.locations(opts.data, opts.victories or {}, L, opts)
-  plan.locations = locs
+  plan.locations = base
+  -- every world's places, world 1 first: the same list on every client
+  local locs = base
+  if worlds > 1 then
+    locs = {}
+    for w = 1, worlds do
+      for _, loc in ipairs(base) do
+        locs[#locs + 1] = setmetatable({ world = w }, { __index = loc })
+      end
+    end
+  end
+  local fallback = { item = (opts.data.items or {}).POTION and "POTION" or base[1] and base[1].vanilla.item,
+                     count = 1 }
   local contents
   for attempt = 1, R.ATTEMPTS do
-    contents = fill(Rng.new(opts.seed, 100 + attempt), locs, L)
+    contents = fill(Rng.new(opts.seed, 100 + attempt), locs, L, worlds, fallback)
     if contents then plan.attempts = attempt break end
   end
   if not contents then
@@ -226,10 +291,18 @@ function R.build(opts)
     plan.ok = false
     return plan
   end
+  local isProg = {}
+  for _, id in ipairs(L.PROGRESSION) do isProg[id] = true end
+  local counted = {}
   for i, loc in ipairs(locs) do
-    if loc.shuffled then
-      local c = contents[i]
+    local c = contents[i]
+    if loc.shuffled and c and isProg[c.item] and not counted[c.item] then
+      counted[c.item] = true
+      plan.totalProgression = plan.totalProgression + 1
+    end
+    if loc.shuffled and (loc.world or 1) == world then
       plan.content[loc.key] = c
+      if isProg[c.item] then plan.myProgression = plan.myProgression + 1 end
       if loc.kind == "gift" then plan.gifts[loc.gift] = c end
       if loc.kind == "gym" then plan.gyms[loc.victoryKey] = c end
     end

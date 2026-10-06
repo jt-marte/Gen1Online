@@ -186,6 +186,14 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   events are emitted, not fought), a wipe starting run 2 and BUDDY's wipe
   starting run 3, and DISCONNECT restoring the vanilla world. Needs the
   Yellow cache only.
+- **Real Yellow multiworld** (`dev/drivers/gen1_multiworld.lua`): a server
+  with `randomizer = on`, `multiworld = on`, `players = 2`, `seed = 4242`.
+  The client joins as world 1, BUDDY (raw HTTP) as world 2, a third trainer
+  gets `RUN_FULL`; every progression item is in exactly one world (world 2
+  built in the driver with `Modes.planFor(2)`), evenly split; a world-1 ball
+  find reaches the team and BUDDY's world-2 find reaches the client; RUN
+  INFO; and a new player on the device (its online files deleted) is refused
+  on CONNECT and stays offline.
 - **Real Yellow Nuzlocke battles** (`dev/drivers/gen1_nuzlocke.lua`): the
   same server config, played in real battles. Wild encounters come from the
   engine's own `onStepComplete` in real grass; battles are driven through
@@ -370,7 +378,18 @@ Game modes (Gen 1; `server/server_config.txt`, `--config`, `GTS_CONFIG`):
   only (`NOT_NUZLOCKE`). A wipe of the current run starts the next one: new
   seed (a fixed `seed` replays run 1; later runs derive from it), empty team.
   A late wipe of an ended run changes nothing. `--new-run` does it by hand.
-- Persisted: `run {id, seed, started}` and `team {items, rev}`. The client
+- Multiworld (`multiworld = on`, `players = 2..8`; needs the randomizer and
+  something shuffled, and forces `sharedKeyItems`): the rules view adds
+  `multiworld` and `players` (1 when off). `run_join {trainerId?, token?,
+  fingerprint, gameName}` → `{success, world, players, run}`: a member gets
+  their world back, a newcomer the next free one (first come);
+  `RUN_FULL`; `WRONG_WORLD_DATA` with the run's `gameName` when the
+  fingerprint (`Randomizer.fingerprint` of the item places) differs from the
+  first joiner's. Without a trainerId it only checks (CONNECT's
+  `Modes.precheck`, before the offline save is touched) and answers
+  `{world: null, free}`. `players = 1` never refuses.
+- Persisted: `run {id, seed, started, worlds {tid: world}, fingerprint,
+  gameName}` (a new run keeps the worlds) and `team {items, rev}`. The client
   stamps its online save with `g1oModes.run`; a save from another run is
   archived (`gen1online_online_save_<game>_run<N>_backup.lua`) and replaced by
   a new game in the bedroom with the same `onlineAccount`.
@@ -609,6 +628,15 @@ off the open internet.
     vanilla encounter tables.
   - Each client shuffles its own game's data, so Red/Blue and Yellow players
     on one server get different (each finishable) worlds from one seed.
+  - Multiworld: the fill places all N worlds at once against the team's one
+    shared inventory, keeps one copy of each progression item (the other
+    copies become filler from the worlds' own items, a POTION in badges-only
+    mode), and gives the next progression item to the world holding the
+    least so far. With `worlds = 1` the plan is exactly the plain
+    randomizer's. Anything that builds or fingerprints must use the vanilla
+    data (`withVanilla` in `modes/init.lua`): an applied shuffle changes the
+    map objects. A world's items are only reachable by its player, so a
+    player who stops playing can stall the run; no takeover by design.
   - Field moves still need a party Pokémon that learns the HM; the species
     shuffle doesn't guarantee one early.
   - Nuzlocke areas are map ids (each floor counts). Pokémon from the GTS,

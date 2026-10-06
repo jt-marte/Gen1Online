@@ -125,9 +125,12 @@ RULE_DEFAULTS = {
     "randomize_items": True,
     "randomize_badges": True,
     "shared_key_items": "auto",
+    "multiworld": False,
+    "players": 2,
     "seed": None,
 }
 NUZLOCKE_MODES = ("off", "hardcore")
+MAX_WORLDS = 8
 SEED_MAX = 2147483646           # the client's Park-Miller generator takes 1..2^31-2
 TEAM_ITEM_MAX = 64              # distinct shared items the team can hold
 LOCATION_MAX_LEN = 64
@@ -251,6 +254,11 @@ def parse_rules(text):
                     rules[key] = seed
             elif key == "shared_key_items" and value.lower() == "auto":
                 rules[key] = "auto"
+            elif key == "players":
+                players = int(value)
+                if not 2 <= players <= MAX_WORLDS:
+                    raise ValueError("players must be 2..%d" % MAX_WORLDS)
+                rules[key] = players
             else:
                 rules[key] = parse_bool(value)
         except ValueError as err:
@@ -280,6 +288,13 @@ def rules_view(rules):
         "badges": rando and bool(rules.get("randomize_badges")),
         "sharedKeyItems": bool(shared),
     }
+    # the multiworld splits the shuffled items across worlds: it needs the
+    # randomizer and the team's shared finds
+    multi = rando and bool(rules.get("multiworld")) and (view["items"] or view["badges"])
+    view["multiworld"] = bool(multi)
+    view["players"] = int(rules.get("players") or 2) if multi else 1
+    if multi:
+        view["sharedKeyItems"] = True
     view["active"] = (view["nuzlocke"] != "off" or view["randomizer"]
                       or view["sharedKeyItems"])
     return view
@@ -1172,8 +1187,13 @@ class GtsStore:
         return seed if run_id == 1 else (seed * 1000003 + run_id) % SEED_MAX + 1
 
     def _begin_run(self, run_id):
+        old = self.data.get("run") or {}
         self.data["run"] = {"id": run_id, "seed": self._run_seed(run_id),
-                            "started": self._now()}
+                            "started": self._now(),
+                            # a multiworld team keeps its worlds from run to run
+                            "worlds": old.get("worlds") or {},
+                            "fingerprint": old.get("fingerprint"),
+                            "gameName": old.get("gameName")}
         self.data["team"] = {"items": {}, "rev": 0}
         self.save()
 
@@ -1233,6 +1253,41 @@ class GtsStore:
                           % (ended, account["name"], ended + 1))
             self._begin_run(ended + 1)
         return {"success": True, "run": self._run_view(), "team": self._team_view()}
+
+    def act_run_join(self, req):
+        """Multiworld: this trainer's world (1..players), claimed first come.
+        Without a trainerId it only checks there is room and the data matches
+        (CONNECT asks before anything changes)."""
+        view = rules_view(self.rules)
+        run = self.data["run"]
+        worlds = run.setdefault("worlds", {})
+        tid = tid_of(req.get("trainerId"))
+        account = self._require_account(req) if tid else None
+        players = view["players"]
+        if players <= 1:
+            return {"success": True, "world": 1, "players": 1, "run": self._run_view()}
+        if account and account["trainerId"] in worlds:
+            return {"success": True, "world": worlds[account["trainerId"]],
+                    "players": players, "run": self._run_view()}
+        fingerprint = to_int(req.get("fingerprint"), 0)
+        if run.get("fingerprint") and fingerprint != run["fingerprint"]:
+            return {"success": False, "error": "WRONG_WORLD_DATA",
+                    "gameName": run.get("gameName") or "another game"}
+        taken = set(worlds.values())
+        free = [w for w in range(1, players + 1) if w not in taken]
+        if not free:
+            return {"success": False, "error": "RUN_FULL", "players": players}
+        if account is None:
+            return {"success": True, "world": None, "players": players, "free": len(free),
+                    "run": self._run_view()}
+        world = free[0]
+        worlds[account["trainerId"]] = world
+        if not run.get("fingerprint"):
+            run["fingerprint"] = fingerprint
+            run["gameName"] = clean_text(req.get("gameName"), 24) or None
+        self._history("%s JOINED THE RUN AS WORLD %d!" % (account["name"], world))
+        self.save()
+        return {"success": True, "world": world, "players": players, "run": self._run_view()}
 
     def new_run(self):
         """Start the next run by hand (the --new-run option)."""
@@ -1408,6 +1463,8 @@ def modes_line(store):
     if view["randomizer"]:
         shuffled = [name for name in ("encounters", "items", "badges") if view[name]]
         parts.append("randomizer (%s)" % (", ".join(shuffled) or "nothing shuffled"))
+    if view["multiworld"]:
+        parts.append("multiworld for %d players" % view["players"])
     if view["sharedKeyItems"]:
         parts.append("shared key items")
     return "%s; run %d, seed %s" % (", ".join(parts), view["runId"], view["seed"])

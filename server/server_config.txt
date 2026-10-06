@@ -35,6 +35,21 @@ randomize_badges = on
 # shared_key_items = auto | on | off
 shared_key_items = auto
 
+# Multiworld (needs randomizer = on): every player gets their OWN world, and
+# each badge, HM and key item exists in exactly ONE of them.  The BOULDERBADGE
+# might lie in one friend's Mt. Moon and nowhere else; when that friend picks
+# it up, the whole team has it.  The shuffle still guarantees the team can
+# finish.  Wild Pokemon differ per world too.
+#   - players = how many worlds; the first players to join each take one
+#     and keep it (also across Nuzlocke runs).  Anyone else is turned away.
+#   - everyone must play the same game's data (Red/Blue, or Yellow); the
+#     first player to join decides.
+#   - a world's items are only reachable by its player: if someone stops
+#     playing, the team may get stuck.
+# multiworld = off | on
+multiworld = off
+players = 2
+
 # A number from 1 to 2147483646 replays the same world for run 1.  Leave it
 # empty for a new random world every run.
 seed =
