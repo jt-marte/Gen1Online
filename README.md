@@ -1,4 +1,4 @@
-# Gen1Online+ - Multiplayer, GTS & Overworld Expansions
+# Gen1Online+ - Multiplayer, GTS & Overworld Expansion
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Mod Version: v0.5.1](https://img.shields.io/badge/version-0.5.1-green.svg)](manifest.json)
