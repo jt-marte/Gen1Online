@@ -5460,6 +5460,7 @@
                 applyPlayerSprite(game, chosenSprite)
                 saveOnlineAccount(game.save)
                 writeOnlineSave(game.save)
+                if GtsUI.Modes then GtsUI.Modes.connected(game, GtsUI.serverRules, true) end
                 syncLocalProfile(game, 0)
                 fetchGtsServerSync(newTid)
                 startChatSession(game)
@@ -6310,12 +6311,15 @@
     gtsApiPost({ action = "clear_challenge", trainerId = tid }, 1.5)
   end
 
-  -- Server game modes on Gen 1 (hardcore Nuzlocke, the co-op randomizer,
-  -- shared key items): modes/init.lua.  The server's server_config.txt picks
-  -- them; they only ever act while connected to a server that has them on.
-  if not isGen2 and not isGen3 then
+  -- Server game modes on Gen 1 and FireRed/LeafGreen (hardcore Nuzlocke,
+  -- the co-op randomizer, shared key items): modes/init.lua and modes/frlg.lua.
+  -- The server's server_config.txt picks them; they only ever act while
+  -- connected to a server that has them on.
+  if not isGen2 then
     local okModes, err = pcall(function()
-      GtsUI.Modes = requireLocal("modes/init.lua")({
+      -- FireRed and LeafGreen play the same modes on their own data (G3)
+      GtsUI.Modes = requireLocal(isGen3 and "modes/frlg.lua" or "modes/init.lua")({
+        G3 = GtsUI.G3,
         mod = mod,
         requireLocal = requireLocal,
         isOnline = function() return isGtsServerConnected end,

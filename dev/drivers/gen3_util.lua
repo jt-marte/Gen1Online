@@ -133,14 +133,50 @@ return function(game, label)
       U.tap(game, "b"); U.wait(4)
     end
   end
+  -- a FireRed screen of its own (the whiteout's "scurried back home"...)
+  -- on top of the field, waiting for A
+  local Stack3 = require("src.ui.game3.stack")
+  function H.screenUp()
+    local layers = Stack3._layers or {}
+    local top = layers[#layers]
+    return top ~= nil and top.id ~= "gen1online"
+  end
   function H.fieldFree()
     for _ = 1, 600 do
       if Runtime.isActive() and not H.G3.busy() then return true end
-      if Message.isOpen() then U.tap(game, "a") end
+      -- the mod's own boxes too (an MMO level-up after a battle), recorded
+      if H.isText(H.top()) then H.clearTexts(1)
+      elseif Message.isOpen() or H.screenUp() then U.tap(game, "a") end
       U.wait(2)
     end
     return false
   end
+  -- stand next to (x, y) on mapId, face it and press A, the way a player
+  -- talks to someone or picks up a ball; true once something answers
+  local SIDES = { { 0, 1, "up" }, { 0, -1, "down" }, { -1, 0, "right" }, { 1, 0, "left" } }
+  function H.talkTo(mapId, x, y)
+    local P = require("src.core.game3.player")
+    for _, d in ipairs(SIDES) do
+      local sx, sy = x + d[1], y + d[2]
+      H.G3.warpTo(mapId, sx, sy, d[3])
+      for _ = 1, 300 do
+        if H.G3.currentMap() == mapId and H.fieldFree() then break end
+        U.wait(2)
+      end
+      -- a side the player can stand on (not a roof next to the ball)
+      local Collision = require("src.core.game3.collision")
+      if H.G3.currentMap() == mapId and P.cellX == sx and P.cellY == sy and Collision.isWalkable(sx, sy) then
+        P.facing = d[3]
+        U.tap(game, "a")
+        for _ = 1, 90 do
+          if Message.isOpen() or H.G3.busy() then return true end
+          U.wait(1)
+        end
+      end
+    end
+    return false
+  end
+
   function H.openStart()
     for _ = 1, 40 do
       if StartMenu.isOpen() then return true end

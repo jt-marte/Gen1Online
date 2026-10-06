@@ -1,11 +1,14 @@
 # Gen1Online+ (mod id `gen1online-plus`)
 
-Online multiplayer mod for **Pokémon Red, Blue, Yellow and Crystal** on the
-gen1recomp engine (a LÖVE2D re-implementation). Live co-op overworld, GTS
-trading, PVP link battles, global chat, co-op parties, a separate online save;
-true-color followers and the server RTC on Crystal only, face-to-face link
-trades on Gen 1 only. `manifest.json` `"games": ["red", "blue", "yellow",
-"crystal"]`. A server hosts one generation's world (see "Server").
+Online multiplayer mod for **Pokémon Red, Blue, Yellow, Crystal, FireRed and
+LeafGreen** on the gen1recomp engine (a LÖVE2D re-implementation). Live co-op
+overworld, GTS trading, PVP link battles, global chat, co-op parties, a
+separate online save; true-color followers and the server RTC on Crystal
+only, face-to-face link trades on Gen 1 and FireRed/LeafGreen. The server's
+game modes (Nuzlocke, randomizer, multiworld) play on Gen 1 and
+FireRed/LeafGreen. `manifest.json` `"games": ["red", "blue", "yellow",
+"crystal", "firered", "leafgreen"]`. A server hosts one generation's world
+(see "Server").
 
 ## Ground rules
 
@@ -30,17 +33,20 @@ trades on Gen 1 only. `manifest.json` `"games": ["red", "blue", "yellow",
 - The user's Crystal ROM (v1.1, verified SHA-1) is at
   `/home/jt/Desktop/Pokemon/Pokemon - Crystal Version (UE) (V1.1) [C][!].zip`.
   It is the user's own copy: never commit it, copy it into the repo, or
-  share it.
+  share it. The same goes for the FireRed and LeafGreen ROMs, which sit in
+  the workspace root: `../Pokemon - Fire Red Version (U) (V1.1).gba` and
+  `../Pokemon - Leaf Green Version (U) (V1.1).gba`.
 
 ## Layout
 
 | Path | What |
 | --- | --- |
-| `main.lua` | ~6,800 lines, nearly the whole mod. **CRLF line endings.** |
+| `main.lua` | ~7,900 lines, nearly the whole mod. **CRLF line endings.** |
 | `pvp/` | Fallback Gen 2 PVP engine, used only against pre-0.5.1 peers. |
 | `other/`, `games/` | Gen 1 casino (Crash, Tube Flyer, Prize Case, pawn). Off: main.lua returns before setting it up on Gen 1, and on Crystal its maps don't exist. |
 | `npcs/`, `quests/` | Registries (empty). `npcs/{quest,trade}/*` are dead Gen 1 leftovers. |
-| `modes/` | Gen 1 server game modes: `init.lua` (hooks, the run, shared items, Nuzlocke), `randomizer.lua` (pure: build/apply/undo the world from a seed), `logic.lua` (what each item place needs), `rng.lua` (Park-Miller, pinned). Loaded by main.lua as `GtsUI.Modes` (exported as `mod.exports.modes`). |
+| `modes/` | Server game modes: `init.lua` (Gen 1: hooks, the run, shared items, Nuzlocke), `frlg.lua` (the same interface on FireRed/LeafGreen), `randomizer.lua` (pure: build/apply/undo the world from a seed; `build` also takes another game's places and species), `logic.lua` / `logic_frlg.lua` (what each item place needs), `rng.lua` (Park-Miller, pinned). Loaded by main.lua as `GtsUI.Modes` (exported as `mod.exports.modes`). |
+| `gen3/` | The FireRed/LeafGreen layer (`GtsUI.G3`, exported as `mod.exports.gen3`): `ui.lua` (the mod's screens on FireRed's modal stack, in its windows and font), `init.lua` (game wrapper, live save view, session swap, Pokémon and PC, presence actors, avatars, the PC's GTS row), `link.lua` (PVP and link trades over the server). |
 | `assets/followers/` | Follower sheets (16x96, 6 frames), from pokeemerald via `tools/import_emerald_follower.py`. |
 | `gts_config.txt` | `server_url=...`, read at startup through `mod:read`. The default only: an address typed in-game (START > CONNECT > SERVER ADDRESS, stored as `gts_server_url`) wins. |
 | `server/` | The server (`gts_server.py`, stdlib Python), its unittest, `start.sh`/`start.bat`. Never packaged. |
@@ -89,6 +95,16 @@ trades on Gen 1 only. `manifest.json` `"games": ["red", "blue", "yellow",
   sandbox refuses Gen 2 engine modules (`src.*.gen2.*`, `src.core.Game2`) on
   Gen 1 with an error: guard such requires with `isGen2`, as the existing
   ones are (the Gen 1 tests fail on any swallowed error).
+- **FireRed/LeafGreen** (`isGen3`, `GtsUI.G3` from `gen3/init.lua`): the
+  engine hands mods the raw Game3, so main.lua works on `G3.game` (the mod's
+  stack, a live save view, the adapter's data and overworld). The online
+  save is a FireRed save table; connecting, disconnecting and a new
+  character swap the live session with `G3.enter` (the engine's own
+  teardown, then CONTINUE or a new game). The mod's screens are
+  `G3.UI.Stack` on a layer of FireRed's modal stack: a screen pushed during
+  a battle waits until it ends (a layer over the battle took its input).
+  Badges are flags (`FLAG_BADGE01_GET` = 0x820..0x827), Pokémon are numbers
+  (`Pokemon.speciesFromNational`), items pret's numeric ids.
 
 ## Testing
 
@@ -227,9 +243,53 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     Kadabra→Alakazam trade evolution, save routing, and disconnect.
   - Screenshots go to `$G1O_WORK/shots`. Look at them: they caught misplaced
     name tags that every assertion missed.
+- **Real FireRed / LeafGreen** (`dev/drivers/gen3_*.lua`, helpers in
+  `gen3_util.lua`): need the caches (`G1O_FIRERED_ROM=<gba>
+  G1O_LEAFGREEN_ROM=<gba> dev/setup.sh ...`; profiles `gen1online-frlg` and
+  `gen1online-frlg2` for the link driver's second game). `run_tests.sh` runs
+  them per game, on a `--gen 3` server:
+  - `gen3_online.lua`: a new character, a remote player on the field, PC
+    GTS deposit and claim, a KADABRA bought and evolved, Wonder Trade, chat,
+    DISCONNECT and back.
+  - `gen3_link.lua` (two LÖVE processes, host and guest): a PVP battle and
+    a Trade Center link trade over the server.
+  - `gen3_modes.lua` (both games; hardcore, randomizer, seed 4242): the map
+    walk (`gen3_walk.lua`: every ball and hidden item on a logic map
+    reached by a BFS on FireRed's own collision from the map's warps and
+    edges: elevation, water, one-way ledges, Cut trees, Rock Smash rocks
+    and boulders as walls unless the requirement, with what its `L.FIXED`
+    items imply, has the HM; the Pokémon Mansion's switch gates open; it
+    found Kindle Road's two balls behind Rock Smash rocks), 200 seeds with items
+    and badges (finishable, progression never hidden or post-game), badges
+    only, 1-3 worlds x 50 seeds replayed as the team, the 386-species
+    shuffle, a shuffled wild battle, a ball, a hidden item and the TEA,
+    a badge picked up from a ball, shared finds both ways, the level cap,
+    BROCK fought for his slot (SET, no EXP over the cap), a burial, a wipe
+    starting run 2, DISCONNECT restoring vanilla, JOIN again reloading run
+    2 from the online save, and BUDDY's wipe while ASH is offline making
+    JOIN start run 3 (run 2's save kept as a backup). It prints the item
+    places' fingerprint; `run_tests.sh` checks FireRed's and LeafGreen's
+    agree.
+  - `gen3_nuzlocke.lua` (FireRed): real battles. A Master Ball thrown from
+    the battle bag, the next encounter's ball refused in the bag (the
+    reason in `BagMenu.messageText`) and kept, the Safari Zone's BALL
+    refused with no Safari Ball spent, a fainted MAGIKARP buried, and a
+    real blackout starting the next run.
+  - `gen3_multiworld.lua` (FireRed; `multiworld = on`, `players = 2`):
+    world 1 joined, BUDDY world 2, a third trainer `RUN_FULL`, another
+    game's data `WRONG_WORLD_DATA`, every progression item in one world, a
+    world-1 ball picked up for real reaching the team and BUDDY's world-2
+    find reaching the client, RUN INFO, and a newcomer refused on CONNECT.
 - Driver gotchas:
   - Driver mode skips the `core.update` hook, so drivers re-route
     `game.update` through it.
+  - FireRed: the mod's own text boxes are `G3.UI.Stack` states, FireRed's
+    are `src.ui.game3.message`; `H.fieldFree()` and `H.clearTexts()` answer
+    both. The first catch online is an MMO level-up, shown once the battle
+    is over. A shuffled wild Pokémon may trap the player (Arena Trap or
+    Shadow Tag, by its random personality) or TELEPORT away: drivers check
+    `Engine.canRun` before RUN and retry a battle meant to make someone
+    faint. `/tmp` logs piped through `grep` need `--line-buffered`.
   - The engine treats a driver like a mod: take `socket.http` from
     `package.loaded`.
 - **Never `pkill -f <name>`** where the name appears in your own command. It
@@ -247,16 +307,17 @@ is gone, and the original 0.5.x server was never in this repo. Gen 1 support
 (client and the server's generation lock) followed; both are on `master`.
 
 **One generation per server.** The data file records its world's generation
-(`"generation": 1 | 2`). `--gen 1|2` (or `GTS_GENERATION`) sets it; without
-it, the first request from a known game claims the world (reads never do).
-A request's generation is its `generation` field (GET: `gen` query param),
-else read off `gameVersion` ("Pokemon Red" → 1, "Pokemon Crystal" → 2, Gen 3
-names → 3, refused). A known generation that doesn't match gets
+(`"generation": 1 | 2 | 3`). `--gen 1|2|3` (or `GTS_GENERATION`) sets it;
+without it, the first request from a known game claims the world (reads
+never do). A request's generation is its `generation` field (GET: `gen`
+query param), else read off `gameVersion` ("Pokemon Red" → 1, "Pokemon
+Crystal" → 2, "Pokemon FireRed" → 3). FireRed and LeafGreen share a Gen 3
+world. A known generation that doesn't match gets
 `{"success":false,"error":"WRONG_GENERATION","serverGeneration":N}`; a request
 naming no game (a script) is let through. `/server/info` answers
 `generation` (null until claimed), and the client checks it on CONNECT. A
 Gen 1 world's recovery tokens are 8 letters A–Z (Gen 1's naming keyboard has
-no digits); a Crystal world's stay 8 hex characters.
+no digits); Crystal and Gen 3 worlds' stay 8 hex characters.
 
 ### Wire protocol (the client defines it, so a server must match exactly)
 
@@ -374,7 +435,8 @@ Parties:
 Quests:
 - `get_quests` → `{success, quests: []}`. There is no quest content yet.
 
-Game modes (Gen 1; `server/server_config.txt`, `--config`, `GTS_CONFIG`):
+Game modes (Gen 1 and FireRed/LeafGreen; `server/server_config.txt`,
+`--config`, `GTS_CONFIG`):
 - The rules view `{nuzlocke: "off"|"hardcore", randomizer, encounters, items,
   badges, sharedKeyItems, active, runId, seed}` rides `/server/info` as
   `rules` and every `sync_pos` answer as `run`, next to `team: {rev, items:
@@ -675,3 +737,32 @@ off the open internet.
     Safari Zone's own BALL), `battle.style`, `exp.gain`, and the
     `battle.started` / `battle.ended` / `world.blacked_out` events. Link
     battles use copies of the party, so PVP never buries anything.
+- Game modes on FireRed/LeafGreen (`modes/frlg.lua`, `modes/logic_frlg.lua`):
+  - Shuffled: item balls, hidden items, the gifts in `L.GIFTS` (TEA, LIFT
+    KEY, SILPH SCOPE, HM06, NET BALL: scripts with the standard obtain-item
+    call) and the gym badge slots. Fixed (`L.FIXED`): S.S. TICKET, HM01,
+    BICYCLE, POKé FLUTE, HM03, HM04, TRI-PASS, and the gym TMs.
+  - Badges are flags. A badge the shuffle puts in a ball or a gift travels
+    as a marker item (unused `ITEM_034`..`ITEM_03B`) that reads as the badge
+    (`ItemsData.info`), always fits (`Bag.canAdd`) and sets the flag when
+    picked up (`Bag.add`). A leader's slot hands over its content when his
+    script sets the badge flag (`Flags.setFlag` with a script context), with
+    a note after the battle; his own defeat text still names his badge (most
+    leaders' texts aren't in the script bundle, so they aren't rewritten).
+  - Only field moves, Viridian Gym's door and the Route 22/23 guards check a
+    badge flag (every script scanned), so badges are plain progression. The
+    logic covers Kanto and One to Three Island before the Elite Four;
+    post-game maps (Cerulean Cave, Four to Seven Island) hold filler.
+  - Species: all 386 by national number, in strength tiers, the legendaries
+    (Jirachi and Deoxys included) among themselves. Every wild battle goes
+    through `BattleBridge.startWild` (grass, water, fishing, Rock Smash, the
+    scripted ones); roamers and the Pokémon Tower's ghost keep their species.
+    With the shuffle on, Johto and Hoenn Pokémon evolve before the National
+    Pokédex (`Evolution.nationalAllows`).
+  - Nuzlocke: battle items refused through `BattleItems.isBattleUsable` (the
+    bag offers CANCEL), a refused ball through the bag's and the Safari
+    menu's own "box is full" stop with the reason, SET through
+    `Options.battleStyle`; the old man's demo, the POKé DUDE and ghosts never
+    use up an area. Caps: 14, 21, 24, 29, 43, 43, 47, 50, then 63.
+  - FireRed and LeafGreen hold the same item places (one fingerprint), so
+    their players can share a multiworld run.

@@ -33,18 +33,21 @@ end
 -- Each species swaps with another of similar strength: the 146 others are
 -- cut into tiers by base-stat total and shuffled within their tier, so
 -- Route 1 still holds early-game Pokémon and a Nuzlocke stays fair.
-function R.speciesMap(rng, pokemon)
+-- `pokemon` is keyed by species id (names on Gen 1, numbers on FireRed);
+-- `legendary` is the set kept apart (R.LEGENDARY by default).
+function R.speciesMap(rng, pokemon, legendary)
+  legendary = legendary or R.LEGENDARY
   local plain, legends = {}, {}
   for id, def in pairs(pokemon or {}) do
     if type(def) == "table" and def.baseStats then
-      local list = R.LEGENDARY[id] and legends or plain
+      local list = legendary[id] and legends or plain
       list[#list + 1] = { id = id, total = statTotal(def), dex = tonumber(def.dex) or 999 }
     end
   end
   local function byStrength(a, b)
     if a.total ~= b.total then return a.total < b.total end
     if a.dex ~= b.dex then return a.dex < b.dex end
-    return a.id < b.id
+    return tostring(a.id) < tostring(b.id)
   end
   table.sort(plain, byStrength)
   table.sort(legends, byStrength)
@@ -272,7 +275,13 @@ local function fill(rng, locs, L, worlds, fallback)
   return contents
 end
 
-R.ATTEMPTS = 60
+-- Each attempt has its own RNG stream, so a seed that succeeds early builds
+-- the same world whatever the cap.  Strict chains need many: with only the
+-- badges shuffled, the second gym's badge must come out among the first two
+-- and the last gym's last, a few percent per attempt.
+R.ATTEMPTS = 500
+R.fill = fill
+R.reachable = reachable
 
 -- A checksum of a world's item places and what vanilla puts there: equal
 -- fingerprints mean every client computes the same multiworld.  Pure
@@ -297,13 +306,17 @@ function R.build(opts)
     -- one shuffle per world in a multiworld (a single world keeps salt 1)
     local salt = worlds > 1 and (1000 + world) or 1
     -- shuffled again (the same way on every client) until Cut has learners
+    -- (opts.pokemon / opts.legendary / opts.fieldMovesOk: another game's data)
+    local fieldOk = opts.fieldMovesOk or function(species) return R.fieldMovesOk(species, opts.data, L) end
     for try = 1, R.SPECIES_TRIES do
-      plan.species = R.speciesMap(Rng.new(opts.seed, salt + 10000 * (try - 1)), opts.data.pokemon)
+      plan.species = R.speciesMap(Rng.new(opts.seed, salt + 10000 * (try - 1)),
+        opts.pokemon or opts.data.pokemon, opts.legendary)
       plan.speciesTries = try
-      if R.fieldMovesOk(plan.species, opts.data, L) then break end
+      if fieldOk(plan.species) then break end
     end
   end
-  local base = R.locations(opts.data, opts.victories or {}, L, opts)
+  -- opts.locations: places another game built (FireRed's, modes/frlg.lua)
+  local base = opts.locations or R.locations(opts.data, opts.victories or {}, L, opts)
   plan.fingerprint = R.fingerprint(base)
   if not (opts.items or opts.badges) then return plan end
   plan.locations = base
@@ -317,8 +330,9 @@ function R.build(opts)
       end
     end
   end
-  local fallback = { item = (opts.data.items or {}).POTION and "POTION" or base[1] and base[1].vanilla.item,
-                     count = 1 }
+  local fallback = { item = opts.fallbackItem
+                       or ((opts.data and opts.data.items or {}).POTION and "POTION")
+                       or base[1] and base[1].vanilla.item, count = 1 }
   local contents
   for attempt = 1, R.ATTEMPTS do
     contents = fill(Rng.new(opts.seed, 100 + attempt), locs, L, worlds, fallback)

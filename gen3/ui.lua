@@ -63,7 +63,14 @@ return function(env)
   local Host = { isMenu = true }
 
   function Stack:top() return self.states[#self.states] end
+  -- a screen opened mid-battle (an MMO level-up, a chat line) waits for the
+  -- battle to end: a layer on FireRed's stack would stall the battle's end
+  Stack.pending = {}
   function Stack:push(state)
+    if battleActive() then
+      self.pending[#self.pending + 1] = state
+      return state
+    end
     self.states[#self.states + 1] = state
     -- the press that opened it (an A on the field, which FireRed handles
     -- before its menus in the same frame) must not also reach it
@@ -80,12 +87,19 @@ return function(env)
   end
   function Stack:clear()
     self.states = {}
+    self.pending = {}
     Stack3.pop(LAYER)
   end
-  function Stack:size() return #self.states end
+  function Stack:size() return #self.states + #self.pending end
   -- the host layer is gone when the engine cleared its stack (back to the
   -- title, a session swap): put it back while the mod still has screens
   function Stack:ensureLayer()
+    if #self.pending > 0 and not battleActive() then
+      local waiting = self.pending
+      self.pending = {}
+      for _, state in ipairs(waiting) do self:push(state) end
+      return
+    end
     if #self.states > 0 and not Stack3.has(LAYER) then
       Stack3.push(LAYER, Host, { hideBelow = true })
     end

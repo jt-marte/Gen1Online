@@ -188,7 +188,37 @@ if [ "${1:-}" != "quick" ]; then
       step "real $g PVP + link trade (host)" "$(result "$G1O_WORK/gen3_link_${g}_host.log" | sed 's/.*\t//')"
       step "real $g PVP + link trade (guest)" "$(result "$G1O_WORK/gen3_link_${g}_guest.log" | sed 's/.*\t//')"
     fi
+    # the game modes on a Gen 3 server (hardcore, the randomizer with the
+    # badges, shared key items): the map walk and seeds, the shuffled world,
+    # the team's finds, Brock's slot, the Nuzlocke rules and a run ending
+    mkdir -p "$G1O_WORK/server"
+    printf 'nuzlocke = hardcore\nrandomizer = on\nseed = 4242\n' > "$G1O_WORK/server/modes_config.txt"
+    GTS_CONFIG="$G1O_WORK/server/modes_config.txt" GTS_GENERATION=3 "$DEV/server.sh" >/dev/null
+    install_frlg "$FPROFILE"
+    frlg $g gen1online-frlg gen3_modes.lua gen3_modes_$g
+    step "real $g game modes" "$(result "$G1O_WORK/gen3_modes_$g.log" | sed 's/.*\t//')"
+    if [ "$g" = firered ]; then
+      # the same modes in real battles (fresh server, fresh profile)
+      GTS_CONFIG="$G1O_WORK/server/modes_config.txt" GTS_GENERATION=3 "$DEV/server.sh" >/dev/null
+      install_frlg "$FPROFILE"
+      frlg $g gen1online-frlg gen3_nuzlocke.lua gen3_nuzlocke_$g
+      step "real $g Nuzlocke battles" "$(result "$G1O_WORK/gen3_nuzlocke_$g.log" | sed 's/.*\t//')"
+      # the multiworld split: two worlds, a third player turned away
+      printf 'randomizer = on\nmultiworld = on\nplayers = 2\nseed = 4242\n' > "$G1O_WORK/server/multiworld_config.txt"
+      GTS_CONFIG="$G1O_WORK/server/multiworld_config.txt" GTS_GENERATION=3 "$DEV/server.sh" >/dev/null
+      install_frlg "$FPROFILE"
+      frlg $g gen1online-frlg gen3_multiworld.lua gen3_multiworld_$g
+      step "real $g multiworld" "$(result "$G1O_WORK/gen3_multiworld_$g.log" | sed 's/.*\t//')"
+    fi
   done
+  # FireRed and LeafGreen hold the same item places, so their players can
+  # share one multiworld run (the server compares these fingerprints)
+  fr=$(grep -o "item places fingerprint [0-9]*" "$G1O_WORK/gen3_modes_firered.log" 2>/dev/null | tail -1)
+  lg=$(grep -o "item places fingerprint [0-9]*" "$G1O_WORK/gen3_modes_leafgreen.log" 2>/dev/null | tail -1)
+  if [ -n "$fr" ] && [ -n "$lg" ]; then
+    if [ "$fr" = "$lg" ]; then step "FireRed and LeafGreen share item places" "ALL PASS"
+    else step "FireRed and LeafGreen share item places" "FAILED ($fr / $lg)"; fi
+  fi
 fi
 "$DEV/server.sh" stop
 echo "logs: $G1O_WORK/*.log"

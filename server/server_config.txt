@@ -1,8 +1,9 @@
 # Gen1Online+ server game modes.  Restart the server after editing.
 #
-# The modes play on a Gen 1 world (Red, Blue and Yellow); a Crystal server
-# ignores them.  Everyone on the server plays the same run with the same
-# rules and, with the randomizer, the same shuffled world.  Turning a mode on
+# The modes play on a Gen 1 world (Red, Blue and Yellow) and on a FireRed /
+# LeafGreen world; a Crystal server ignores them.  Everyone on the server
+# plays the same run with the same rules and, with the randomizer, the same
+# shuffled world.  Turning a mode on
 # (or a new run starting) restarts every player's ONLINE save from their
 # bedroom; their offline saves are never touched, and the old online save is
 # kept as a backup.
@@ -25,6 +26,10 @@ nuzlocke = off
 # progression, so a run can always be finished (nothing you need is left
 # aboard the S.S. Anne, and the early routes always have wild Pokemon that
 # can learn CUT).
+# On FireRed and LeafGreen every wild Pokemon may be any of the 386 (Gen 1
+# to 3; they evolve before the National Pokedex), and the item balls, hidden
+# items, a few gifts (the TEA, the LIFT KEY, the SILPH SCOPE, HM06...) and
+# the gym badges are shuffled.
 # randomizer = on | off
 randomizer = off
 
@@ -45,8 +50,8 @@ shared_key_items = auto
 # finish.  Wild Pokemon differ per world too.
 #   - players = how many worlds; the first players to join each take one
 #     and keep it (also across Nuzlocke runs).  Anyone else is turned away.
-#   - everyone must play the same game's data (Red/Blue, or Yellow); the
-#     first player to join decides.
+#   - everyone must play the same game's data (Red/Blue, or Yellow, or
+#     FireRed/LeafGreen); the first player to join decides.
 #   - a world's items are only reachable by its player: if someone stops
 #     playing, the team may get stuck.
 # multiworld = off | on

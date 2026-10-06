@@ -20,6 +20,28 @@ A server of our own, built for playing with friends.
   windows in FireRed's font (`gen3/`). A server hosts one generation:
   `--gen 3` (or the first FireRed/LeafGreen game to connect) makes a Gen 3
   world, which FireRed and LeafGreen share.
+- **The game modes on FireRed and LeafGreen**: the hardcore Nuzlocke, the
+  co-op randomizer, shared key items and the multiworld, from the same
+  `server/server_config.txt` on a Gen 3 server (`modes/frlg.lua`,
+  `modes/logic_frlg.lua`). Every wild Pokémon can become any of the 386
+  Pokémon of Gen 1 to 3 (strength tiers, legendaries among themselves), in
+  grass, water, fishing, Rock Smash and the scripted battles; while the
+  shuffle is on, Johto and Hoenn Pokémon evolve before the National
+  Pokédex. Item balls, hidden items, five NPC gifts (the TEA, the LIFT KEY,
+  the SILPH SCOPE, HM06, the NET BALL) and the eight gym badges are
+  shuffled with progression logic over Kanto and One to Three Island; a
+  badge in an item ball reads and works as the badge, and a gym leader
+  hands over whatever his slot holds (a note says so after the battle).
+  The Nuzlocke refuses items in battle (the bag offers CANCEL), refuses a
+  second encounter's ball in the bag and in the Safari Zone's own menu with
+  the reason, forces SET, caps levels at FireRed's leaders' aces, and never
+  counts the old man's demo, the POKé DUDE or a ghost. FireRed and LeafGreen
+  share item places, so their players can share a multiworld run. Played in
+  real games: `dev/drivers/gen3_modes.lua` (with a map walk: every ball and
+  hidden item reached by a BFS on FireRed's own collision, which found
+  Kindle Road's CARBOS and ETHER behind Rock Smash rocks the logic didn't
+  ask for), `gen3_nuzlocke.lua` (real catches, refusals, a burial and a
+  blackout) and `gen3_multiworld.lua`.
 - **Hardcore Nuzlocke and a co-op randomizer** (Red, Blue, Yellow), set by the
   host in `server/server_config.txt` (all off by default) for everyone on the
   server. The randomizer shuffles wild Pokémon (within strength tiers;
@@ -109,6 +131,9 @@ A server of our own, built for playing with friends.
 - `gts_config.txt` and the built-in default point at `http://127.0.0.1:7779`
   instead of a dead Cloudflare tunnel.
 - `sync_xp` sends the XP the client awarded, so the server's total matches.
+- The randomizer tries up to 500 placements instead of 60 before giving up
+  on a seed. Seeds that already worked build the same world; a strict
+  setting (badges only) now shuffles where it used to fall back to vanilla.
 
 ### Fixed
 
@@ -118,6 +143,9 @@ A server of our own, built for playing with friends.
   you are waiting on, get through.
 - Server: a wanted list of species numbers was emptied on deposit (FireRed
   and LeafGreen list species by number).
+- FireRed/LeafGreen: a mod screen opened during a battle (the MMO level-up
+  after a first catch) sat over the battle and took its button presses, so
+  the battle never ended. Such screens now wait for the battle to end.
 - Voxel name tags in DramaticShapeVoxelMod's free cameras (1ST and 3RD): a
   tag was anchored on the south edge of its trainer's cell, so seen from the
   east or west it hung half a sprite to one side. It is centred on the cell

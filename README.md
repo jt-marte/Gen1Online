@@ -2,11 +2,11 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Mod Version: v0.5.1](https://img.shields.io/badge/version-0.5.1-green.svg)](manifest.json)
-[![Games: Red, Blue, Yellow, Crystal](https://img.shields.io/badge/target-Red%20%7C%20Blue%20%7C%20Yellow%20%7C%20Crystal-blue.svg)](https://github.com/bryanthaboi/gen1recomp)
+[![Games: Red, Blue, Yellow, Crystal, FireRed, LeafGreen](https://img.shields.io/badge/target-Red%20%7C%20Blue%20%7C%20Yellow%20%7C%20Crystal%20%7C%20FireRed%20%7C%20LeafGreen-blue.svg)](https://github.com/bryanthaboi/gen1recomp)
 
-**Gen1Online+** brings a complete real-time multiplayer co-op experience and a 24/7 Global Trade Station (GTS) to *Pokémon Red*, *Blue*, *Yellow* and *Crystal*, plus true-color overworld follower sprites and a real-time authoritative server clock on Crystal.
+**Gen1Online+** brings a complete real-time multiplayer co-op experience and a 24/7 Global Trade Station (GTS) to *Pokémon Red*, *Blue*, *Yellow*, *Crystal*, *FireRed* and *LeafGreen*, plus true-color overworld follower sprites and a real-time authoritative server clock on Crystal.
 
-A server hosts one generation's world: Gen 1 players (Red, Blue and Yellow together) play with each other, and Crystal players with each other.
+A server hosts one generation's world: Gen 1 players (Red, Blue and Yellow together) play with each other, Crystal players with each other, and FireRed and LeafGreen players with each other.
 
 ---
 
@@ -15,7 +15,7 @@ A server hosts one generation's world: Gen 1 players (Red, Blue and Yellow toget
 ### 🌐 1. Real-Time 60FPS Threaded Multiplayer
 - **Seamless Overworld Co-op**: Live player movement synchronization across Johto and Kanto with zero stutter or lag.
 - **Player Customization**: Walkable character avatars (`RED`, `BLUE`, `LEAF`, `PROF. OAK`, `COOLTRAINER`, `TEAM ROCKET`, and various trainer classes).
-- **Dedicated Dual-Save Architecture**: Online progress writes strictly to its own file in the mod's private storage (`save_online_crystal.lua`, `save_online_red.lua`, ...), leaving your offline save untouched.
+- **Dedicated Dual-Save Architecture**: Online progress writes strictly to its own file in the mod's private storage (`save_online_crystal.lua`, `save_online_red.lua`, `save_online_firered.lua`, ...), leaving your offline save untouched.
 
 ### 🕒 2. Authoritative Server RTC Clock & Day/Night Sync (Crystal)
 - **Synchronized Real-Time Clock**: Server broadcasts the canonical hour, minute and day of the week on every sync heartbeat.
@@ -31,18 +31,23 @@ A server hosts one generation's world: Gen 1 players (Red, Blue and Yellow toget
 
 ### 🏪 5. 24/7 Global Trade Station (GTS) & Overworld PVP
 - **Persistent GTS Network**: Deposit and search for Pokémon listings asynchronously.
-- **Overworld Direct PVP Battles**: Walk up to any trainer in the world, face them, and press **`A`** to challenge them. Battles run on the recomp's native lockstep link battle. On Red, Blue and Yellow you can also link-trade face to face; on Crystal, trade through the GTS.
+- **Overworld Direct PVP Battles**: Walk up to any trainer in the world, face them, and press **`A`** to challenge them. Battles run on the recomp's native lockstep link battle. On Red, Blue, Yellow, FireRed and LeafGreen you can also link-trade face to face; on Crystal, trade through the GTS.
 
 ### 👥 6. Co-Op Party System
 - **Party System (Up to 4 Players)**: Invite nearby trainers, view live teammate locations and levels.
 
-### 💀 7. Hardcore Nuzlocke & Co-Op Randomizer (Red, Blue, Yellow)
+### 💀 7. Hardcore Nuzlocke & Co-Op Randomizer (Red, Blue, Yellow, FireRed, LeafGreen)
 The host turns these on in `server/server_config.txt`; everyone on the server plays the same run.
 - **Co-Op Randomizer**: wild Pokémon (each swapped for one of similar strength), items and gym badges are shuffled from the run's seed. Brock might hand you a POTION while the BOULDERBADGE lies in an item ball in Mt. Moon or comes from an NPC. Placement follows the game's progression, so every run can be finished: nothing you need is left aboard the S.S. Anne (she sails for good), and the early routes always hold wild Pokémon that can learn CUT.
 - **Shared Key Items**: key items, HMs and badges are the team's. Whatever one player finds, every player gets.
 - **Multiworld (optional)**: each player gets their own world, and every badge, HM and key item exists in only one of them. The BOULDERBADGE might be in your friend's Mt. Moon and nowhere in yours; when they pick it up, you both have it. The shuffle still guarantees the team can finish, splits the key items evenly, and gives each world its own wild Pokémon.
 - **Hardcore Nuzlocke**: only the first wild Pokémon in each area can be caught (per player, with the dupes clause), fainted Pokémon are gone for good, no items in battle, SET battle style, and a level cap at the next gym leader's ace (with shuffled badges, the weakest gym leader you can reach and haven't beaten, so a fight you need is never above it). If **any** player's whole party faints, the run ends for the whole team and everyone starts over in a new world.
+- **FireRed and LeafGreen**: every wild Pokémon can become any of the 386 Pokémon of Gen 1 to 3 (each swapped for one of similar strength; legendaries only among themselves), and while the shuffle is on, Johto and Hoenn Pokémon evolve without the National Pokédex. Item balls, hidden items, NPC gifts like the TEA and the SILPH SCOPE, and the eight gym badges are shuffled with the same progression logic (a badge can lie in an item ball; Brock might hand you the LIFT KEY). Kanto and One to Three Island hold the progression, and every item the logic counts on was walked to on the real maps.
 - **ONLINE > RUN INFO** shows the modes, the level cap, your fallen Pokémon and the team's finds.
+
+### 🔥 8. FireRed & LeafGreen
+- The whole online side on the Game Boy Advance games: the mod's menus are FireRed windows in FireRed's font, other trainers walk the field as real overworld sprites (40 avatars, with bike and surf sprites), GTS is on the START menu and the Pokémon Center PC with the in-game trade scene and trade evolutions, and PVP and face-to-face trades use the game's own link battle and Trade Center.
+- A new online character is a new game in the bedroom, a boy or a girl to match the avatar.
 
 ---
 
@@ -86,9 +91,9 @@ You need Python 3.8 or newer ([python.org](https://www.python.org/downloads/); o
 - **Linux / macOS**: `server/start.sh` (the same as `python3 server/gts_server.py`)
 - **Windows**: double-click `server\start.bat`
 
-It listens on port **7779** and keeps accounts, GTS listings, chat and the Wonder Trade pool in `server/gts_data.json` (copy that file to back up your world). When it starts, it prints the `server_url=...` lines to hand out. Options: `--port 8000`, `--host 127.0.0.1` (this PC only), `--data path/to/file.json`, `--gen 1` or `--gen 2`. Stop it with **Ctrl+C**.
+It listens on port **7779** and keeps accounts, GTS listings, chat and the Wonder Trade pool in `server/gts_data.json` (copy that file to back up your world). When it starts, it prints the `server_url=...` lines to hand out. Options: `--port 8000`, `--host 127.0.0.1` (this PC only), `--data path/to/file.json`, `--gen 1`, `--gen 2` or `--gen 3`. Stop it with **Ctrl+C**.
 
-**One generation per server.** A server is either a Gen 1 world (Red, Blue and Yellow) or a Crystal world. The first game to connect decides, or start it with `--gen 1` (Gen 1) or `--gen 2` (Crystal) to decide up front. A game of the other generation is told the server isn't for it and never joins. To host both, run two servers with their own port and data file:
+**One generation per server.** A server is a Gen 1 world (Red, Blue and Yellow), a Crystal world or a Gen 3 world (FireRed and LeafGreen). The first game to connect decides, or start it with `--gen 1` (Gen 1), `--gen 2` (Crystal) or `--gen 3` (FireRed/LeafGreen) to decide up front. A game of the other generation is told the server isn't for it and never joins. To host both, run two servers with their own port and data file:
 ```text
 server/start.sh --gen 2
 server/start.sh --gen 1 --port 7780 --data server/gts_data_gen1.json
@@ -116,7 +121,7 @@ server_url=http://127.0.0.1:7779
 
 A player's recovery token (shown when the character is created) restores the online character on a new device through **ENTER RECOVERY TOKEN**.
 
-### 4. Game modes (optional, Red/Blue/Yellow servers)
+### 4. Game modes (optional, Red/Blue/Yellow and FireRed/LeafGreen servers)
 Edit `server/server_config.txt` and restart the server:
 
 ```
@@ -131,9 +136,9 @@ players = 2              # how many worlds (multiworld only)
 seed =                   # a number replays the same world; empty = a new world every run
 ```
 
-The server prints the active modes, the run number and its seed when it starts. `--config <file>` (or `GTS_CONFIG`) uses another file, and `--new-run` ends the current run by hand. Turning a mode on, or a new run starting, restarts every player's **online** save from their bedroom (with the same online character); the old online save is kept as a backup, and offline saves are never touched. Players on Red/Blue and on Yellow get worlds shuffled from the same seed, each one finishable in their own game.
+The server prints the active modes, the run number and its seed when it starts. `--config <file>` (or `GTS_CONFIG`) uses another file, and `--new-run` ends the current run by hand. Turning a mode on, or a new run starting, restarts every player's **online** save from their bedroom (with the same online character); the old online save is kept as a backup, and offline saves are never touched. Players on Red/Blue and on Yellow get worlds shuffled from the same seed, each one finishable in their own game. FireRed and LeafGreen have the same item places, so their players share one world.
 
-With `multiworld = on`, the first `players` trainers to join a run each take a world and keep it (also when a Nuzlocke run restarts). Anyone else is told the run is full, and everyone has to play the same game's data (Red/Blue, or Yellow: the first player to join decides). A world's items can only be picked up by its own player, so if someone stops playing, the team may get stuck.
+With `multiworld = on`, the first `players` trainers to join a run each take a world and keep it (also when a Nuzlocke run restarts). Anyone else is told the run is full, and everyone has to play the same game's data (Red/Blue, or Yellow, or FireRed/LeafGreen: the first player to join decides). A world's items can only be picked up by its own player, so if someone stops playing, the team may get stuck.
 
 ---
 
