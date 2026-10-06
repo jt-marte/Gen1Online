@@ -223,6 +223,51 @@ return function(game)
   check(hasSpecies(25), "PIKACHU joined the party")
   closeAll()
 
+  -- a Pokémon from a PC box: listed, then taken back (into the party)
+  local Storage = require("src.core.game3.storage")
+  local function inBoxes(sp)
+    for _, box in ipairs(Storage.ensure(s).boxes) do
+      for slot = 1, Storage.IN_BOX_COUNT do
+        local m = box.mons[slot]
+        if m and tonumber(m.species) == sp then return true end
+      end
+    end
+    return false
+  end
+  do
+    local scratch = { party = {}, name = "ASH", trainerId = s.trainerId, secretId = s.secretId }
+    Party.giveMon(scratch, 7, 9)     -- SQUIRTLE
+    check(Storage.sendMonToPC(s, scratch.party[1]) and inBoxes(7), "a SQUIRTLE in the PC")
+  end
+  GtsUI.openGtsMainMenu(G3.game)
+  U.wait(4)
+  choose("DEPOSIT MON")
+  choose("FROM PC BOXES")
+  check(isMenu(top()) and labels(top()):find("SQUIRTLE LV9 (BOX 1)", 1, true), "the PC's Pokémon: " .. labels(top()))
+  choose("^SQUIRTLE")
+  choose("ADD")
+  choose("^A %- C$")
+  choose("^CHARMANDER$")
+  choose("CONFIRM")
+  clearTexts()
+  check(said("SQUIRTLE WAS DEPOSITED") or said("SQUIRTLE\nWAS DEPOSITED"), "SQUIRTLE deposited from the PC")
+  check(not inBoxes(7), "SQUIRTLE left the PC")
+  closeAll()
+  GtsUI.openGtsMainMenu(G3.game)
+  U.wait(4)
+  choose("MY LISTINGS")
+  check(isMenu(top()) and labels(top()):find("TAKE SQUIRTL LV9", 1, true), "MY LISTINGS: " .. labels(top()))
+  choose("^TAKE SQUIRTL")
+  clearTexts()
+  check(said("WITHDREW SQUIRTL"), "SQUIRTLE withdrawn")
+  check(hasSpecies(7), "back in the party")
+  local mine = 0
+  for _, l in pairs((get("/gts/browse") or {}).listings or {}) do
+    if tostring(l.trainerId) == myTid then mine = mine + 1 end
+  end
+  check(mine == 0, "and off the GTS")
+  closeAll()
+
   -- BUDDY's KADABRA for a BULBASAUR: the trade scene, then ALAKAZAM
   res = post({ action = "deposit", trainerId = bTid, trainerName = "BUDDY",
     offeredMon = mon(64, 30), wanted = { 1 } })

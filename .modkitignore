@@ -41,6 +41,7 @@ dev/drivers/gen3_modes.lua
 dev/drivers/gen3_nuzlocke.lua
 dev/drivers/gen3_multiworld.lua
 dev/drivers/gen3_walk.lua
+dev/drivers/gen3_social.lua
 dev/harness/address_test.lua
 dev/harness/modes_test.lua
 # The server (server/) is hosted separately and never ships inside the mod.

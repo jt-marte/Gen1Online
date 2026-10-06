@@ -209,6 +209,13 @@ if [ "${1:-}" != "quick" ]; then
       install_frlg "$FPROFILE"
       frlg $g gen1online-frlg gen3_multiworld.lua gen3_multiworld_$g
       step "real $g multiworld" "$(result "$G1O_WORK/gen3_multiworld_$g.log" | sed 's/.*\t//')"
+      # parties, profiles and settings, the server address typed in (the
+      # config file points at a dead port) and a recovery token on a new device
+      GTS_GENERATION=3 "$DEV/server.sh" >/dev/null
+      install_frlg "$FPROFILE"
+      printf 'server_url=http://127.0.0.1:1\n' > "$FPROFILE/mods/gen1online-plus/gts_config.txt"
+      frlg $g gen1online-frlg gen3_social.lua gen3_social_$g
+      step "real $g parties, profile, address, token" "$(result "$G1O_WORK/gen3_social_$g.log" | sed 's/.*\t//')"
     fi
   done
   # FireRed and LeafGreen hold the same item places, so their players can

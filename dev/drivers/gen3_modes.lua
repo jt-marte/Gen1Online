@@ -49,6 +49,7 @@ return function(game)
 
   H.newOffline("OFFLINE")
   if not check(H.createPlayer("ASH", "^RED$"), "online as a new character") then return finish() end
+  local ashToken = H.account().token
   H.clearTexts()
   H.closeAll()
   check(Modes and Modes.rules and Modes.rules.nuzlocke == "hardcore" and Modes.rules.randomizer,
@@ -457,5 +458,33 @@ return function(game)
   local backup = love.filesystem.getInfo("mod_compat/gen1online-plus/gen1online_online_save_"
     .. H.version .. "_run" .. (runId + 1) .. "_backup.lua")
   check(backup ~= nil, "run " .. (runId + 1) .. "'s save is kept as a backup")
+  H.closeAll()
+
+  -- --------------------------------------- a new device: the recovery token
+  -- REDEEM RECOVERY TOKEN joins the run like any CONNECT: the new game in
+  -- the bedroom is the team's current run, in the shuffled world
+  H.startItem("gen1online")
+  H.choose("DISCONNECT")
+  H.clearTexts()
+  H.closeAll()
+  local dir = love.filesystem.getSaveDirectory() .. "/mod_compat/gen1online-plus/"
+  os.remove(dir .. "gen1online_online_account_" .. H.version .. ".lua")
+  os.remove(dir .. "save_online_" .. H.version .. ".lua")
+  H.fieldFree()
+  H.startItem("gen1online")
+  H.choose("^JOIN")
+  H.choose("REDEEM RECOVERY TOKEN")
+  if not H.naming(ashToken) then return finish() end
+  for _ = 1, 300 do if H.online() and Runtime.isActive() then break end U.wait(2) end
+  mark = #H.seen
+  for _ = 1, 400 do H.clearTexts(1); U.wait(1) end
+  H.closeAll()
+  check(H.online() and Modes.rules and Modes.rules.runId == runId + 2 and Modes.state().run == runId + 2,
+    "a new device: REDEEM RECOVERY TOKEN joins run " .. (runId + 2) .. " (" .. tostring(Modes.state().run) .. ")")
+  check(Modes.plan() ~= nil and Evolution.nationalAllows(grovyle, Runtime.getSession()),
+    "in the shuffled world")
+  local again = false
+  for i = mark + 1, #H.seen do if H.seen[i]:find("BEGINS", 1, true) then again = true end end
+  check(not again, "without starting another run")
   return finish()
 end

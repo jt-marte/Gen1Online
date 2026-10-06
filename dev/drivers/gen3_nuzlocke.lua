@@ -190,6 +190,15 @@ return function(game)
   s = Runtime.getSession()
   local karp = s.party[1]
   check(tonumber(karp.species) == 129, "MAGIKARP leads")
+  -- a sturdy second in line: a FUTURE SIGHT used on the 1-HP lead is worked
+  -- out against it (Gen 3) and lands on whoever comes in next, which
+  -- knocked out the level-60 CHARIZARD and then the party (a new run
+  -- empties the graveyard); a level-100 one with FLAMETHROWER takes it and
+  -- wins
+  Party.giveMon(s, 6, 100)
+  local backup = table.remove(s.party)
+  backup.moves, backup.pp, backup.maxPp = { 53 }, { 15 }, { 15 }
+  table.insert(s.party, 2, backup)
   -- a GEODUDE (shuffled) that outclasses it; at 1 HP any hit will do, but a
   -- wild Pokémon may TELEPORT away first, so it goes again until one lands
   karp.hp = 1

@@ -638,6 +638,7 @@ return function(game)
     "a wipe the server never heard of is sent on the next connect")
 
   -- ---- offline, the vanilla world is back ----------------------------------------------------
+  local ashToken = game.save.onlineAccount.token
   U.tap(game, "start"); U.wait(10)
   choose("ONLINE")
   choose("DISCONNECT")
@@ -655,6 +656,37 @@ return function(game)
   check(enc2 and enc2.species == "PIDGEY", "and wild Pokemon are vanilla")
   check(ModRuntime.call("battle.style", function() return "shift" end, {}) == "shift",
     "and the battle style is the player's own")
+
+  -- ---- a new device: the recovery token joins the run -----------------------------------------
+  local runNow2 = runNow + 1
+  local dir = love.filesystem.getSaveDirectory() .. "/mod_compat/gen1online-plus/"
+  os.remove(dir .. "gen1online_online_account_yellow.lua")
+  os.remove(dir .. "save_online_yellow.lua")
+  settled()
+  U.tap(game, "start"); U.wait(10)
+  choose("CONNECT")
+  choose("^JOIN")
+  choose("REDEEM RECOVERY TOKEN")
+  naming = top()
+  if check(naming and naming.onDone, "a new device: REDEEM RECOVERY TOKEN asks for the token") then
+    game.stack:pop()
+    naming.onDone(ashToken, true)
+    U.wait(6)
+  end
+  for _ = 1, 300 do
+    clearTexts(40)
+    if said("TOKEN REDEEMED") then break end
+    U.wait(2)
+  end
+  drain()
+  check(game.save.onlineAccount and game.save.onlineAccount.name == "ASH", "ASH is back")
+  check(Modes.rules and Modes.rules.runId == runNow2 and Modes.state(game.save).run == runNow2,
+    "in the team's run " .. runNow2 .. " (" .. tostring(Modes.state(game.save).run) .. ")")
+  local shuffled = false
+  for i, obj in ipairs(game.data.maps.VIRIDIAN_FOREST.objects or {}) do
+    if (obj.item or false) ~= vanillaForest[i] then shuffled = true end
+  end
+  check(shuffled and Modes.plan() ~= nil, "and the shuffled world")
 
   return finish()
 end

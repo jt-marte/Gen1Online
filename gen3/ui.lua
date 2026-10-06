@@ -46,9 +46,12 @@ return function(env)
     return B and B.isActive and B.isActive() or false
   end
 
-  -- FireRed's font has no glyph for a few characters the screens use
+  -- FireRed's font has no glyph for a few characters the screens use: the
+  -- braces and "_" go, "#" becomes FireRed's own No. and "*" (a party's
+  -- leader) a ◎
+  local GLYPHS = { ["#"] = "№", ["*"] = "◎" }
   local function clean(text)
-    return (tostring(text or ""):gsub("[{}]", ""):gsub("_", " "))
+    return (tostring(text or ""):gsub("[{}]", ""):gsub("_", " "):gsub("[#*]", GLYPHS))
   end
   UI.clean = clean
 

@@ -1050,13 +1050,15 @@
     love.graphics.setColor(0, 0, 0, 1)
     Font.draw("GLOBAL CHAT", 8, 8)
     Font.draw(string.format("%d/%d", #self.buffer, self.maxLen), 104, 8)
-    -- Preview box area: 20x8 tiles (x=0, y=3, w=20, h=8)
-    local boxTx, boxTy, boxTw, boxTh = 0, 3, 20, 8
+    -- Preview box area: 20x8 tiles (x=0, y=3, w=20, h=8); a tile taller
+    -- for FireRed's taller font, whose third line would sit on the border
+    local boxTx, boxTy, boxTw, boxTh = 0, 3, 20, GtsUI.G3 and 9 or 8
     Font.drawBox(boxTx, boxTy, boxTw, boxTh)
     local preview = #self.buffer > 0 and self.buffer or "TYPE MESSAGE..."
     local wrapped = wrapText(preview, 17)
     local lines = {}
-    for line in (wrapped .. "\n"):gmatch("(.-)\n") do
+    -- lines, also across the page breaks (\f) wrapText puts every two
+    for line in (wrapped .. "\n"):gmatch("([^\n\f]*)[\n\f]") do
       if #lines < 3 then
         lines[#lines + 1] = line
       end
@@ -1071,7 +1073,9 @@
       local cx = 16 + Font.width(lastLine)
       local cy = (boxTy + 2 + (lastLineIdx - 1) * 2) * 8
       if cx <= 140 then
-        Font.draw("_", cx, cy)
+        -- FireRed's font has no "_": a line under the next character
+        if GtsUI.G3 then love.graphics.rectangle("fill", cx, cy + 14, 5, 1)
+        else Font.draw("_", cx, cy) end
       end
     end
     Font.draw("ENTER:SEND  BKSP:DEL", 8, 104)
@@ -1215,38 +1219,46 @@
       if input:wasPressed("right") then return self:add("0") end
       if input:wasPressed("left") and #self.buffer > 0 then return self:back() end
     end
+    -- Rows in Gen 1 pixels.  FireRed's font is taller than Gen 1's 8-pixel
+    -- rows: there the lines sit 12 apart and the cursor goes lower.
+    AddressScreen.ROWS = { title = 8, now = 24, boxTop = 4, boxH = 4, field = 48, under = 8,
+      msg = 72, msgStep = 8, msgEnd = 88, help = 104, helpStep = 8, keys = 128 }
+    AddressScreen.ROWS_G3 = { title = 4, now = 17, boxTop = 4, boxH = 3, field = 38, under = 14,
+      msg = 62, msgStep = 12, msgEnd = 74, help = 96, helpStep = 12, keys = 124 }
     function AddressScreen:draw()
+      local R = GtsUI.G3 and AddressScreen.ROWS_G3 or AddressScreen.ROWS
       local G = love.graphics
       G.setColor(1, 1, 1, 1)
       G.rectangle("fill", 0, 0, 160, 144)
       G.setColor(0, 0, 0, 1)
-      Font.draw("SERVER ADDRESS?", 8, 8)
+      Font.draw("SERVER ADDRESS?", 8, R.title)
       if self.current and self.current ~= "" then
-        Font.draw(("NOW " .. self.current):sub(1, 19), 8, 24)
+        Font.draw(("NOW " .. self.current):sub(1, 19), 8, R.now)
       end
-      Font.drawBox(0, 4, 20, 4)
+      Font.drawBox(0, R.boxTop, 20, R.boxH)
       -- the field scrolls: the last 17 characters stay in view
       local shown = self.buffer
       if #shown > 17 then shown = shown:sub(-17) end
-      local fx, fy = 16, 48
+      local fx, fy = 16, R.field
       Font.draw(shown, fx, fy)
       if self.blink < 40 then
         -- a block cursor (the fonts have no "_" glyph), under the last
         -- character, which UP/DOWN change
         local w = Font.width(shown)
-        local cx = (#shown > 0) and (fx + w - 8) or fx
-        G.rectangle("fill", cx, fy + 8, 8, 1)
+        local lw = (#shown > 0) and Font.width(shown:sub(-1)) or 8
+        local cx = (#shown > 0) and (fx + w - lw) or fx
+        G.rectangle("fill", cx, fy + R.under, lw, 1)
       end
       local lines = self.message and wrapText(self.message, 18)
         or "EX: 192.168.1.23\nOR 100.64.0.7:7779"
-      local y = 72
-      for line in (lines .. "\n"):gmatch("(.-)\n") do
-        if y <= 88 then Font.draw(line, 8, y) end
-        y = y + 8
+      local y = R.msg
+      for line in (lines .. "\n"):gmatch("([^\n\f]*)[\n\f]") do
+        if y <= R.msgEnd then Font.draw(line, 8, y) end
+        y = y + R.msgStep
       end
-      Font.draw("UP DOWN: CHANGE", 8, 104)
-      Font.draw("RIGHT:ADD  LEFT:DEL", 8, 112)
-      Font.draw("A:OK  B:BACK", 8, 128)
+      Font.draw("UP DOWN: CHANGE", 8, R.help)
+      Font.draw("RIGHT:ADD  LEFT:DEL", 8, R.help + R.helpStep)
+      Font.draw("A:OK  B:BACK", 8, R.keys)
       G.setColor(1, 1, 1, 1)
     end
   end
@@ -2072,7 +2084,10 @@
               end
             end
 
-            if res.party ~= nil then
+            -- a sync answer's party is the server's word, null for none: an
+            -- answer sent before LEAVE PARTY (still holding the party) is
+            -- put right by the next one instead of keeping it for good
+            if res.party ~= nil or res.players ~= nil then
               activeParty = res.party
             end
             if GtsUI.Modes and res.run then GtsUI.Modes.synced(game, res) end
@@ -3873,7 +3888,8 @@
         Font.draw(string.format("PVP: %dW / %dL", pvpWins, pvpLosses), 8, 90)
         Font.draw(string.format("BADGES:%d/8 DEX:%d", badges, pokedexCount), 8, 102)
         Font.draw(string.format("FAVORITE: %s", favMon:sub(1, 8)), 8, 114)
-        Font.draw("==================", 8, 122)
+        -- (no room under FireRed's taller font)
+        if not GtsUI.G3 then Font.draw("==================", 8, 122) end
         Font.draw("A/B: CLOSE", math.floor((160 - 10 * 8) / 2), 128)
       end
     }
@@ -5127,6 +5143,8 @@
                 if game.save and game.save.onlineAccount then
                   game.save.onlineAccount.title = t
                 end
+                -- stored first: the sync reloads the account from storage
+                saveOnlineAccount(game.save)
                 syncLocalProfile(game, 0)
                 local msg = string.format("TITLE UPDATED TO:\n%s!", t)
                 game.stack:push(TextBox.new(game, wrapText(msg)))
@@ -5154,6 +5172,8 @@
                 if game.save and game.save.onlineAccount then
                   game.save.onlineAccount.favoriteMon = mName
                 end
+                -- stored first: the sync reloads the account from storage
+                saveOnlineAccount(game.save)
                 syncLocalProfile(game, 0)
                 local msg = string.format("FAVORITE POKéMON SET TO:\n%s!", mName)
                 game.stack:push(TextBox.new(game, wrapText(msg)))
@@ -5304,6 +5324,9 @@
             saveOnlineAccount(game.save)
             applyPlayerSprite(game, localSelectedSprite)
             writeOnlineSave(game.save)
+            -- the server's game modes, as on any CONNECT: a new game here
+            -- starts the run, a restored one is checked against it
+            if GtsUI.Modes then GtsUI.Modes.connected(game, GtsUI.serverRules, not mine) end
             syncLocalProfile(game, 0)
             fetchGtsServerSync(acc.trainerId)
             startChatSession(game)
@@ -5396,6 +5419,7 @@
             end
           end
           writeOnlineSave(game.save)
+          if GtsUI.Modes then GtsUI.Modes.connected(game, GtsUI.serverRules, newSave ~= restoredSave) end
 
           syncLocalProfile(game, 0)
           fetchGtsServerSync(acc.trainerId)

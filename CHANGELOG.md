@@ -137,6 +137,24 @@ A server of our own, built for playing with friends.
 
 ### Fixed
 
+- REDEEM RECOVERY TOKEN skipped the server's game modes (Gen 1 and
+  FireRed/LeafGreen): a player restored on a new device played the vanilla
+  world with no Nuzlocke rules, and in a multiworld run never took back
+  their world. The restored character now joins the run as on any CONNECT.
+- ONLINE SETTINGS > CHANGE TITLE and FAVORITE MON reverted at once and never
+  reached the server (all generations): the profile sync reloaded the
+  account from storage before the new value was written there.
+- A party you had left could come back for good (all generations): a
+  position sync answered just before LEAVE PARTY still held the party, and
+  the answers after it, with no party, were never allowed to clear it.
+- FireRed/LeafGreen: the SERVER ADDRESS screen's lines overlapped in
+  FireRed's taller font (the current address was half hidden under the input
+  box), the trainer card's last two lines overlapped, the chat box's third
+  line sat on its border and its cursor wasn't drawn, and the RANK's "#" and
+  the party leader's "*" weren't drawn (FireRed's font has neither; they are
+  its "№" and "◎" now).
+- The chat box split a long message at wrapText's page breaks wrongly, so
+  its second line carried a page-break character and the third line.
 - An offer made right after a battle was thrown away for 5 seconds as if it
   were a stale answer from that battle (all generations). Only stale answers
   are dropped now; a new PVP or trade offer, and the answer to a challenge

@@ -212,7 +212,9 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   learners in 3+ early areas). After connecting it also covers a lost
   report sent again, a full bag sending a team item to the PC, no room at
   all (not counted, comes later), an owed gym prize, and the level cap with
-  gyms open out of order. Needs the Yellow cache only.
+  gyms open out of order. Last, a new device (the online files deleted):
+  REDEEM RECOVERY TOKEN joins the current run in the shuffled world. Needs
+  the Yellow cache only.
 - **Real Yellow multiworld** (`dev/drivers/gen1_multiworld.lua`): a server
   with `randomizer = on`, `multiworld = on`, `players = 2`, `seed = 4242`.
   The client joins as world 1, BUDDY (raw HTTP) as world 2, a third trainer
@@ -249,8 +251,9 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   `gen1online-frlg2` for the link driver's second game). `run_tests.sh` runs
   them per game, on a `--gen 3` server:
   - `gen3_online.lua`: a new character, a remote player on the field, PC
-    GTS deposit and claim, a KADABRA bought and evolved, Wonder Trade, chat,
-    DISCONNECT and back.
+    GTS deposit and claim, a Pokémon deposited from a PC box and withdrawn
+    back, a KADABRA bought and evolved, Wonder Trade, chat, DISCONNECT and
+    back.
   - `gen3_link.lua` (two LÖVE processes, host and guest): a PVP battle and
     a Trade Center link trade over the server.
   - `gen3_modes.lua` (both games; hardcore, randomizer, seed 4242): the map
@@ -267,19 +270,35 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     BROCK fought for his slot (SET, no EXP over the cap), a burial, a wipe
     starting run 2, DISCONNECT restoring vanilla, JOIN again reloading run
     2 from the online save, and BUDDY's wipe while ASH is offline making
-    JOIN start run 3 (run 2's save kept as a backup). It prints the item
-    places' fingerprint; `run_tests.sh` checks FireRed's and LeafGreen's
-    agree.
+    JOIN start run 3 (run 2's save kept as a backup), then a new device:
+    REDEEM RECOVERY TOKEN joining run 3 in the shuffled world. It prints
+    the item places' fingerprint; `run_tests.sh` checks FireRed's and
+    LeafGreen's agree.
   - `gen3_nuzlocke.lua` (FireRed): real battles. A Master Ball thrown from
     the battle bag, the next encounter's ball refused in the bag (the
     reason in `BagMenu.messageText`) and kept, the Safari Zone's BALL
     refused with no Safari Ball spent, a fainted MAGIKARP buried, and a
-    real blackout starting the next run.
+    real blackout starting the next run. The burial battle puts a level-100
+    CHARIZARD with FLAMETHROWER second: a shuffled FUTURE SIGHT is worked
+    out against the 1-HP lead (Gen 3) and lands on the next one in, which
+    once wiped the party and started a new run mid-test.
   - `gen3_multiworld.lua` (FireRed; `multiworld = on`, `players = 2`):
     world 1 joined, BUDDY world 2, a third trainer `RUN_FULL`, another
     game's data `WRONG_WORLD_DATA`, every progression item in one world, a
     world-1 ball picked up for real reaching the team and BUDDY's world-2
     find reaching the client, RUN INFO, and a newcomer refused on CONNECT.
+  - `gen3_social.lua` (FireRed; plain server, `gts_config.txt` at a dead
+    port): JOIN reporting the dead server, SERVER ADDRESS typed through
+    `love.textinput`, `Game3:keypressed` and the D-pad (bad addresses
+    refused), a new player, MY PROFILE and EXP (read off `G3.Font.draw`),
+    ONLINE SETTINGS (title, avatar seen by BUDDY, favorite, token, live
+    chat), a chat line typed into the chat box, BUDDY's card through A,
+    parties (BUDDY's invite accepted, MEMBERS, WARP TO MEMBER to BUDDY in
+    Pallet Town, LEAVE and the party gone; ASH's own party with BUDDY
+    joining), and a new device: a wrong token refused,
+    REDEEM RECOVERY TOKEN (lower case), DISCONNECT restoring the offline
+    game. The mod's menus close when an item is picked, so a screen opened
+    from one returns to the field.
 - Driver gotchas:
   - Driver mode skips the `core.update` hook, so drivers re-route
     `game.update` through it.
