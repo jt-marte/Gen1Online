@@ -20,6 +20,7 @@ return function(ctx)
   local Bag = require("src.inventory.Bag")
   local ItemEffects = require("src.inventory.ItemEffects")
   local OverworldState = require("src.world.OverworldController")
+  local BattleState = require("src.battle.BattleState")
   local TextBox = require("src.render.TextBox")
   local GameVersion = require("src.core.GameVersion")
   local okV, victories = pcall(require, "data.scripts.victories")
@@ -34,6 +35,7 @@ return function(ctx)
   local pendingRestart = false
   local wipeQueued = false
   local battleInfo = nil             -- { catchable, why } for this wild battle
+  local currentBattle = nil          -- the battle on screen, any kind
 
   local BADGES = { "BOULDERBADGE", "CASCADEBADGE", "THUNDERBADGE", "RAINBOWBADGE",
                    "SOULBADGE", "MARSHBADGE", "VOLCANOBADGE", "EARTHBADGE" }
@@ -268,6 +270,18 @@ return function(ctx)
     return gained
   end)
 
+  -- An item the hardcore rules refuse in battle skips the target picker, so
+  -- the refusal comes at once instead of after choosing a Pokémon for it.
+  local function refusedInBattle(id)
+    return currentBattle ~= nil and currentBattle.kind ~= "link" and M.hardcore()
+      and not ItemEffects.isBall(id)
+  end
+  local origNeedsTarget = ItemEffects.needsTarget
+  ItemEffects.needsTarget = function(id, ...)
+    if refusedInBattle(id) then return false end
+    return origNeedsTarget(id, ...)
+  end
+
   mod.hooks:wrap("item.use", function(nextFn, game, battle, id, target, list, moveIndex, picker)
     if battle and M.hardcore() and battle.kind ~= "link" then
       local why
@@ -285,9 +299,23 @@ return function(ctx)
     return nextFn(game, battle, id, target, list, moveIndex, picker)
   end)
 
+  -- The Safari Zone throws its balls from its own BALL/BAIT/ROCK/RUN menu,
+  -- not the bag: the same refusal, said in battle, with no Safari Ball spent.
+  local origSafari = BattleState.safariAction
+  BattleState.safariAction = function(self, choice, ...)
+    if choice == "ball" and M.hardcore() and battleInfo and not battleInfo.catchable then
+      self.phase = "messages"
+      self.afterQueue = "menu"
+      self:say(ctx.wrapText(battleInfo.why))
+      return
+    end
+    return origSafari(self, choice, ...)
+  end
+
   -- the first wild Pokémon in each area (map) is the only one that counts
   mod.events:on("battle.started", function(ev)
     battleInfo = nil
+    currentBattle = type(ev) == "table" and ev.battle or nil
     if not (M.hardcore() and type(ev) == "table") then return end
     if ev.kind ~= "wild" and ev.kind ~= "safari" then return end
     local save = Game.save
@@ -349,6 +377,7 @@ return function(ctx)
 
   mod.events:on("battle.ended", function(ev)
     battleInfo = nil
+    currentBattle = nil
     if not M.hardcore() then return end
     local battle = type(ev) == "table" and ev.battle or nil
     -- link battles (PVP) are friendly; the Oak's Lab rival is never a loss

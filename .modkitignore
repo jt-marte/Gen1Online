@@ -32,6 +32,7 @@ dev/drivers/online.lua
 dev/drivers/follower.lua
 dev/drivers/gen1_voxel.lua
 dev/drivers/gen1_modes.lua
+dev/drivers/gen1_nuzlocke.lua
 dev/harness/address_test.lua
 dev/harness/modes_test.lua
 # The server (server/) is hosted separately and never ships inside the mod.

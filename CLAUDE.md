@@ -186,6 +186,22 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   events are emitted, not fought), a wipe starting run 2 and BUDDY's wipe
   starting run 3, and DISCONNECT restoring the vanilla world. Needs the
   Yellow cache only.
+- **Real Yellow Nuzlocke battles** (`dev/drivers/gen1_nuzlocke.lua`): the
+  same server config, played in real battles. Wild encounters come from the
+  engine's own `onStepComplete` in real grass; battles are driven through
+  `src.battle.BattleAPI` (menus, moves), the native bag list (rows carry
+  `.value`) and the battle's own YES/NO `ChoiceBox`. Covers: a randomized
+  Route 1 species, a POTION refused before any target picker, a real catch,
+  the second encounter's ball refused and kept, a lead fainting (buried, the
+  player runs), the Safari Zone's own ball menu refused without spending a
+  ball, Snorlax's `static_battle` row and a fishing bite shuffled, Brock
+  fought for his shuffled badge slot (SET style, no EXP past the level cap),
+  a real blackout ending the run, then DISCONNECT and JOIN reloading the run
+  from disk without a restart, and a save from an older run restarting.
+  Driver gotchas: the battle asks "Use next POKéMON?" with a `ChoiceBox` on
+  top (the snapshot says `locked`); a forced switch menu opens on
+  `game.partyMenuSavedIndex`; `battle.ended` is observed by wrapping
+  `Runtime.emit` (a driver can't use `mod.events`).
   - `follower.lua`: follower and offline checks.
   - `online.lua`: run twice (fresh install, then returning player). Covers
     connect, PVP with non-default moves on both sides, a GTS trade with
@@ -595,5 +611,10 @@ off the open internet.
     on one server get different (each finishable) worlds from one seed.
   - Field moves still need a party Pokémon that learns the HM; the species
     shuffle doesn't guarantee one early.
-  - Nuzlocke areas are map ids (each floor counts). The Nuzlocke battle rules
-    are verified with emitted battle events, not a fought battle.
+  - Nuzlocke areas are map ids (each floor counts). Pokémon from the GTS,
+    Wonder Trade and link trades skip the catch rules (a design call).
+  - The hardcore rules hook `item.use` (the bag), `ItemEffects.needsTarget`
+    (a refused item gets no target picker), `BattleState.safariAction` (the
+    Safari Zone's own BALL), `battle.style`, `exp.gain`, and the
+    `battle.started` / `battle.ended` / `world.blacked_out` events. Link
+    battles use copies of the party, so PVP never buries anything.

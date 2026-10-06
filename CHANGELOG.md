@@ -22,7 +22,10 @@ A server of our own, built for playing with friends.
   ONLINE > RUN INFO shows the modes, the level cap, the fallen and the team's
   finds. Server: `rules` on `/server/info`, `run` and `team` on every
   `sync_pos` answer, the actions `team_status`, `team_found` and `run_wipe`,
-  and `--config` / `--new-run`.
+  and `--config` / `--new-run`. Played through in real battles on Yellow
+  (`dev/drivers/gen1_nuzlocke.lua`): in hardcore, a refused battle item is
+  refused before the target picker, and the Safari Zone's own BALL menu
+  follows the one-encounter-per-area rule.
 - `server/gts_server.py`: a single-file, standard-library Python 3.8+ server
   that speaks the client's protocol. `python3 server/gts_server.py` (or
   `server/start.sh`, or double-clicking `server/start.bat`) listens on port

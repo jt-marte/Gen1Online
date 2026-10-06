@@ -128,6 +128,13 @@ if [ "${1:-}" != "quick" ]; then
       POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_modes.lua SHOTS=$G1O_WORK/shots/gen1_modes \
       timeout 600 "$LOVE" . > "$G1O_WORK/gen1_modes.log" 2>&1
     step "real Yellow game modes" "$(result "$G1O_WORK/gen1_modes.log" | sed 's/.*\t//')"
+    # the same modes in real battles (fresh server, fresh profile)
+    GTS_CONFIG="$G1O_WORK/server/modes_config.txt" GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
+    rm -rf "$YPROFILE/mod_compat" "$YPROFILE/saves" "$YPROFILE"/save_yellow.lua*
+    XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=gen1online-yellow POKEPORT_VERSION=yellow \
+      POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_nuzlocke.lua SHOTS=$G1O_WORK/shots/gen1_nuzlocke \
+      timeout 900 "$LOVE" . > "$G1O_WORK/gen1_nuzlocke.log" 2>&1
+    step "real Yellow Nuzlocke battles" "$(result "$G1O_WORK/gen1_nuzlocke.log" | sed 's/.*\t//')"
   fi
 fi
 "$DEV/server.sh" stop
