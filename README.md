@@ -36,6 +36,13 @@ A server hosts one generation's world: Gen 1 players (Red, Blue and Yellow toget
 ### 👥 6. Co-Op Party System
 - **Party System (Up to 4 Players)**: Invite nearby trainers, view live teammate locations and levels.
 
+### 💀 7. Hardcore Nuzlocke & Co-Op Randomizer (Red, Blue, Yellow)
+The host turns these on in `server/server_config.txt`; everyone on the server plays the same run.
+- **Co-Op Randomizer**: wild Pokémon (each swapped for one of similar strength), items and gym badges are shuffled from the run's seed. Brock might hand you a POTION while the BOULDERBADGE lies in an item ball in Mt. Moon or comes from an NPC. Placement follows the game's progression, so every run can be finished.
+- **Shared Key Items**: key items, HMs and badges are the team's. Whatever one player finds, every player gets.
+- **Hardcore Nuzlocke**: only the first wild Pokémon in each area can be caught (per player, with the dupes clause), fainted Pokémon are gone for good, no items in battle, SET battle style, and a level cap at the next gym leader's ace. If **any** player's whole party faints, the run ends for the whole team and everyone starts over in a new world.
+- **ONLINE > RUN INFO** shows the modes, the level cap, your fallen Pokémon and the team's finds.
+
 ---
 
 ## 🎨 Importing Follower Assets from PokéEmerald Decompilation
@@ -107,6 +114,21 @@ server_url=http://127.0.0.1:7779
 **Router port forwarding.** Forward TCP port 7779 on the router to the host's LAN address, and give friends `server_url=http://<your public IP>:7779`. Share that address only with friends: the server is built for people you trust, with no passwords beyond each player's recovery token.
 
 A player's recovery token (shown when the character is created) restores the online character on a new device through **ENTER RECOVERY TOKEN**.
+
+### 4. Game modes (optional, Red/Blue/Yellow servers)
+Edit `server/server_config.txt` and restart the server:
+
+```
+nuzlocke = hardcore      # off | hardcore
+randomizer = on          # off | on
+randomize_encounters = on
+randomize_items = on
+randomize_badges = on
+shared_key_items = auto  # auto = on with the randomizer
+seed =                   # a number replays the same world; empty = a new world every run
+```
+
+The server prints the active modes, the run number and its seed when it starts. `--config <file>` (or `GTS_CONFIG`) uses another file, and `--new-run` ends the current run by hand. Turning a mode on, or a new run starting, restarts every player's **online** save from their bedroom (with the same online character); the old online save is kept as a backup, and offline saves are never touched. Players on Red/Blue and on Yellow get worlds shuffled from the same seed, each one finishable in their own game.
 
 ---
 

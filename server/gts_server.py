@@ -8,8 +8,13 @@ standard library only: nothing to install.
     python3 server/gts_server.py --port 8000 --data /srv/gen1online.json
 
 Options can also come from the environment: PORT, GTS_DB_PATH,
-GTS_GENERATION and GTS_MOD_VERSION (the version this server speaks; clients
-with the same major.minor are accepted).
+GTS_GENERATION, GTS_CONFIG and GTS_MOD_VERSION (the version this server
+speaks; clients with the same major.minor are accepted).
+
+Game modes come from server/server_config.txt (or --config): a hardcore
+Nuzlocke and a co-op randomizer, both off by default and played on Gen 1
+worlds.  The server owns the run (its number and its seed) and the team's
+shared key items and badges; the clients do the rest.  See that file.
 
 A server, or more exactly its data file, is one world for one generation:
 Gen 1 (Red/Blue/Yellow) or Gen 2 (Crystal).  `--gen 1` or `--gen 2` picks it;
@@ -52,6 +57,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_VERSION = "0.5.1"
 DEFAULT_PORT = 7779
 DEFAULT_DATA = os.path.join(SCRIPT_DIR, "gts_data.json")
+DEFAULT_CONFIG = os.path.join(SCRIPT_DIR, "server_config.txt")
 
 PRESENCE_TTL = 30            # a player is dropped after this long without a sync
 SESSION_LOCK = 10            # another session is "live" if it synced this recently
@@ -109,6 +115,22 @@ CHALLENGE_TYPES = ("PVP", "TRADE", "ACCEPT_PVP", "ACCEPT_TRADE", "DECLINE")
 # Presence fields a sync_pos may carry; each is echoed to the other players.
 PRESENCE_FIELDS = ("name", "spriteId", "title", "level", "map", "x", "y", "px",
                    "py", "fx", "fy", "facing", "moving", "species")
+
+# Game modes (server_config.txt).  Booleans read on/off, yes/no, true/false, 1/0;
+# "auto" for shared_key_items means "on when the randomizer is".
+RULE_DEFAULTS = {
+    "nuzlocke": "off",            # off | hardcore
+    "randomizer": False,
+    "randomize_encounters": True,
+    "randomize_items": True,
+    "randomize_badges": True,
+    "shared_key_items": "auto",
+    "seed": None,
+}
+NUZLOCKE_MODES = ("off", "hardcore")
+SEED_MAX = 2147483646           # the client's Park-Miller generator takes 1..2^31-2
+TEAM_ITEM_MAX = 64              # distinct shared items the team can hold
+LOCATION_MAX_LEN = 64
 
 RANK_TITLES = ((100, "POKéMON LEGEND"), (90, "GRAND MASTER"), (80, "CHAMPION"),
                (70, "ELITE FOUR"), (60, "VETERAN"), (50, "MASTER"),
@@ -192,6 +214,77 @@ def valid_mon(mon):
     return isinstance(mon, dict) and bool(mon.get("species"))
 
 
+def parse_bool(value):
+    text = str(value).strip().lower()
+    if text in ("on", "yes", "true", "1"):
+        return True
+    if text in ("off", "no", "false", "0"):
+        return False
+    raise ValueError("expected on or off, got %r" % value)
+
+
+def parse_rules(text):
+    """server_config.txt's key = value lines as a rules dict (see RULE_DEFAULTS).
+    Raises ValueError on an unknown key or a bad value, naming the line."""
+    rules = dict(RULE_DEFAULTS)
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if "=" not in line:
+            raise ValueError("line %d: expected key = value" % number)
+        key, value = (part.strip() for part in line.split("=", 1))
+        key = key.lower()
+        try:
+            if key not in RULE_DEFAULTS:
+                raise ValueError("unknown setting %r" % key)
+            if key == "nuzlocke":
+                value = value.lower() or "off"
+                if value not in NUZLOCKE_MODES:
+                    raise ValueError("nuzlocke is off or hardcore, not %r" % value)
+                rules[key] = value
+            elif key == "seed":
+                if value:
+                    seed = int(value)
+                    if not 1 <= seed <= SEED_MAX:
+                        raise ValueError("seed must be 1..%d" % SEED_MAX)
+                    rules[key] = seed
+            elif key == "shared_key_items" and value.lower() == "auto":
+                rules[key] = "auto"
+            else:
+                rules[key] = parse_bool(value)
+        except ValueError as err:
+            raise ValueError("line %d: %s" % (number, err))
+    return rules
+
+
+def load_rules(path):
+    """The rules in `path`, or the defaults (everything off) when it is missing."""
+    if not path or not os.path.exists(path):
+        return dict(RULE_DEFAULTS)
+    with open(path, "r", encoding="utf-8") as f:
+        return parse_rules(f.read())
+
+
+def rules_view(rules):
+    """The rules as clients see them: modes that are off read false."""
+    rando = bool(rules.get("randomizer"))
+    shared = rules.get("shared_key_items")
+    if shared == "auto":
+        shared = rando
+    view = {
+        "nuzlocke": rules.get("nuzlocke") or "off",
+        "randomizer": rando,
+        "encounters": rando and bool(rules.get("randomize_encounters")),
+        "items": rando and bool(rules.get("randomize_items")),
+        "badges": rando and bool(rules.get("randomize_badges")),
+        "sharedKeyItems": bool(shared),
+    }
+    view["active"] = (view["nuzlocke"] != "off" or view["randomizer"]
+                      or view["sharedKeyItems"])
+    return view
+
+
 def generation_of(explicit, game_version):
     """1, 2 or 3 for a client, or None when it does not say (a script, a test)."""
     gen = to_int(explicit, 0)
@@ -218,6 +311,8 @@ def empty_data():
         "nextListingId": 1001,
         "nextClaimId": 1,
         "generation": None,    # 1 or 2 once set: this world's generation
+        "run": {},             # {id, seed, started}: the game modes' current run
+        "team": {},            # {items: {ITEM: {by, name, time}}, rev}: shared key items
     }
 
 
@@ -228,14 +323,18 @@ class GtsStore:
     """All server state behind one lock.  HTTP-agnostic, so tests can drive it."""
 
     def __init__(self, path, version=DEFAULT_VERSION, clock=time.time, rng=None,
-                 generation=None):
+                 generation=None, rules=None):
         self.path = path
         self.version = version
         self.clock = clock
         self.rng = rng or random.SystemRandom()
         self.lock = threading.RLock()
         self.announce = lambda text: print(text, flush=True)
+        self.rules = dict(RULE_DEFAULTS)
+        self.rules.update(rules or {})
         self.data = self._load()
+        if not self.data["run"].get("id"):
+            self._begin_run(1)
         if generation is not None:
             if generation not in GENERATION_NAMES:
                 raise ValueError("generation must be 1 or 2")
@@ -337,8 +436,9 @@ class GtsStore:
     def handle_get(self, path, query, header_version=None):
         if path == "/server/info":
             # never version-gated: the client compares versions itself
-            return {"success": True, "version": self.version, "modVersion": self.version,
-                    "generation": self.data["generation"]}
+            with self.lock:
+                return {"success": True, "version": self.version, "modVersion": self.version,
+                        "generation": self.data["generation"], "rules": self._run_view()}
         route = self.GET_ROUTES.get(path)
         if route is None:
             return {"success": False, "error": "NOT_FOUND"}
@@ -706,6 +806,8 @@ class GtsStore:
             "serverHour": clock.tm_hour,
             "serverMinute": clock.tm_min,
             "serverWeekday": (clock.tm_wday + 1) % 7,   # 0 = Sunday
+            "run": self._run_view(),
+            "team": self._team_view(),
         }
 
     # ---- chat -------------------------------------------------------------------
@@ -1055,6 +1157,88 @@ class GtsStore:
         entry = p["entry"]
         return {"success": True, "map": entry.get("map"), "x": entry.get("x"), "y": entry.get("y")}
 
+    # ---- game modes: the run and the team's shared key items --------------------------
+    #
+    # The server keeps three things for the modes in server_config.txt: the rules,
+    # the current run (a number and the randomizer's seed for it) and the key
+    # items, HMs and badges the team has found.  Everything else -- what the seed
+    # shuffles, which encounters count, what a faint means -- is the clients'.
+
+    def _run_seed(self, run_id):
+        seed = self.rules.get("seed")
+        if not seed:
+            return self.rng.randint(1, SEED_MAX)
+        # a fixed seed replays run 1 exactly; later runs get their own world
+        return seed if run_id == 1 else (seed * 1000003 + run_id) % SEED_MAX + 1
+
+    def _begin_run(self, run_id):
+        self.data["run"] = {"id": run_id, "seed": self._run_seed(run_id),
+                            "started": self._now()}
+        self.data["team"] = {"items": {}, "rev": 0}
+        self.save()
+
+    def _run_view(self):
+        run = self.data["run"]
+        view = rules_view(self.rules)
+        view["runId"] = run.get("id", 1)
+        view["seed"] = run.get("seed")
+        return view
+
+    def _team_view(self):
+        team = self.data["team"]
+        return {"rev": team.get("rev", 0), "items": sorted(team.get("items", {}))}
+
+    def _check_run(self, req):
+        run_id = to_int(req.get("runId"), 0)
+        if run_id != self.data["run"].get("id"):
+            raise ApiError("RUN_OVER")
+
+    def act_team_status(self, req):
+        return {"success": True, "run": self._run_view(), "team": self._team_view()}
+
+    def act_team_found(self, req):
+        """A teammate found a key item, HM or badge: the whole team has it now."""
+        account = self._require_account(req)
+        if not rules_view(self.rules)["sharedKeyItems"]:
+            raise ApiError("NOT_SHARED")
+        self._check_run(req)
+        item = clean_text(req.get("item"), 32).upper()
+        if not re.match(r"^[A-Z0-9_]+$", item):
+            raise ApiError("BAD_REQUEST")
+        items = self.data["team"].setdefault("items", {})
+        first = item not in items
+        if first:
+            if len(items) >= TEAM_ITEM_MAX:
+                raise ApiError("TEAM_FULL")
+            items[item] = {"by": account["trainerId"], "name": account["name"],
+                           "time": self._now(),
+                           "location": clean_text(req.get("location"), LOCATION_MAX_LEN)}
+            self.data["team"]["rev"] = self.data["team"].get("rev", 0) + 1
+            self._history("%s FOUND %s FOR THE TEAM!"
+                          % (account["name"], clean_text(req.get("itemName"), 20) or item))
+            self.save()
+        return {"success": True, "first": first, "team": self._team_view()}
+
+    def act_run_wipe(self, req):
+        """Hardcore Nuzlocke: a teammate's party wiped out, so the run is over for
+        everyone.  A wipe from a run that already ended starts nothing new."""
+        account = self._require_account(req)
+        if rules_view(self.rules)["nuzlocke"] != "hardcore":
+            raise ApiError("NOT_NUZLOCKE")
+        run = self.data["run"]
+        if to_int(req.get("runId"), 0) == run.get("id"):
+            ended = run.get("id", 1)
+            self._history("%s'S PARTY WIPED OUT! RUN %d IS OVER." % (account["name"], ended))
+            self.announce("Run %d ended: %s's party wiped out. Run %d begins."
+                          % (ended, account["name"], ended + 1))
+            self._begin_run(ended + 1)
+        return {"success": True, "run": self._run_view(), "team": self._team_view()}
+
+    def new_run(self):
+        """Start the next run by hand (the --new-run option)."""
+        with self.lock:
+            self._begin_run(self.data["run"].get("id", 0) + 1)
+
     # ---- quests ---------------------------------------------------------------------
 
     def act_get_quests(self, req):
@@ -1214,6 +1398,21 @@ def tailscale_ip():
     return None
 
 
+def modes_line(store):
+    view = store._run_view()
+    if not view["active"]:
+        return "none (edit %s to play a Nuzlocke or a randomizer)" % os.path.basename(DEFAULT_CONFIG)
+    parts = []
+    if view["nuzlocke"] != "off":
+        parts.append("%s Nuzlocke" % view["nuzlocke"])
+    if view["randomizer"]:
+        shuffled = [name for name in ("encounters", "items", "badges") if view[name]]
+        parts.append("randomizer (%s)" % (", ".join(shuffled) or "nothing shuffled"))
+    if view["sharedKeyItems"]:
+        parts.append("shared key items")
+    return "%s; run %d, seed %s" % (", ".join(parts), view["runId"], view["seed"])
+
+
 def banner(host, port, store):
     gen = store.data["generation"]
     world = (GENERATION_NAMES[gen] if gen else
@@ -1221,6 +1420,7 @@ def banner(host, port, store):
     lines = ["Gen1Online+ server %s on %s:%d" % (store.version, host, port),
              "Data: %s" % os.path.abspath(store.path),
              "World: %s" % world,
+             "Modes: %s" % modes_line(store),
              "",
              "Put one of these lines in gts_config.txt (next to the mod's main.lua):"]
     urls = [("this PC", "127.0.0.1")]
@@ -1253,14 +1453,25 @@ def main(argv=None):
     parser.add_argument("--gen", type=int, choices=(1, 2), default=env_gen,
                         help="the world's generation: 1 = Red/Blue/Yellow, 2 = Crystal "
                              "(default: the first game to connect decides, or $GTS_GENERATION)")
+    parser.add_argument("--config", default=os.environ.get("GTS_CONFIG") or DEFAULT_CONFIG,
+                        help="game modes file (default server/server_config.txt, or $GTS_CONFIG)")
+    parser.add_argument("--new-run", action="store_true",
+                        help="end the current Nuzlocke/randomizer run and start the next one")
     args = parser.parse_args(argv)
 
     try:
+        rules = load_rules(args.config)
+    except (OSError, ValueError) as err:
+        print("%s: %s" % (args.config, err), file=sys.stderr)
+        return 1
+    try:
         store = GtsStore(args.data, version=os.environ.get("GTS_MOD_VERSION") or DEFAULT_VERSION,
-                         generation=args.gen)
+                         generation=args.gen, rules=rules)
     except ValueError as err:
         print(err, file=sys.stderr)
         return 1
+    if args.new_run:
+        store.new_run()
     try:
         httpd = GtsHTTPServer((args.host, args.port), store)
     except OSError as err:

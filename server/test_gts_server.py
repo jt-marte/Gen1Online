@@ -56,10 +56,11 @@ class ServerTest(unittest.TestCase):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     generation = None   # a test class can start its server as --gen 1 or 2
+    rules = None        # ... and with game modes (server_config.txt settings)
 
     def start(self):
         self.store = gts_server.GtsStore(self.path, version=VERSION, clock=self.clock,
-                                         generation=self.generation)
+                                         generation=self.generation, rules=self.rules)
         self.store.announce = lambda text: None
         self.httpd = gts_server.GtsHTTPServer(("127.0.0.1", 0), self.store)
         self.port = self.httpd.server_address[1]
@@ -126,8 +127,11 @@ class ServerTest(unittest.TestCase):
 class TransportTests(ServerTest):
     def test_server_info_is_never_version_gated(self):
         res = self.get("/server/info", version=None)
+        rules = res.pop("rules")
         self.assertEqual(res, {"success": True, "version": VERSION, "modVersion": VERSION,
                                "generation": None})
+        self.assertIs(rules["active"], False)
+        self.assertEqual(rules["runId"], 1)
         res = self.get("/server/info", version="0.1.0")
         self.assertTrue(res["success"])
 
@@ -948,6 +952,154 @@ class CommandLineTests(unittest.TestCase):
         with contextlib.redirect_stderr(err):
             self.assertEqual(gts_server.main(["--data", path, "--gen", "1", "--port", "0"]), 1)
         self.assertIn("Gen 2 (Crystal) world", err.getvalue())
+
+
+class RulesFileTests(unittest.TestCase):
+    def test_defaults_are_all_off(self):
+        view = gts_server.rules_view(gts_server.parse_rules(""))
+        self.assertEqual(view, {"nuzlocke": "off", "randomizer": False, "encounters": False,
+                                "items": False, "badges": False, "sharedKeyItems": False,
+                                "active": False})
+
+    def test_the_shipped_file_parses_to_the_defaults(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_config.txt")
+        self.assertEqual(gts_server.load_rules(path), gts_server.RULE_DEFAULTS)
+        self.assertEqual(gts_server.load_rules(os.path.join(tempfile.mkdtemp(), "none.txt")),
+                         gts_server.RULE_DEFAULTS)
+
+    def test_a_full_file(self):
+        rules = gts_server.parse_rules(
+            "# comment\nnuzlocke = Hardcore\nrandomizer=on  # inline\n"
+            "randomize_badges = no\nseed = 42\n\n")
+        self.assertEqual(rules["nuzlocke"], "hardcore")
+        self.assertEqual(rules["seed"], 42)
+        view = gts_server.rules_view(rules)
+        self.assertEqual((view["encounters"], view["items"], view["badges"]), (True, True, False))
+        self.assertTrue(view["sharedKeyItems"], "auto follows the randomizer")
+        self.assertTrue(view["active"])
+
+    def test_sub_flags_need_the_randomizer_and_shared_items_stand_alone(self):
+        view = gts_server.rules_view(gts_server.parse_rules("shared_key_items = on"))
+        self.assertEqual((view["randomizer"], view["items"], view["sharedKeyItems"]),
+                         (False, False, True))
+        self.assertTrue(view["active"])
+
+    def test_mistakes_name_the_line(self):
+        for text, fragment in (("nuzlocke = soft", "line 1"), ("\nrandomiser = on", "line 2"),
+                               ("seed = 0", "seed"), ("seed = x", "line 1"),
+                               ("randomizer = maybe", "on or off"), ("randomizer", "key = value")):
+            with self.assertRaises(ValueError) as ctx:
+                gts_server.parse_rules(text)
+            self.assertIn(fragment, str(ctx.exception), text)
+
+
+class GameModeTests(ServerTest):
+    generation = 1
+    game = "Pokemon Red"
+    rules = {"nuzlocke": "hardcore", "randomizer": True, "seed": 12345}
+
+    def find(self, account, item, run_id=1, **extra):
+        return self.post("team_found", trainerId=account["trainerId"], token=account["token"],
+                         runId=run_id, item=item, itemName=item, location="ROUTE_1#1", **extra)
+
+    def test_the_rules_reach_every_client(self):
+        rules = self.get("/server/info")["rules"]
+        self.assertEqual((rules["nuzlocke"], rules["randomizer"], rules["items"],
+                          rules["sharedKeyItems"], rules["active"]),
+                         ("hardcore", True, True, True, True))
+        self.assertEqual((rules["runId"], rules["seed"]), (1, 12345))
+        red = self.register("RED")
+        res = self.sync(red["trainerId"])
+        self.assertEqual(res["run"], rules)
+        self.assertEqual(res["team"], {"rev": 0, "items": []})
+
+    def test_a_find_is_the_whole_teams(self):
+        red, blue = self.register("RED"), self.register("BLUE")
+        res = self.find(red, "BOULDERBADGE")
+        self.assertTrue(res["success"] and res["first"], res)
+        self.assertEqual(res["team"], {"rev": 1, "items": ["BOULDERBADGE"]})
+        again = self.find(blue, "BOULDERBADGE")
+        self.assertTrue(again["success"])
+        self.assertFalse(again["first"], "the team already had it")
+        self.find(blue, "HM_CUT")
+        self.assertEqual(self.sync(blue["trainerId"])["team"],
+                         {"rev": 2, "items": ["BOULDERBADGE", "HM_CUT"]})
+        history = self.get("/gts/browse")["history"]
+        self.assertEqual(history[0]["text"], "BLUE FOUND HM_CUT FOR THE TEAM!")
+        self.restart()
+        self.assertEqual(self.post("team_status")["team"]["items"], ["BOULDERBADGE", "HM_CUT"])
+
+    def test_finds_are_checked(self):
+        red = self.register("RED")
+        self.assertError(self.find(red, "HM_CUT", run_id=7), "RUN_OVER")
+        self.assertError(self.find(red, "HM CUT; DROP"), "BAD_REQUEST")
+        self.assertError(self.post("team_found", trainerId="999999", runId=1, item="HM_CUT"),
+                         "UNKNOWN_TRAINER")
+        self.assertError(self.post("team_found", trainerId=red["trainerId"], token="WRONG",
+                                   runId=1, item="HM_CUT"), "INVALID_TOKEN")
+
+    def test_a_wipe_ends_the_run_for_everyone(self):
+        red, blue = self.register("RED"), self.register("BLUE")
+        self.find(red, "CASCADEBADGE")
+        res = self.post("run_wipe", trainerId=blue["trainerId"], token=blue["token"], runId=1)
+        self.assertTrue(res["success"], res)
+        run2 = res["run"]
+        self.assertEqual(run2["runId"], 2)
+        self.assertNotEqual(run2["seed"], 12345, "a new run is a new world")
+        self.assertEqual(res["team"], {"rev": 0, "items": []}, "the team starts with nothing")
+        self.assertEqual(self.sync(red["trainerId"])["run"]["runId"], 2)
+        # the other player's wipe of the same run arrives late: nothing more ends
+        late = self.post("run_wipe", trainerId=red["trainerId"], token=red["token"], runId=1)
+        self.assertEqual(late["run"]["runId"], 2)
+        self.assertError(self.find(red, "HM_CUT", run_id=1), "RUN_OVER")
+        self.assertEqual(self.get("/gts/browse")["history"][0]["text"],
+                         "BLUE'S PARTY WIPED OUT! RUN 1 IS OVER.")
+        self.restart()
+        self.assertEqual(self.get("/server/info")["rules"]["runId"], 2)
+        self.assertEqual(self.get("/server/info")["rules"]["seed"], run2["seed"])
+
+    def test_a_fixed_seed_gives_every_run_its_own_repeatable_world(self):
+        seeds = [self.store._run_seed(n) for n in (1, 2, 3)]
+        self.assertEqual(seeds[0], 12345)
+        self.assertEqual(len(set(seeds)), 3)
+        self.assertEqual(seeds, [self.store._run_seed(n) for n in (1, 2, 3)])
+        for seed in seeds:
+            self.assertTrue(1 <= seed <= gts_server.SEED_MAX)
+
+
+class ModesOffTests(ServerTest):
+    generation = 1
+    game = "Pokemon Red"
+
+    def test_the_mode_actions_refuse(self):
+        red = self.register("RED")
+        self.assertError(self.post("team_found", trainerId=red["trainerId"], runId=1,
+                                   item="HM_CUT"), "NOT_SHARED")
+        self.assertError(self.post("run_wipe", trainerId=red["trainerId"], runId=1),
+                         "NOT_NUZLOCKE")
+        self.assertIs(self.sync(red["trainerId"])["run"]["active"], False)
+
+    def test_a_random_seed_per_run(self):
+        seed = self.get("/server/info")["rules"]["seed"]
+        self.assertTrue(1 <= seed <= gts_server.SEED_MAX)
+
+
+class ModesCommandLineTests(unittest.TestCase):
+    def test_new_run_and_a_bad_config(self):
+        folder = tempfile.mkdtemp()
+        data, config = os.path.join(folder, "d.json"), os.path.join(folder, "c.txt")
+        with open(config, "w", encoding="utf-8") as f:
+            f.write("nuzlocke = hardcore\nseed = 7\n")
+        store = gts_server.GtsStore(data, rules=gts_server.load_rules(config))
+        self.assertIn("hardcore Nuzlocke; run 1, seed 7", gts_server.banner("127.0.0.1", 7779, store))
+        store.new_run()
+        self.assertEqual(gts_server.GtsStore(data).data["run"]["id"], 2)
+        with open(config, "w", encoding="utf-8") as f:
+            f.write("nuzlocke = sometimes\n")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(gts_server.main(["--data", data, "--config", config, "--port", "0"]), 1)
+        self.assertIn("line 1", err.getvalue())
 
 
 if __name__ == "__main__":

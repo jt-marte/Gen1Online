@@ -26,6 +26,8 @@ cd "$RECOMP" || exit 1
 
 "$LUAJIT" "$DEV/harness/offline_test.lua" > "$G1O_WORK/offline.log" 2>&1
 step "synthetic offline" "$(result "$G1O_WORK/offline.log")"
+"$LUAJIT" "$DEV/harness/modes_test.lua" > "$G1O_WORK/modes.log" 2>&1
+step "game modes (seed, logic, placement)" "$(result "$G1O_WORK/modes.log")"
 "$DEV/server.sh" >/dev/null
 DEV=1 "$LUAJIT" "$DEV/harness/online_test.lua" > "$G1O_WORK/online.log" 2>&1
 step "synthetic online" "$(result "$G1O_WORK/online.log")"
@@ -105,6 +107,27 @@ if [ "${1:-}" != "quick" ]; then
       POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_voxel.lua SHOTS=$G1O_WORK/shots/gen1_voxel \
       timeout 900 "$LOVE" . > "$G1O_WORK/gen1_voxel.log" 2>&1
     step "real Yellow + voxel" "$(result "$G1O_WORK/gen1_voxel.log" | sed 's/.*\t//')"
+  fi
+fi
+# Real Yellow on a server with every game mode on (hardcore Nuzlocke, the
+# randomizer, shared key items): the randomized world, the team's items, the
+# Nuzlocke rules and a run ending.  Needs the Yellow cache.
+if [ "${1:-}" != "quick" ]; then
+  if [ ! -f "$YPROFILE/yellow/rom-cache.complete" ]; then
+    echo "== real Yellow game modes: skipped (needs the Yellow cache)"
+  else
+    printf 'nuzlocke = hardcore\nrandomizer = on\nseed = 4242\n' > "$G1O_WORK/server/modes_config.txt"
+    GTS_CONFIG="$G1O_WORK/server/modes_config.txt" GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
+    rm -rf "$YPROFILE/mods" "$YPROFILE/mod_compat" "$YPROFILE/saves" "$YPROFILE"/save_yellow.lua*
+    mkdir -p "$YPROFILE/mods/gen1online-plus"
+    (cd "$REPO" && tar --exclude=.git --exclude='*.modpkg' --exclude=dev --exclude=server -cf - .) \
+      | (cd "$YPROFILE/mods/gen1online-plus" && tar -xf -)
+    printf 'server_url=http://127.0.0.1:%s\n' "$GTS_PORT" > "$YPROFILE/mods/gen1online-plus/gts_config.txt"
+    rm -rf "$G1O_WORK/shots/gen1_modes"
+    XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=gen1online-yellow POKEPORT_VERSION=yellow \
+      POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_modes.lua SHOTS=$G1O_WORK/shots/gen1_modes \
+      timeout 600 "$LOVE" . > "$G1O_WORK/gen1_modes.log" 2>&1
+    step "real Yellow game modes" "$(result "$G1O_WORK/gen1_modes.log" | sed 's/.*\t//')"
   fi
 fi
 "$DEV/server.sh" stop

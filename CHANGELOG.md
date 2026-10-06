@@ -6,6 +6,23 @@ A server of our own, built for playing with friends.
 
 ### Added
 
+- **Hardcore Nuzlocke and a co-op randomizer** (Red, Blue, Yellow), set by the
+  host in `server/server_config.txt` (all off by default) for everyone on the
+  server. The randomizer shuffles wild Pokémon (within strength tiers;
+  legendaries among themselves), item balls, hidden items, twelve NPC gifts
+  and the eight gym badge slots from the run's seed, with progression logic so
+  every seed can be finished; badges and key items never land on an invisible
+  tile. Key items, HMs and badges are shared by the whole team. The Nuzlocke
+  allows one catch per area per player (dupes clause, nothing counts before
+  the first Poké Ball), removes fainted Pokémon for good, bans items in battle,
+  forces SET and caps levels at the next gym leader's ace; link battles and
+  the first rival fight never cost a Pokémon. Any player's wipe ends the run
+  for the whole team: the server starts a new run with a new seed and every
+  online save restarts in the bedroom (the old one is kept as a backup).
+  ONLINE > RUN INFO shows the modes, the level cap, the fallen and the team's
+  finds. Server: `rules` on `/server/info`, `run` and `team` on every
+  `sync_pos` answer, the actions `team_status`, `team_found` and `run_wipe`,
+  and `--config` / `--new-run`.
 - `server/gts_server.py`: a single-file, standard-library Python 3.8+ server
   that speaks the client's protocol. `python3 server/gts_server.py` (or
   `server/start.sh`, or double-clicking `server/start.bat`) listens on port

@@ -21,7 +21,11 @@ trades on Gen 1 only. `manifest.json` `"games": ["red", "blue", "yellow",
   add gameplay that changes the vanilla game outside the online features. On
   Gen 1 that is why the casino is never set up (it would take over the
   Celadon Game Corner and raise the coin cap) and why the mod leaves Yellow's
-  own Pikachu follower (`src.world.PikachuFollower`) alone.
+  own Pikachu follower (`src.world.PikachuFollower`) alone. The one
+  sanctioned exception is the server's game modes (`modes/`: hardcore
+  Nuzlocke, randomizer, shared key items), which the user asked for: off by
+  default, chosen by the host in `server/server_config.txt`, online only, and
+  undone the moment the player is offline.
 - **The server is for friends**, with no Cloudflare. See "Server" below.
 - The user's Crystal ROM (v1.1, verified SHA-1) is at
   `/home/jt/Desktop/Pokemon/Pokemon - Crystal Version (UE) (V1.1) [C][!].zip`.
@@ -36,6 +40,7 @@ trades on Gen 1 only. `manifest.json` `"games": ["red", "blue", "yellow",
 | `pvp/` | Fallback Gen 2 PVP engine, used only against pre-0.5.1 peers. |
 | `other/`, `games/` | Gen 1 casino (Crash, Tube Flyer, Prize Case, pawn). Off: main.lua returns before setting it up on Gen 1, and on Crystal its maps don't exist. |
 | `npcs/`, `quests/` | Registries (empty). `npcs/{quest,trade}/*` are dead Gen 1 leftovers. |
+| `modes/` | Gen 1 server game modes: `init.lua` (hooks, the run, shared items, Nuzlocke), `randomizer.lua` (pure: build/apply/undo the world from a seed), `logic.lua` (what each item place needs), `rng.lua` (Park-Miller, pinned). Loaded by main.lua as `GtsUI.Modes` (exported as `mod.exports.modes`). |
 | `assets/followers/` | Follower sheets (16x96, 6 frames), from pokeemerald via `tools/import_emerald_follower.py`. |
 | `gts_config.txt` | `server_url=...`, read at startup through `mod:read`. The default only: an address typed in-game (START > CONNECT > SERVER ADDRESS, stored as `gts_server_url`) wins. |
 | `server/` | The server (`gts_server.py`, stdlib Python), its unittest, `start.sh`/`start.bat`. Never packaged. |
@@ -131,6 +136,11 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     on a Gen 1 server, including an accepted PVP battle (booked once) and a
     link trade opening over the room. `run_tests.sh` runs both for Red, Blue
     and Yellow.
+  - `modes_test.lua` (plain LuaJIT, no engine or ROM): the pinned RNG, 200
+    seeds of placement on a synthetic world (always finishable, no
+    progression on hidden tiles or post-game maps, a pure permutation), the
+    badges-only / items-only / encounters-only variants, the species shuffle,
+    and apply/undo.
   - `wrong_world_test.lua`: each generation's CONNECT is turned away by the
     other generation's server (run as Crystal on Gen 1, and as Red on Crystal).
   - `address_test.lua` (Crystal and Yellow): the CONNECT menu (JOIN / SERVER
@@ -166,6 +176,16 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   llvmpipe carries the voxel pipeline. The user's Yellow ROM is
   `/home/jt/Desktop/Pokemon/Pokemon - Yellow Version (UE) [C][!].gbc` (same
   rules as the Crystal one). Never edit the voxel mod.
+- **Real Yellow game modes** (`dev/drivers/gen1_modes.lua`): Yellow on a
+  server with `nuzlocke = hardcore`, `randomizer = on`, `seed = 4242`
+  (`run_tests.sh` writes that config and starts the server with
+  `GTS_CONFIG`). A new character connects; the driver checks a randomized
+  `rollEncounter`, a real item ball through `talkTo`, a `give_item` row
+  through the overworld's script runner, Brock's `checkVictoryRewards`, team
+  finds both ways (BUDDY over raw HTTP), RUN INFO, the Nuzlocke hooks (battle
+  events are emitted, not fought), a wipe starting run 2 and BUDDY's wipe
+  starting run 3, and DISCONNECT restoring the vanilla world. Needs the
+  Yellow cache only.
   - `follower.lua`: follower and offline checks.
   - `online.lua`: run twice (fresh install, then returning player). Covers
     connect, PVP with non-default moves on both sides, a GTS trade with
@@ -318,6 +338,26 @@ Parties:
 
 Quests:
 - `get_quests` → `{success, quests: []}`. There is no quest content yet.
+
+Game modes (Gen 1; `server/server_config.txt`, `--config`, `GTS_CONFIG`):
+- The rules view `{nuzlocke: "off"|"hardcore", randomizer, encounters, items,
+  badges, sharedKeyItems, active, runId, seed}` rides `/server/info` as
+  `rules` and every `sync_pos` answer as `run`, next to `team: {rev, items:
+  [ITEM]}`. Sub-flags read false when the randomizer is off;
+  `shared_key_items = auto` follows the randomizer.
+- `team_status` → `{success, run, team}`.
+- `team_found {trainerId, token, runId, item, itemName, location}` →
+  `{success, first, team}`; `RUN_OVER` for a stale `runId`, `NOT_SHARED` when
+  sharing is off. The clients decide what is shared (badges, key items, HMs;
+  not Oak's Parcel, the fossils or Safari Balls).
+- `run_wipe {trainerId, token, runId}` → `{success, run, team}`. Hardcore
+  only (`NOT_NUZLOCKE`). A wipe of the current run starts the next one: new
+  seed (a fixed `seed` replays run 1; later runs derive from it), empty team.
+  A late wipe of an ended run changes nothing. `--new-run` does it by hand.
+- Persisted: `run {id, seed, started}` and `team {items, rev}`. The client
+  stamps its online save with `g1oModes.run`; a save from another run is
+  archived (`gen1online_online_save_<game>_run<N>_backup.lua`) and replaced by
+  a new game in the bedroom with the same `onlineAccount`.
 
 ### The server (`server/gts_server.py`)
 
@@ -542,3 +582,18 @@ off the open internet.
   mod.storage" warning. Moving to `mod.cache` or `mod.storage` needs a
   migration that keeps existing players' `save_online_crystal.lua`.
 - `gen1online-plus-0.4.0.0.modpkg` is a stale release file in the repo.
+- Game modes (`modes/`), by design or not yet done:
+  - `logic.lua` is hand-written and conservative per map; an unlisted map
+    holds filler only. If no placement works in 60 tries (a data set it
+    doesn't know) the items stay vanilla and the player is told.
+  - Shuffled: item balls, hidden items, the twelve `give_item` gifts in
+    `L.GIFTS`, the gym badge slots (gym TMs stay). Not shuffled: Lua-handler
+    gifts (Bicycle, HM02, HM05, fossils, Oak's aides), trainers' teams, the
+    starters, gift and trade Pokémon. The Town Map's nest view reads the
+    vanilla encounter tables.
+  - Each client shuffles its own game's data, so Red/Blue and Yellow players
+    on one server get different (each finishable) worlds from one seed.
+  - Field moves still need a party Pokémon that learns the HM; the species
+    shuffle doesn't guarantee one early.
+  - Nuzlocke areas are map ids (each floor counts). The Nuzlocke battle rules
+    are verified with emitted battle events, not a fought battle.

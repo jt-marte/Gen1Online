@@ -1,0 +1,514 @@
+-- Server game modes on Gen 1: hardcore Nuzlocke, the co-op randomizer and the
+-- team's shared key items.  The server's server_config.txt picks them; the
+-- server keeps the run (its number and seed) and the team's finds, and this
+-- module plays them out.  Everything here is online-only: offline, or on a
+-- server with the modes off, every hook passes straight through and the
+-- shuffled world is put back.
+--
+-- main.lua builds it once (Gen 1 only) with the few things it needs:
+--   ctx = { mod, requireLocal, isOnline(), post(payload, timeout),
+--           trainerId(save), writeOnlineSave(save), getWorld(game),
+--           storageWrite(key, value), wrapText(text), home = {map, x, y} }
+-- and calls M.connected(game, fresh) after CONNECT and M.synced(game, res)
+-- with every sync_pos answer.  M.rules is the server's rules view.
+return function(ctx)
+  local mod = ctx.mod
+  local Rng = ctx.requireLocal("modes/rng.lua")
+  local L = ctx.requireLocal("modes/logic.lua")
+  local Randomizer = ctx.requireLocal("modes/randomizer.lua")
+  local Game = require("src.core.Game")
+  local Bag = require("src.inventory.Bag")
+  local ItemEffects = require("src.inventory.ItemEffects")
+  local OverworldState = require("src.world.OverworldController")
+  local TextBox = require("src.render.TextBox")
+  local GameVersion = require("src.core.GameVersion")
+  local okV, victories = pcall(require, "data.scripts.victories")
+  if not (okV and type(victories) == "table") then victories = {} end
+
+  local M = { rules = nil }
+  local plan, planKey, undo = nil, nil, nil
+  local reports, retryAt = {}, 0     -- shared finds waiting to reach the server
+  local notes = {}                   -- texts for when the overworld is free
+  local granting = false             -- adding the team's items: not a find
+  local lastTeamRev = nil
+  local pendingRestart = false
+  local wipeQueued = false
+  local battleInfo = nil             -- { catchable, why } for this wild battle
+
+  local BADGES = { "BOULDERBADGE", "CASCADEBADGE", "THUNDERBADGE", "RAINBOWBADGE",
+                   "SOULBADGE", "MARSHBADGE", "VOLCANOBADGE", "EARTHBADGE" }
+  -- the next gym leader's strongest Pokémon, by badges held, then the Champion
+  local CAPS = { red = { 14, 21, 24, 29, 43, 43, 47, 50, 65 },
+                 yellow = { 12, 21, 28, 32, 50, 50, 54, 55, 65 } }
+  -- key items that stay each player's own: consumed quest items with a
+  -- per-player script around them, and the fossil choice
+  local NOT_SHARED = { OAKS_PARCEL = true, SAFARI_BALL = true, ITEM_2C = true,
+                       DOME_FOSSIL = true, HELIX_FOSSIL = true, OLD_AMBER = true }
+
+  local function online() return ctx.isOnline() and M.rules ~= nil end
+  local function rules() return online() and M.rules or nil end
+  function M.hardcore() local r = rules(); return r ~= nil and r.nuzlocke == "hardcore" end
+  local function sharing() local r = rules(); return r ~= nil and r.sharedKeyItems == true end
+  local function note(text) notes[#notes + 1] = text end
+
+  -- this player's mode state, inside the online save
+  local function state(save)
+    save = save or Game.save
+    if type(save) ~= "table" then return {} end
+    local st = save.g1oModes
+    if type(st) ~= "table" then st = {}; save.g1oModes = st end
+    st.got = st.got or {}
+    st.areas = st.areas or {}
+    st.graveyard = st.graveyard or {}
+    return st
+  end
+  M.state = state
+
+  local function itemDef(id) return Game.data and Game.data.items and Game.data.items[id] end
+  local function itemName(id) local d = itemDef(id); return d and d.name or tostring(id) end
+  local function isBadge(id) return type(id) == "string" and id:find("BADGE", 1, true) ~= nil end
+  function M.isShared(id)
+    if type(id) ~= "string" or NOT_SHARED[id] or not itemDef(id) then return false end
+    return isBadge(id) or itemDef(id).keyItem == true or id:match("^HM_") ~= nil
+  end
+
+  function M.levelCap(save)
+    local inv = (save or Game.save or {}).inventory or {}
+    local n = 0
+    for _, b in ipairs(BADGES) do if (inv[b] or 0) > 0 then n = n + 1 end end
+    local caps = GameVersion.isYellow and GameVersion.isYellow() and CAPS.yellow or CAPS.red
+    return caps[n + 1] or 100
+  end
+
+  -- ---- the randomized world: built from the seed, put back when it ends ---------
+
+  function M.refresh()
+    local r = rules()
+    local key = nil
+    if r and r.randomizer and r.seed and Game.data then
+      key = ("%s/%s%s%s"):format(tostring(r.seed), tostring(r.encounters), tostring(r.items),
+                                 tostring(r.badges))
+    end
+    if key == planKey then return end
+    if undo then undo(); undo = nil end
+    plan, planKey = nil, key
+    if not key then return end
+    plan = Randomizer.build({ seed = r.seed, data = Game.data, victories = victories,
+                              logic = L, Rng = Rng, encounters = r.encounters,
+                              items = r.items, badges = r.badges })
+    undo = Randomizer.apply(plan, Game.data, victories)
+    if not plan.ok then
+      note("THE RANDOMIZER COULDN'T SHUFFLE THIS GAME'S ITEMS. THEY STAY WHERE THEY ARE.")
+    end
+  end
+  function M.plan() return plan end
+
+  local function mapSpecies(species)
+    return plan and plan.species and plan.species[species] or nil
+  end
+
+  mod.hooks:wrap("encounter.species", function(nextFn, enc, hctx)
+    local e = nextFn(enc, hctx)
+    local s = e and mapSpecies(e.species)
+    if s then return { species = s, level = e.level } end
+    return e
+  end)
+
+  mod.hooks:wrap("encounter.fishing", function(nextFn, rod, mapId, pool)
+    local e = nextFn(rod, mapId, pool)
+    local s = e and mapSpecies(e.species)
+    if s then return { species = s, level = e.level } end
+    return e
+  end)
+
+  -- script rows: shuffled NPC gifts, and static Pokémon (Snorlax, the birds...)
+  mod.hooks:wrap("script.command", function(nextFn, sctx, name, args)
+    if plan and type(args) == "table" then
+      if name == "give_item" and plan.gifts[args[1]] then
+        local c = plan.gifts[args[1]]
+        local a = { unpack(args, 1, math.max(table.maxn(args), 5)) }
+        a[1], a[2] = c.item, c.count
+        -- a script's own received line may name the vanilla item
+        if type(a[3]) == "string" then a[3] = "{PLAYER} got\n{RAM:wStringBuffer}!" end
+        local def = itemDef(c.item)
+        if a[5] then a[5] = (def and def.keyItem) and "Get_Key_Item" or "Get_Item1" end
+        return nextFn(sctx, name, a)
+      elseif name == "static_battle" and mapSpecies(args[1]) then
+        local a = { unpack(args, 1, table.maxn(args)) }
+        a[1] = mapSpecies(args[1])
+        return nextFn(sctx, name, a)
+      end
+    end
+    return nextFn(sctx, name, args)
+  end)
+
+  -- ---- the team's shared key items ------------------------------------------------
+
+  local function report(id)
+    local st = state()
+    st.got[id] = true
+    if sharing() then reports[#reports + 1] = id end
+  end
+
+  -- every find goes through Bag.add (item balls, hidden items, gifts, gym TMs)
+  local origAdd = Bag.add
+  Bag.add = function(save, id, qty, data, ...)
+    if granting or not sharing() or save ~= Game.save or not M.isShared(id) then
+      return origAdd(save, id, qty, data, ...)
+    end
+    local inv = save.inventory or {}
+    if (inv[id] or 0) > 0 then
+      -- the team already gave it to us: the find is the team's, not a copy
+      report(id)
+      return true
+    end
+    local ok = origAdd(save, id, qty, data, ...)
+    if ok then report(id) end
+    return ok
+  end
+
+  local function give(save, id, count)
+    if isBadge(id) then
+      save.inventory = save.inventory or {}
+      if (save.inventory[id] or 0) < 1 then save.inventory[id] = 1 end
+      return true
+    end
+    if Bag.add(save, id, count or 1, Game.data) then return true end
+    -- a full bag: the item PC takes it
+    return Bag.pcAdd and Bag.pcAdd(save, id, count or 1, Game.data) or false
+  end
+
+  function M.applyTeam(team)
+    if not (type(team) == "table" and sharing() and Game.save) then return end
+    if team.rev ~= nil and team.rev == lastTeamRev then return end
+    lastTeamRev = team.rev
+    local st = state()
+    local names = {}
+    for _, id in ipairs(team.items or {}) do
+      if M.isShared(id) and not st.got[id] then
+        st.got[id] = true
+        granting = true
+        local ok = give(Game.save, id, 1)
+        granting = false
+        if ok then names[#names + 1] = itemName(id) end
+      end
+    end
+    if #names > 0 then
+      ctx.writeOnlineSave(Game.save)
+      note("YOUR TEAM FOUND " .. table.concat(names, ", ") .. "!")
+    end
+  end
+
+  local function trainerId() return ctx.trainerId(Game.save) end
+  local function token()
+    local acc = Game.save and Game.save.onlineAccount
+    return acc and acc.token or nil
+  end
+
+  local function postReports(now)
+    local id = reports[1]
+    if not id or now < retryAt then return end
+    local res = ctx.post({ action = "team_found", trainerId = trainerId(), token = token(),
+                           runId = state().run, item = id, itemName = itemName(id),
+                           location = Game.overworld and Game.overworld.map
+                             and Game.overworld.map.id or nil }, 3.0)
+    if res == nil then retryAt = now + 3 return end   -- unreachable: try again
+    table.remove(reports, 1)
+    if res.success and res.team then M.applyTeam(res.team) end
+  end
+
+  -- gym leaders: the badge slot hands over whatever the seed put there, and a
+  -- vanilla badge (badges not shuffled) still reaches the team
+  local origRewards = OverworldState.checkVictoryRewards
+  OverworldState.checkVictoryRewards = function(self, trainerClass, partyIndex, shown, ...)
+    local key = tostring(trainerClass) .. "#" .. tostring(partyIndex or 1)
+    local reward = victories[key]
+    local save = Game.save
+    if not (online() and type(reward) == "table" and reward.badge and save) then
+      return origRewards(self, trainerClass, partyIndex, shown, ...)
+    end
+    local beaten = reward.flag and save.flags and save.flags[reward.flag]
+    local content = plan and plan.gyms[key]
+    local badge = reward.badge
+    local had = save.inventory and save.inventory[badge]
+    if content then reward.badge = nil end
+    local ok, err = pcall(origRewards, self, trainerClass, partyIndex, shown, ...)
+    reward.badge = badge
+    if not beaten then
+      if content then
+        give(save, content.item, content.count)
+        -- a badge skips Bag.add (and its report); anything else went through it
+        if isBadge(content.item) and M.isShared(content.item) then report(content.item) end
+      elseif not had and save.inventory and save.inventory[badge] and M.isShared(badge) then
+        report(badge)
+      end
+    end
+    if not ok then error(err, 0) end
+  end
+
+  -- ---- hardcore Nuzlocke ---------------------------------------------------------
+
+  local function hasBalls(save)
+    for id, n in pairs(save and save.inventory or {}) do
+      if (n or 0) > 0 and ItemEffects.isBall(id) then return true end
+    end
+    return false
+  end
+
+  mod.hooks:wrap("battle.style", function(nextFn, battle)
+    if M.hardcore() then return "set" end
+    return nextFn(battle)
+  end)
+
+  mod.hooks:wrap("exp.gain", function(nextFn, c)
+    local gained = nextFn(c)
+    if M.hardcore() and type(c) == "table" and c.mon and (c.mon.level or 0) >= M.levelCap() then
+      return 0
+    end
+    return gained
+  end)
+
+  mod.hooks:wrap("item.use", function(nextFn, game, battle, id, target, list, moveIndex, picker)
+    if battle and M.hardcore() and battle.kind ~= "link" then
+      local why
+      if not ItemEffects.isBall(id) then
+        why = "HARDCORE NUZLOCKE: NO ITEMS IN BATTLE!"
+      elseif battleInfo and not battleInfo.catchable then
+        why = battleInfo.why
+      end
+      if why then
+        if picker and picker.close then pcall(picker.close, picker) end
+        game.stack:push(TextBox.new(game, ctx.wrapText(why)))
+        return
+      end
+    end
+    return nextFn(game, battle, id, target, list, moveIndex, picker)
+  end)
+
+  -- the first wild Pokémon in each area (map) is the only one that counts
+  mod.events:on("battle.started", function(ev)
+    battleInfo = nil
+    if not (M.hardcore() and type(ev) == "table") then return end
+    if ev.kind ~= "wild" and ev.kind ~= "safari" then return end
+    local save = Game.save
+    if not save or (ev.battle and ev.battle.noCatch) then return end
+    -- nothing counts before the player can catch anything
+    if not hasBalls(save) then return end
+    local st = state(save)
+    local area = Game.overworld and Game.overworld.map and Game.overworld.map.id or "?"
+    if st.areas[area] then
+      battleInfo = { catchable = false,
+                     why = "NUZLOCKE: YOU ALREADY HAD YOUR ENCOUNTER HERE!" }
+    elseif save.pokedex and save.pokedex.owned and save.pokedex.owned[ev.species] then
+      -- dupes clause: an owned species doesn't use the area up
+      battleInfo = { catchable = false,
+                     why = "NUZLOCKE: YOU ALREADY OWN THIS POKéMON (DUPES CLAUSE)!" }
+    else
+      st.areas[area] = ev.species or true
+      battleInfo = { catchable = true }
+    end
+  end)
+
+  -- fainted is dead; a wiped party ends the run for the whole team
+  function M.wipe()
+    local st = state()
+    if st.wiped then return end
+    st.wiped = true
+    ctx.writeOnlineSave(Game.save)
+    wipeQueued = true
+    note("YOUR WHOLE PARTY FAINTED!\fTHE RUN IS OVER FOR THE WHOLE TEAM.")
+  end
+
+  function M.bury(lost)
+    local save = Game.save
+    if not (save and type(save.party) == "table") then return end
+    local st = state(save)
+    -- no Pokémon yet (a new run before the starter) is not a wipe
+    if st.wiped or #save.party == 0 then return end
+    local alive, names = 0, {}
+    for _, m in ipairs(save.party) do
+      if (tonumber(m.hp) or 0) > 0 then alive = alive + 1 end
+    end
+    if lost or alive == 0 then return M.wipe() end
+    local area = Game.overworld and Game.overworld.map and Game.overworld.map.id or "?"
+    for i = #save.party, 1, -1 do
+      local m = save.party[i]
+      if (tonumber(m.hp) or 0) <= 0 then
+        table.remove(save.party, i)
+        local name = m.nickname or (Game.data.pokemon[m.species] or {}).name or m.species
+        table.insert(st.graveyard, { species = m.species, name = name, level = m.level,
+                                     map = area, time = os.time() })
+        table.insert(names, 1, tostring(name))
+      end
+    end
+    if #names > 0 then
+      ctx.writeOnlineSave(save)
+      note(table.concat(names, ", ") .. (#names > 1 and " ARE" or " IS") .. " GONE FOR GOOD...")
+    end
+  end
+
+  mod.events:on("battle.ended", function(ev)
+    battleInfo = nil
+    if not M.hardcore() then return end
+    local battle = type(ev) == "table" and ev.battle or nil
+    -- link battles (PVP) are friendly; the Oak's Lab rival is never a loss
+    if battle and (battle.kind == "link" or battle.oppClass == "OPP_RIVAL1") then return end
+    M.bury(ev and ev.result == "lose")
+  end)
+
+  mod.events:on("world.blacked_out", function()
+    if M.hardcore() then M.wipe() end
+  end)
+
+  -- ---- the run ------------------------------------------------------------------
+
+  local function gameId()
+    local ok, id = pcall(GameVersion.get)
+    return ok and tostring(id or "gen1") or "gen1"
+  end
+
+  -- A new run: the old online save is kept as a backup and the player starts
+  -- over in their bedroom with the same online character.
+  function M.restart(game)
+    pendingRestart = false
+    local r = M.rules
+    if not (r and game and game.save) then return end
+    local old = game.save
+    local oldRun = tonumber(type(old.g1oModes) == "table" and old.g1oModes.run) or 0
+    pcall(ctx.storageWrite, ("online_save_%s_run%d_backup"):format(gameId(), oldRun), old)
+    local SaveData = require("src.core.SaveData")
+    local new = SaveData.newGame(game.bootConfig and game:bootConfig() or nil) or {}
+    local home = ctx.home
+    new.player = new.player or {}
+    if type(old.player) == "table" then
+      new.player.name, new.player.id = old.player.name, old.player.id
+      if old.player.rival then new.player.rival = old.player.rival end
+    end
+    new.player.map, new.player.x, new.player.y = home.map, home.x, home.y
+    new.player.facing, new.player.surfing = "down", false
+    new.position = { map = home.map, x = home.x, y = home.y, facing = "down" }
+    new.spawn = "SPAWN_HOME"
+    new.onlineAccount = old.onlineAccount
+    new.g1oModes = { run = r.runId, seed = r.seed }
+    game.save = new
+    if game.adoptSave then game:adoptSave(new) end
+    lastTeamRev = nil
+    battleInfo = nil
+    reports = {}
+    local ow = ctx.getWorld(game)
+    if ow and ow.setMap then pcall(ow.setMap, ow, home.map, home.x, home.y, "down") end
+    M.refresh()
+    ctx.writeOnlineSave(new)
+    local res = ctx.post({ action = "team_status", trainerId = trainerId() }, 3.0)
+    if res and res.success then M.applyTeam(res.team) end
+    note(("RUN %d BEGINS!\f%s"):format(r.runId, M.describe()))
+  end
+
+  local function postWipe()
+    local st = state()
+    local res = ctx.post({ action = "run_wipe", trainerId = trainerId(), token = token(),
+                           runId = st.run }, 3.0)
+    if res == nil then return end            -- unreachable: try again next frame
+    wipeQueued = false
+    if res.success and res.run then
+      M.rules = res.run
+      pendingRestart = true
+    end
+  end
+
+  -- What the server is playing, in a few words for a text box.
+  function M.describe()
+    local r = M.rules
+    if not (r and r.active) then return "" end
+    local parts = {}
+    if r.nuzlocke == "hardcore" then parts[#parts + 1] = "HARDCORE NUZLOCKE" end
+    if r.randomizer then parts[#parts + 1] = "RANDOMIZER" end
+    if r.sharedKeyItems then parts[#parts + 1] = "SHARED KEY ITEMS" end
+    return ("MODES: %s. RUN %s."):format(table.concat(parts, ", "), tostring(r.runId))
+  end
+
+  -- The run screen: the modes, the team's finds and this player's fallen.
+  function M.infoText(save)
+    local st = state(save)
+    local lines = { M.describe() }
+    if M.hardcore() then
+      lines[#lines + 1] = ("LEVEL CAP: %d."):format(M.levelCap(save))
+      local dead = {}
+      for _, g in ipairs(st.graveyard) do dead[#dead + 1] = tostring(g.name) end
+      lines[#lines + 1] = #dead > 0 and ("FALLEN: " .. table.concat(dead, ", ") .. ".")
+        or "NO POKéMON LOST YET."
+    end
+    if sharing() then
+      local got = {}
+      for id in pairs(st.got) do got[#got + 1] = itemName(id) end
+      table.sort(got)
+      lines[#lines + 1] = #got > 0 and ("TEAM ITEMS: " .. table.concat(got, ", ") .. ".")
+        or "THE TEAM HASN'T FOUND ANY KEY ITEMS YET."
+    end
+    return table.concat(lines, "\f")
+  end
+
+  -- ---- main.lua's calls ----------------------------------------------------------
+
+  -- After CONNECT: the rules from /server/info (nil on a server with no modes).
+  -- `fresh` = a brand-new character, whose new save starts this run.
+  function M.connected(game, serverRules, fresh)
+    M.rules = (type(serverRules) == "table" and serverRules.active) and serverRules or nil
+    lastTeamRev, reports, wipeQueued, pendingRestart = nil, {}, false, false
+    if not M.rules or not game or not game.save then return end
+    local st = state(game.save)
+    if fresh then
+      st.run, st.seed = M.rules.runId, M.rules.seed
+      ctx.writeOnlineSave(game.save)
+    end
+    M.refresh()
+    local res = ctx.post({ action = "team_status", trainerId = trainerId() }, 3.0)
+    if res and res.success then
+      if res.run then M.rules = res.run end
+      M.applyTeam(res.team)
+    end
+  end
+
+  function M.synced(game, res)
+    if not (M.rules and type(res) == "table" and type(res.run) == "table") then return end
+    M.rules = res.run.active and res.run or nil
+    if M.rules then M.applyTeam(res.team) end
+  end
+
+  -- every frame (core.update)
+  function M.tick(game)
+    M.refresh()
+    if not (rules() and game and game.save) then return end
+    local st = state(game.save)
+    if st.run ~= M.rules.runId and not pendingRestart and not wipeQueued then
+      if st.run ~= nil then
+        note(("RUN %d IS OVER! A TEAMMATE'S PARTY WIPED OUT.\fEVERYONE STARTS OVER."):format(st.run))
+      end
+      pendingRestart = true
+    end
+    local now = love and love.timer and love.timer.getTime() or os.time()
+    if wipeQueued then postWipe() end
+    if #reports > 0 then postReports(now) end
+    local ow = game.overworld
+    local idle = ow and ow.player and game.stack and game.stack:top() == ow
+      and not ow.player.moving and not ow.transitioning
+    if not idle then return end
+    if pendingRestart and not wipeQueued then return M.restart(game) end
+    -- a poisoned Pokémon fainting on the overworld
+    if M.hardcore() and not st.wiped then
+      for _, m in ipairs(game.save.party or {}) do
+        if (tonumber(m.hp) or 0) <= 0 then M.bury(false) break end
+      end
+    end
+    local text = table.remove(notes, 1)
+    if text then game.stack:push(TextBox.new(game, ctx.wrapText(text))) end
+  end
+
+  mod.hooks:wrap("core.update", function(nextFn, game, dt, ...)
+    local res = nextFn(game, dt, ...)
+    M.tick(game or Game)
+    return res
+  end)
+
+  return M
+end

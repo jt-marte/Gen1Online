@@ -2048,6 +2048,7 @@
             if res.party ~= nil then
               activeParty = res.party
             end
+            if GtsUI.Modes and res.run then GtsUI.Modes.synced(game, res) end
             -- Synchronize RTC Clock with Server
             if isGen2 and res.serverHour and res.serverMinute and res.serverWeekday and game and game.save then
               local okClock, Clock = pcall(require, "src.core.gen2.Clock")
@@ -5342,6 +5343,7 @@
               -- previous character's.
               saveOnlineAccount(game.save)
               writeOnlineSave(game.save)
+              if GtsUI.Modes then GtsUI.Modes.connected(game, GtsUI.serverRules, true) end
               syncLocalProfile(game, 0)
               fetchGtsServerSync(newTid)
               startChatSession(game)
@@ -5888,6 +5890,14 @@
       }
     }
 
+    if GtsUI.Modes and GtsUI.Modes.rules then
+      table.insert(items, 4, {
+        label = "RUN INFO",
+        onSelect = function()
+          game.stack:push(TextBox.new(game, wrapText(GtsUI.Modes.infoText(game.save))))
+        end
+      })
+    end
     game.stack:push(Menu.new(game, items, { tx = 0, ty = 0, tw = 20, maxVisible = 7, startCloses = true }))
   end
 
@@ -5918,6 +5928,8 @@
       game.stack:push(TextBox.new(game, wrapText(GtsUI.wrongWorldText(srvGen))))
       return
     end
+    -- the server's game modes (modes/init.lua), handed over once connected
+    GtsUI.serverRules = srvInfo.rules
 
     -- 2. Backup the local offline save in memory and capture exact offline coordinates
     if game and game.save and not isGtsServerConnected then
@@ -5998,6 +6010,7 @@
     applyPlayerSprite(game, localSelectedSprite)
     writeOnlineSave(game.save)
     isGtsServerConnected = true
+    if GtsUI.Modes then GtsUI.Modes.connected(game, GtsUI.serverRules, false) end
     -- Init global chat poll state (vanilla wrap, no spam on connect)
     startChatSession(game)
 
@@ -6037,6 +6050,7 @@
     end
 
     local connMsg = string.format("CONNECTED TO SERVER!\nONLINE SAVE: %s\nLOCATION: %s", onlineAcc.name or currentName, tostring(pMap))
+    if GtsUI.Modes and GtsUI.Modes.rules then connMsg = connMsg .. "\n" .. GtsUI.Modes.describe() end
     game.stack:push(TextBox.new(game, wrapText(connMsg), function()
       openOnlineOptionsMenu(game)
     end))
@@ -6065,6 +6079,28 @@
     asyncReset("logout")
     gtsApiPost({ action = "logout", trainerId = tid }, 1.5)
     gtsApiPost({ action = "clear_challenge", trainerId = tid }, 1.5)
+  end
+
+  -- Server game modes on Gen 1 (hardcore Nuzlocke, the co-op randomizer,
+  -- shared key items): modes/init.lua.  The server's server_config.txt picks
+  -- them; they only ever act while connected to a server that has them on.
+  if not isGen2 then
+    local okModes, err = pcall(function()
+      GtsUI.Modes = requireLocal("modes/init.lua")({
+        mod = mod,
+        requireLocal = requireLocal,
+        isOnline = function() return isGtsServerConnected end,
+        post = gtsApiPost,
+        trainerId = function(save) return (getTrainerInfo(save)) end,
+        writeOnlineSave = writeOnlineSave,
+        getWorld = getWorld,
+        storageWrite = storageWrite,
+        wrapText = wrapText,
+        home = { map = defaultStartingIndoor, x = defaultStartingIndoorX, y = defaultStartingIndoorY },
+      })
+    end)
+    if not okModes then diag("game modes unavailable: %s", tostring(err)) end
+    if mod and mod.exports then mod.exports.modes = GtsUI.Modes end
   end
 
 
