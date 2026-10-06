@@ -6,6 +6,16 @@ A server of our own, built for playing with friends.
 
 ### Added
 
+- **Randomized starters** (`randomize_starters`, on with the randomizer):
+  Oak's starters become basic Pokémon that evolve twice, drawn from the
+  run's seed (one draw per multiworld world). Red and Blue's three balls
+  show, name and give the new Pokémon, and Oak's question names it and its
+  type; on Yellow, Oak hands over another Pokémon than PIKACHU, and the lab's
+  PIKACHU scene (it hates its ball and comes out to follow) is left out, so
+  nothing follows. FireRed and LeafGreen draw from all 386 (Treecko,
+  Cyndaquil, Seedot...); their balls' scripts, Pokémon picture and question
+  follow. The rival keeps his usual team; Oak's line in the Champion's room
+  names your starter.
 - **FireRed and LeafGreen.** The mod runs on the engine's Gen 3 games with
   the whole online side: CONNECT on the START menu (a new online character is
   a new FireRed game in the bedroom, named on FireRed's naming screen, a boy
@@ -137,6 +147,16 @@ A server of our own, built for playing with friends.
 
 ### Fixed
 
+- Hardcore Nuzlocke (FireRed/LeafGreen and Gen 1): only the first wild
+  Pokémon met in an area can be caught, whatever it is. The dupes clause is
+  gone (a first encounter of a species you owned let the next one in the
+  area be caught), and "no Poké Balls" now means only the start of the game
+  (Route 1 before your first balls): an empty bag later, or balls left in
+  the PC, no longer skips an area's first encounter.
+- A server with a game mode on turns away clients without the current
+  rules (POST bodies carry `modesVersion`, now 2; an older client is told
+  VERSION MISMATCH and to update), so nobody plays a run on an old copy of
+  the Nuzlocke rules.
 - REDEEM RECOVERY TOKEN skipped the server's game modes (Gen 1 and
   FireRed/LeafGreen): a player restored on a new device played the vanilla
   world with no Nuzlocke rules, and in a multiworld run never took back

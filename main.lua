@@ -145,6 +145,10 @@
   local Quests = {}
   local NPCs = {}
   local GtsUI = {}
+  -- The game modes' rules this client plays (modes/): sent with every POST.
+  -- A server running a mode turns away clients below its MODES_VERSION, so
+  -- nobody plays an old copy of the Nuzlocke rules without knowing.
+  GtsUI.MODES_VERSION = 2
 
 
   local Game, Input, OverworldState, BattleState = require("src.core.Game"), require("src.core.Input"), require("src.world.OverworldController"), require("src.battle.BattleState")
@@ -701,6 +705,7 @@
     payload.gameVersion = gName
     payload.recompVersion = rVer
     payload.generation = isGen3 and 3 or isGen2 and 2 or 1
+    payload.modesVersion = GtsUI.MODES_VERSION
     local jsonStr = Json.encode(payload)
     local response_body = {}
     local sent = false
@@ -1784,6 +1789,7 @@
     payload.gameVersion = gName
     payload.recompVersion = rVer
     payload.generation = isGen3 and 3 or isGen2 and 2 or 1
+    payload.modesVersion = GtsUI.MODES_VERSION
     asyncPending[#asyncPending + 1] = {
       url = getServerUrl() .. "/gts",
       body = Json.encode(payload),
@@ -1917,6 +1923,7 @@
             decoded.gameVersion = gName
             decoded.recompVersion = rVer
             decoded.generation = isGen3 and 3 or isGen2 and 2 or 1
+            decoded.modesVersion = GtsUI.MODES_VERSION
             req.body = Json.encode(decoded)
 
             if decoded.action == "sync_pos" then

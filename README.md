@@ -38,10 +38,10 @@ A server hosts one generation's world: Gen 1 players (Red, Blue and Yellow toget
 
 ### 💀 7. Hardcore Nuzlocke & Co-Op Randomizer (Red, Blue, Yellow, FireRed, LeafGreen)
 The host turns these on in `server/server_config.txt`; everyone on the server plays the same run.
-- **Co-Op Randomizer**: wild Pokémon (each swapped for one of similar strength), items and gym badges are shuffled from the run's seed. Brock might hand you a POTION while the BOULDERBADGE lies in an item ball in Mt. Moon or comes from an NPC. Placement follows the game's progression, so every run can be finished: nothing you need is left aboard the S.S. Anne (she sails for good), and the early routes always hold wild Pokémon that can learn CUT.
+- **Co-Op Randomizer**: wild Pokémon (each swapped for one of similar strength), the starters, items and gym badges are shuffled from the run's seed. Oak's starters become basic Pokémon that evolve twice, like the real ones (on Yellow too: Oak hands over something else than PIKACHU, which then doesn't follow you); the rival keeps his usual team. Brock might hand you a POTION while the BOULDERBADGE lies in an item ball in Mt. Moon or comes from an NPC. Placement follows the game's progression, so every run can be finished: nothing you need is left aboard the S.S. Anne (she sails for good), and the early routes always hold wild Pokémon that can learn CUT.
 - **Shared Key Items**: key items, HMs and badges are the team's. Whatever one player finds, every player gets.
 - **Multiworld (optional)**: each player gets their own world, and every badge, HM and key item exists in only one of them. The BOULDERBADGE might be in your friend's Mt. Moon and nowhere in yours; when they pick it up, you both have it. The shuffle still guarantees the team can finish, splits the key items evenly, and gives each world its own wild Pokémon.
-- **Hardcore Nuzlocke**: only the first wild Pokémon in each area can be caught (per player, with the dupes clause), fainted Pokémon are gone for good, no items in battle, SET battle style, and a level cap at the next gym leader's ace (with shuffled badges, the weakest gym leader you can reach and haven't beaten, so a fight you need is never above it). If **any** player's whole party faints, the run ends for the whole team and everyone starts over in a new world.
+- **Hardcore Nuzlocke**: only the first wild Pokémon you meet in each area can be caught, whatever it is (per player; no dupes clause; encounters before you first have Poké Balls, on Route 1, don't count), fainted Pokémon are gone for good, no items in battle, SET battle style, and a level cap at the next gym leader's ace (with shuffled badges, the weakest gym leader you can reach and haven't beaten, so a fight you need is never above it). If **any** player's whole party faints, the run ends for the whole team and everyone starts over in a new world.
 - **FireRed and LeafGreen**: every wild Pokémon can become any of the 386 Pokémon of Gen 1 to 3 (each swapped for one of similar strength; legendaries only among themselves), and while the shuffle is on, Johto and Hoenn Pokémon evolve without the National Pokédex. Item balls, hidden items, NPC gifts like the TEA and the SILPH SCOPE, and the eight gym badges are shuffled with the same progression logic (a badge can lie in an item ball; Brock might hand you the LIFT KEY). Kanto and One to Three Island hold the progression, and every item the logic counts on was walked to on the real maps.
 - **ONLINE > RUN INFO** shows the modes, the level cap, your fallen Pokémon and the team's finds.
 
@@ -130,6 +130,7 @@ randomizer = on          # off | on
 randomize_encounters = on
 randomize_items = on
 randomize_badges = on
+randomize_starters = on
 shared_key_items = auto  # auto = on with the randomizer
 multiworld = off         # on: one world per player, key items split between them
 players = 2              # how many worlds (multiworld only)

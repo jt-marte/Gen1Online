@@ -97,6 +97,10 @@ class ServerTest(unittest.TestCase):
         if version is not None:
             payload.update(modVersion=version, version=version,
                            gameVersion=self.game if game is None else game, recompVersion="v1")
+            # what a current client sends; a test passes modesVersion=None for an old one
+            payload.setdefault("modesVersion", gts_server.MODES_VERSION)
+            if payload["modesVersion"] is None:
+                del payload["modesVersion"]
         return self.request("POST", "/gts", json.dumps(payload).encode("utf-8"),
                             {"Content-Type": "application/json", "X-Mod-Version": version or ""})
 
@@ -991,7 +995,8 @@ class RulesFileTests(unittest.TestCase):
     def test_defaults_are_all_off(self):
         view = gts_server.rules_view(gts_server.parse_rules(""))
         self.assertEqual(view, {"nuzlocke": "off", "randomizer": False, "encounters": False,
-                                "items": False, "badges": False, "sharedKeyItems": False,
+                                "items": False, "badges": False, "starters": False,
+                                "sharedKeyItems": False,
                                 "multiworld": False, "players": 1, "active": False})
 
     def test_the_shipped_file_parses_to_the_defaults(self):
@@ -1007,8 +1012,13 @@ class RulesFileTests(unittest.TestCase):
         self.assertEqual(rules["nuzlocke"], "hardcore")
         self.assertEqual(rules["seed"], 42)
         view = gts_server.rules_view(rules)
-        self.assertEqual((view["encounters"], view["items"], view["badges"]), (True, True, False))
+        self.assertEqual((view["encounters"], view["items"], view["badges"], view["starters"]),
+                         (True, True, False, True))
         self.assertTrue(view["sharedKeyItems"], "auto follows the randomizer")
+        view = gts_server.rules_view(gts_server.parse_rules(
+            "randomizer = on\nrandomize_starters = off\n"))
+        self.assertFalse(view["starters"], "randomize_starters = off keeps the starters")
+        self.assertTrue(view["encounters"])
         self.assertTrue(view["active"])
 
     def test_sub_flags_need_the_randomizer_and_shared_items_stand_alone(self):
@@ -1046,6 +1056,20 @@ class GameModeTests(ServerTest):
         res = self.sync(red["trainerId"])
         self.assertEqual(res["run"], rules)
         self.assertEqual(res["team"], {"rev": 0, "items": []})
+
+    def test_a_client_without_these_rules_is_turned_away(self):
+        red = self.register("RED")
+        for old in (None, 1):
+            res = self.post("sync_pos", trainerId=red["trainerId"], sessionId="s", name="RED",
+                            map="ROUTE_1", x=1, y=1, modesVersion=old)
+            self.assertEqual((res["success"], res["error"], res["modesVersion"]),
+                             (False, "VERSION_MISMATCH", gts_server.MODES_VERSION), res)
+            self.assertIn("GAME MODES", res["serverVersion"])
+            self.assertError(self.post("register_player", isNewCharacter=True, name="OLD%d" % (old or 0),
+                                       spriteId="SPRITE_RED", modesVersion=old), "VERSION_MISMATCH")
+        # logging out always works; a current client is let in
+        self.assertTrue(self.post("logout", trainerId=red["trainerId"], modesVersion=None)["success"])
+        self.assertTrue(self.sync(red["trainerId"])["success"])
 
     def test_a_find_is_the_whole_teams(self):
         red, blue = self.register("RED"), self.register("BLUE")
@@ -1166,6 +1190,11 @@ class MultiworldTests(ServerTest):
 class ModesOffTests(ServerTest):
     generation = 1
     game = "Pokemon Red"
+
+    def test_old_clients_play_while_the_modes_are_off(self):
+        red = self.register("RED", modesVersion=None)
+        self.assertTrue(self.post("sync_pos", trainerId=red["trainerId"], sessionId="s", name="RED",
+                                  map="ROUTE_1", x=1, y=1, modesVersion=None)["success"])
 
     def test_the_mode_actions_refuse(self):
         red = self.register("RED")

@@ -129,12 +129,19 @@ RULE_DEFAULTS = {
     "randomize_encounters": True,
     "randomize_items": True,
     "randomize_badges": True,
+    "randomize_starters": True,
     "shared_key_items": "auto",
     "multiworld": False,
     "players": 2,
     "seed": None,
 }
 NUZLOCKE_MODES = ("off", "hardcore")
+# The game modes' rules a client plays (it sends modesVersion with every
+# POST).  While a mode is on, a Gen 1 or FireRed/LeafGreen client below this
+# is turned away with VERSION_MISMATCH, so nobody plays an old copy of the
+# rules (2: the strict first encounter, no dupes clause).
+MODES_VERSION = 2
+MODES_GENERATIONS = (1, 3)
 MAX_WORLDS = 8
 SEED_MAX = 2147483646           # the client's Park-Miller generator takes 1..2^31-2
 TEAM_ITEM_MAX = 64              # distinct shared items the team can hold
@@ -294,6 +301,7 @@ def rules_view(rules):
         "encounters": rando and bool(rules.get("randomize_encounters")),
         "items": rando and bool(rules.get("randomize_items")),
         "badges": rando and bool(rules.get("randomize_badges")),
+        "starters": rando and bool(rules.get("randomize_starters")),
         "sharedKeyItems": bool(shared),
     }
     # the multiworld splits the shuffled items across worlds: it needs the
@@ -490,8 +498,14 @@ class GtsStore:
         if handler is None:
             return {"success": False, "error": "UNKNOWN_ACTION"}
         with self.lock:
-            if not self._admit(generation_of(req.get("generation"), req.get("gameVersion")), True):
+            gen = generation_of(req.get("generation"), req.get("gameVersion"))
+            if not self._admit(gen, True):
                 return self.wrong_generation()
+            if (gen in MODES_GENERATIONS and to_int(req.get("modesVersion"), 0) < MODES_VERSION
+                    and action != "logout" and self._run_view()["active"]):
+                return {"success": False, "error": "VERSION_MISMATCH",
+                        "serverVersion": "%s+ (GAME MODES)" % self.version,
+                        "modesVersion": MODES_VERSION}
             self._sweep()
             try:
                 return copy.deepcopy(handler(self, req))
@@ -1471,7 +1485,7 @@ def modes_line(store):
     if view["nuzlocke"] != "off":
         parts.append("%s Nuzlocke" % view["nuzlocke"])
     if view["randomizer"]:
-        shuffled = [name for name in ("encounters", "items", "badges") if view[name]]
+        shuffled = [name for name in ("encounters", "items", "badges", "starters") if view[name]]
         parts.append("randomizer (%s)" % (", ".join(shuffled) or "nothing shuffled"))
     if view["multiworld"]:
         parts.append("multiworld for %d players" % view["players"])

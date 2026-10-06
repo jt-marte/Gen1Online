@@ -5,7 +5,7 @@
 -- shared key items in both directions (this player's find reaches BUDDY, a
 -- raw-HTTP teammate; BUDDY's find reaches this player), the hardcore Nuzlocke
 -- rules (SET style, level cap, no battle items, first encounter per area,
--- dupes clause, fainted Pokemon gone), and both ways a run ends: this
+-- no dupes clause, fainted Pokemon gone), and both ways a run ends: this
 -- player's party wiping out, and a teammate's.  Disconnecting puts the
 -- vanilla world back.  dev/run_tests.sh runs it when the Yellow cache is there.
 local U = require("tests.drivers.util")
@@ -44,6 +44,7 @@ return function(game)
   local http, ltn12 = package.loaded["socket.http"], package.loaded["ltn12"]
   local function post(payload)
     payload.modVersion, payload.gameVersion, payload.generation = "0.5.1", "Pokemon Yellow", 1
+    payload.modesVersion = payload.modesVersion or 2   -- the game modes' rules (GtsUI.MODES_VERSION)
     local body = Json.encode(payload)
     local res = {}
     http.request({ url = BASE .. "/gts", method = "POST", source = ltn12.source.string(body),
@@ -310,6 +311,73 @@ return function(game)
     return finish()
   end
 
+  -- ---- the starters ---------------------------------------------------------------------
+  -- basic Pokémon that evolve twice: Red and Blue's three balls and Yellow's
+  -- PIKACHU each get a different one
+  local starters = plan.starters or {}
+  local pool, okAll, distinct = {}, true, {}
+  for _, id in ipairs(lib.randomizer.starterPool(game.data.pokemon)) do pool[id] = true end
+  for _, v in ipairs(lib.randomizer.STARTERS) do
+    if not (starters[v] and pool[starters[v]] and not distinct[starters[v]]) then okAll = false end
+    distinct[starters[v] or "?"] = true
+  end
+  check(okAll, ("the starters: %s, %s, %s; Yellow's PIKACHU is %s"):format(tostring(starters.BULBASAUR),
+    tostring(starters.CHARMANDER), tostring(starters.SQUIRTLE), tostring(starters.PIKACHU)))
+  U.teleport(game, "OAKS_LAB", 5, 10, "up")
+  settled()
+  -- Red and Blue's ball rows through the mod's script hook (no Red/Blue data
+  -- here): the Pokédex entry, the question, the received line and the gift
+  local function through(name, ...)
+    local got = nil
+    ModRuntime.call("script.command", function(_, _, a) got = a end,
+      { overworld = game.overworld, game = game, save = game.save }, name, { ... })
+    return got
+  end
+  local newB = starters.BULBASAUR
+  local nameB = (game.data.pokemon[newB] or {}).name or tostring(newB)
+  local ask = through("ask", "_OaksLabYouWantBulbasaurText")
+  check(ask and type(ask[1]) == "string" and ask[1]:find(nameB, 1, true) and ask[1]:find("POKéMON", 1, true),
+    "Red's BULBASAUR ball asks about " .. nameB .. ": " .. tostring(ask and ask[1]):gsub("[\n\v\f]", " "))
+  local dex = through("push_screen", "DexEntryMenu", { species = "BULBASAUR", forceOwned = true })
+  check(dex and dex[2].species == newB and dex[2].forceOwned, "and shows its Pokédex entry")
+  local got = through("show_text", "_OaksLabReceivedMonText", { RAM = "BULBASAUR" })
+  check(got and got[2].RAM == newB, "the received line names it")
+  local give = through("give_pokemon", "BULBASAUR", 5)
+  check(give and give[1] == newB, "and it is the one given")
+  local rival = through("show_text", "_OaksLabRivalReceivedMonText", { RAM = "CHARMANDER" })
+  check(rival and rival[2].RAM == "CHARMANDER", "the rival's own line (and team) stay vanilla")
+  check(through("show_text", "_OaksLabPikachuDislikesPokeballsText1") == nil
+    and through("spawn_pikachu_follower") == nil, "Yellow's PIKACHU scene is left out")
+  -- Yellow's own gift for real: Oak's rows through the overworld's runner
+  local newP = starters.PIKACHU
+  local nameP = (game.data.pokemon[newP] or {}).name or tostring(newP)
+  local dexSeen, dexOwned = game.save.pokedex.seen[newP], game.save.pokedex.owned[newP]
+  local partyBefore = #game.save.party
+  game.overworld.runner:run({ { "show_text", "_OaksLabReceivedText", { RAM = "PIKACHU" } },
+                              { "give_pokemon", "PIKACHU", 5 },
+                              { "set_flag", "EVENT_CHOSE_PIKACHU" },
+                              { "play_cry", "PIKACHU" },
+                              { "show_text", "_OaksLabPikachuDislikesPokeballsText1" } })
+  for _ = 1, 600 do
+    local s = top()
+    if isText(s) then clearTexts(1)
+    elseif s ~= game.overworld then U.tap(game, "b"); U.wait(3)   -- no nickname
+    elseif not (game.overworld.runner and game.overworld.runner:isRunning()) then break
+    else U.wait(2) end
+  end
+  local mon = game.save.party[#game.save.party]
+  check(#game.save.party == partyBefore + 1 and mon and mon.species == newP,
+    "Oak hands over " .. nameP .. " instead of PIKACHU (" .. tostring(mon and mon.species) .. ")")
+  check(said("received") ~= nil and said(nameP) ~= nil and said("OAK: What%?") == nil,
+    "the received line names it; the PIKACHU scene (OAK: What?) is skipped")
+  game.overworld.runner:run({ { "load_player_starter_name" } })
+  U.wait(10)
+  check(game.stringBuffer == nameP, "the Champion's room names it too (" .. tostring(game.stringBuffer) .. ")")
+  -- the run's other checks start from where they were
+  if #game.save.party > partyBefore then table.remove(game.save.party) end
+  game.save.flags.EVENT_CHOSE_PIKACHU = nil
+  game.save.pokedex.seen[newP], game.save.pokedex.owned[newP] = dexSeen, dexOwned
+
   -- ---- the randomizer -------------------------------------------------------------------
   U.teleport(game, "ROUTE_1", 9, 20, "down")
   settled()
@@ -571,9 +639,13 @@ return function(game)
   ModRuntime.emit("battle.ended", { battle = wild, result = "run" })
   U.teleport(game, "ROUTE_2", 3, 60, "down")
   settled()
+  -- no dupes clause: the first Pokémon met is the one, even an owned species
   ModRuntime.emit("battle.started", { battle = wild, kind = "wild", species = "PIKACHU", level = 3 })
-  check(useItem("POKE_BALL", wild) and said("DUPES"), "an owned species is a dupe")
-  check(Modes.state(game.save).areas.ROUTE_2 == nil, "and doesn't use Route 2 up")
+  check(not useItem("POKE_BALL", wild) and Modes.state(game.save).areas.ROUTE_2 == "PIKACHU",
+    "an owned species met first can be caught, and uses Route 2 up")
+  ModRuntime.emit("battle.ended", { battle = wild, result = "run" })
+  ModRuntime.emit("battle.started", { battle = wild, kind = "wild", species = "WEEDLE", level = 3 })
+  check(useItem("POKE_BALL", wild) and said("ALREADY HAD"), "so Route 2's next one can't be")
   ModRuntime.emit("battle.ended", { battle = wild, result = "run" })
 
   -- a link battle (PVP) is friendly: nobody dies there

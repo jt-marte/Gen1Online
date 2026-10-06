@@ -203,6 +203,72 @@ return function(game)
   local grovyle = Pokemon.speciesFromNational(253)
   check(Evolution.nationalAllows(grovyle, s), "a Hoenn Pokémon may evolve before the National Pokédex")
 
+  -- ------------------------------------------------------------- starters
+  -- Oak's three balls hold basic Pokémon that evolve twice, from all 386
+  local starters = plan.starters or {}
+  local name = G3.speciesName
+  local pool = {}
+  for _, sp in ipairs(Modes.lib.randomizer.starterPool(Modes.speciesData())) do pool[sp] = true end
+  local a, b, c = starters[1], starters[4], starters[7]
+  check(a and b and c and pool[a] and pool[b] and pool[c] and a ~= b and b ~= c and a ~= c,
+    ("the starters: BULBASAUR's ball %s, CHARMANDER's %s, SQUIRTLE's %s"):format(name(a), name(b), name(c)))
+  local rows = Modes.starterRows()
+  local held = {}
+  for _, r in ipairs(rows) do held[#held + 1] = r[2] end
+  table.sort(held)
+  local want = { a, b, c }
+  table.sort(want)
+  check(#rows == 3 and table.concat(held, ",") == table.concat(want, ","), "the three ball scripts hold them")
+  -- picked for real: the ball, Oak's question, YES, no nickname
+  local LAB = "FR_OAKS_LAB"
+  local ball
+  local labScripts = Space.ensureBundle().scripts
+  for _, obj in ipairs(G3.raw().data.maps[LAB].objects or {}) do
+    for _, r in ipairs(obj.scriptKey and labScripts[obj.scriptKey] or {}) do
+      if r.op == "setvar" and r[1] == 0x4002 and r[2] == b then ball = obj end
+    end
+  end
+  local function snap(t) local out = {} for k, v in pairs(t or {}) do out[k] = v end return out end
+  local function restore(t, saved)
+    if not t then return end
+    for k in pairs(t) do t[k] = nil end
+    for k, v in pairs(saved) do t[k] = v end
+  end
+  local dexSeen, dexOwned = snap(s.dex and s.dex.seen), snap(s.dex and s.dex.owned)
+  local partyBefore = #s.party
+  -- the lab's scene: Oak waits for a choice (VAR_MAP_SCENE_..._OAKS_LAB = 2)
+  Flags.setVar(s, nil, 0x4055, 2)
+  Flags.setVar(Space.store, nil, 0x4055, 2)
+  local seen = {}
+  if check(ball and H.talkTo(LAB, ball.x, ball.y), "walked up to CHARMANDER's ball in Oak's lab") then
+    local yes = false
+    for _ = 1, 1500 do
+      if Message.isOpen() and Message.currentPage then
+        local t = tostring(Message.currentPage()):gsub("%s+", " ")
+        if seen[#seen] ~= t then seen[#seen + 1] = t; say("  lab: " .. t) end
+      end
+      if Choice.active then
+        if not yes then yes = true; shot("starter_question"); U.tap(game, "a")   -- YES, this one
+        else U.tap(game, "b") end                                                 -- no nickname
+      elseif require("src.ui.game3.naming").isOpen() then require("src.ui.game3.naming").close("")
+      elseif Message.isOpen() or G3.busy() then U.tap(game, "a")
+      else break end
+      U.wait(3)
+    end
+  end
+  local all = table.concat(seen, " / ")
+  check(all:find(name(b) .. " is your choice", 1, true) ~= nil and all:find(" POKéMON " .. name(b) .. "?", 1, true) ~= nil,
+    "Oak asks about " .. name(b))
+  check(all:find("received the " .. name(b), 1, true) ~= nil, "and hands it over")
+  local got = s.party[#s.party]
+  check(#s.party == partyBefore + 1 and got and tonumber(got.species) == b,
+    "the party has " .. name(b) .. " (" .. tostring(got and name(got.species)) .. ")")
+  -- the rest of the run's checks start from where they were
+  if #s.party > partyBefore then table.remove(s.party) end
+  if s.dex then restore(s.dex.seen, dexSeen); restore(s.dex.owned, dexOwned) end
+  H.closeAll()
+  H.fieldFree()
+
   -- --------------------------------------------------------------- items
   local function contentOf(kind, pred)
     for _, loc in ipairs(plan.locations or {}) do

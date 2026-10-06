@@ -125,8 +125,9 @@ return function(ctx)
     local key = nil
     -- a multiworld player without a world yet (refused, or not joined) plays none
     if r and r.randomizer and r.seed and Game.data and (worlds(r) == 1 or M.world) then
-      key = ("%s/%s%s%s/%d:%d"):format(tostring(r.seed), tostring(r.encounters), tostring(r.items),
-                                       tostring(r.badges), worlds(r), worlds(r) > 1 and M.world or 1)
+      key = ("%s/%s%s%s%s/%d:%d"):format(tostring(r.seed), tostring(r.encounters), tostring(r.items),
+                                         tostring(r.badges), tostring(r.starters), worlds(r),
+                                         worlds(r) > 1 and M.world or 1)
     end
     if key == planKey then return end
     if undo then undo(); undo = nil end
@@ -134,7 +135,7 @@ return function(ctx)
     if not key then return end
     plan = Randomizer.build({ seed = r.seed, data = Game.data, victories = victories,
                               logic = L, Rng = Rng, encounters = r.encounters,
-                              items = r.items, badges = r.badges,
+                              items = r.items, badges = r.badges, starters = r.starters,
                               worlds = worlds(r), world = M.world })
     undo = Randomizer.apply(plan, Game.data, victories)
     if not plan.ok then
@@ -163,7 +164,7 @@ return function(ctx)
     return withVanilla(function()
       return Randomizer.build({ seed = r.seed, data = Game.data, victories = victories,
                                 logic = L, Rng = Rng, encounters = r.encounters,
-                                items = r.items, badges = r.badges,
+                                items = r.items, badges = r.badges, starters = r.starters,
                                 worlds = worlds(r), world = world })
     end)
   end
@@ -186,9 +187,70 @@ return function(ctx)
     return e
   end)
 
-  -- script rows: shuffled NPC gifts, and static Pokémon (Snorlax, the birds...)
+  -- Oak's lab: the starters (plan.starters) on the rows that show, name and
+  -- give one.  Red and Blue ask with a line naming the vanilla species (made
+  -- anew here); Yellow's PIKACHU scene after the gift (it hates its ball and
+  -- comes out to follow) is left out when the starter is something else.
+  -- The rival's own lines and team stay vanilla.  Returns the new args,
+  -- false to skip the row, or nil.
+  local STARTER_ASK = { _OaksLabYouWantCharmanderText = "CHARMANDER",
+    _OaksLabYouWantSquirtleText = "SQUIRTLE", _OaksLabYouWantBulbasaurText = "BULBASAUR" }
+  local STARTER_GOT = { _OaksLabReceivedMonText = true, _OaksLabReceivedText = true }
+  local PIKACHU_SCENE = { _OaksLabPikachuDislikesPokeballsText1 = true,
+    _OaksLabPikachuDislikesPokeballsText2 = true }
+  function M.starterQuestion(species)
+    local def = Game.data and Game.data.pokemon and Game.data.pokemon[species] or {}
+    local kind = tostring((def.types or {})[1] or ""):gsub("_TYPE$", "")
+    return ("So! You want the\n%sPOKéMON,\011%s?{DONE}"):format(kind ~= "" and (kind .. " ") or "",
+      tostring(def.name or species))
+  end
+  local function starterRow(sctx, name, args)
+    local ow = sctx and sctx.overworld
+    local s = plan and plan.starters
+    if not (s and ow and ow.map and ow.map.id == "OAKS_LAB") then return nil end
+    local a = { unpack(args, 1, table.maxn(args)) }
+    if name == "give_pokemon" and s[args[1]] then
+      a[1] = s[args[1]]
+      return a
+    elseif name == "push_screen" and args[1] == "DexEntryMenu" and type(args[2]) == "table"
+        and s[args[2].species] then
+      local o = {}
+      for k, v in pairs(args[2]) do o[k] = v end
+      o.species, a[2] = s[args[2].species], o
+      return a
+    elseif name == "ask" and STARTER_ASK[args[1]] and s[STARTER_ASK[args[1]]] then
+      a[1] = M.starterQuestion(s[STARTER_ASK[args[1]]])
+      return a
+    elseif name == "show_text" and STARTER_GOT[args[1]] and type(args[2]) == "table" and s[args[2].RAM] then
+      a[2] = { RAM = s[args[2].RAM] }
+      return a
+    elseif s.PIKACHU and s.PIKACHU ~= "PIKACHU" and ((name == "show_text" and PIKACHU_SCENE[args[1]])
+        or (name == "play_cry" and args[1] == "PIKACHU") or name == "spawn_pikachu_follower") then
+      return false
+    end
+    return nil
+  end
+
+  -- script rows: shuffled NPC gifts, static Pokémon (Snorlax, the birds...)
+  -- and the starters
   mod.hooks:wrap("script.command", function(nextFn, sctx, name, args)
     if plan and type(args) == "table" then
+      local starter = starterRow(sctx, name, args)
+      if starter == false then return nil end
+      if starter then return nextFn(sctx, name, starter) end
+      if name == "load_player_starter_name" and plan.starters then
+        -- the Champion's room: Oak names the starter chosen in his lab
+        local res = nextFn(sctx, name, args)
+        local game = sctx and sctx.game
+        local pokemon = game and game.data and game.data.pokemon or {}
+        for vanilla, now in pairs(plan.starters) do
+          if pokemon[vanilla] and game.stringBuffer == pokemon[vanilla].name then
+            game.stringBuffer = (pokemon[now] or {}).name or now
+            break
+          end
+        end
+        return res
+      end
       if name == "give_item" and plan.gifts[args[1]] then
         local c = plan.gifts[args[1]]
         local a = { unpack(args, 1, math.max(table.maxn(args), 5)) }
@@ -419,17 +481,18 @@ return function(ctx)
     if ev.kind ~= "wild" and ev.kind ~= "safari" then return end
     local save = Game.save
     if not save or (ev.battle and ev.battle.noCatch) then return end
-    -- nothing counts before the player can catch anything
-    if not hasBalls(save) then return end
+    -- nothing counts until the player first has Poké Balls (Route 1 and 22
+    -- before Oak's parcel); from then on every area's first encounter does,
+    -- whatever it is, even with no ball in the bag
     local st = state(save)
+    if not st.hadBalls and (hasBalls(save) or ev.kind == "safari" or next(st.areas)) then
+      st.hadBalls = true
+    end
+    if not st.hadBalls then return end
     local area = Game.overworld and Game.overworld.map and Game.overworld.map.id or "?"
     if st.areas[area] then
       battleInfo = { catchable = false,
                      why = "NUZLOCKE: YOU ALREADY HAD YOUR ENCOUNTER HERE!" }
-    elseif save.pokedex and save.pokedex.owned and save.pokedex.owned[ev.species] then
-      -- dupes clause: an owned species doesn't use the area up
-      battleInfo = { catchable = false,
-                     why = "NUZLOCKE: YOU ALREADY OWN THIS POKéMON (DUPES CLAUSE)!" }
     else
       st.areas[area] = ev.species or true
       battleInfo = { catchable = true }

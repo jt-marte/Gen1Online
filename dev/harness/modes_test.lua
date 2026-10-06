@@ -378,6 +378,75 @@ do
     and fp ~= fp2, "the fingerprint is stable, and changes with the item data")
 end
 
+-- ---- starters: basic Pokémon that evolve twice -----------------------------------------
+do
+  local function line(t, ...)
+    local ids = { ... }
+    for i, id in ipairs(ids) do
+      t[id] = { dex = #ids * 100 + i, evolutions = ids[i + 1] and { { species = ids[i + 1] } } or {} }
+    end
+  end
+  local mons = {}
+  line(mons, "BULBASAUR", "IVYSAUR", "VENUSAUR")
+  line(mons, "CHARMANDER", "CHARMELEON", "CHARIZARD")
+  line(mons, "SQUIRTLE", "WARTORTLE", "BLASTOISE")
+  line(mons, "PIKACHU", "RAICHU")                       -- two stages: never a starter
+  line(mons, "ODDISH", "GLOOM", "VILEPLUME")
+  line(mons, "DRATINI", "DRAGONAIR", "DRAGONITE")
+  line(mons, "EEVEE", "VAPOREON")
+  mons.EEVEE.evolutions[2] = { species = "JOLTEON" }     -- branching, still two stages
+  mons.JOLTEON = { dex = 999, evolutions = {} }
+  mons.DITTO = { dex = 132, evolutions = {} }
+  mons.BULBASAUR.dex, mons.CHARMANDER.dex, mons.SQUIRTLE.dex = 1, 4, 7
+  mons.ODDISH.dex, mons.DRATINI.dex = 43, 147
+  local pool = R.starterPool(mons)
+  check(table.concat(pool, ",") == "BULBASAUR,CHARMANDER,SQUIRTLE,ODDISH,DRATINI",
+    "the starter pool is the basic Pokémon that evolve twice, by dex number: " .. table.concat(pool, ","))
+  check(table.concat(R.starterPool(mons, { DRATINI = true }), ",") == "BULBASAUR,CHARMANDER,SQUIRTLE,ODDISH",
+    "legendaries are never starters")
+  local sdata = { maps = {}, field = {}, items = items, pokemon = mons }
+  local function starters(seed, extra)
+    local o = { seed = seed, data = sdata, victories = {}, logic = L, Rng = Rng, starters = true }
+    for k, v in pairs(extra or {}) do o[k] = v end
+    return R.build(o).starters
+  end
+  local inPool = {}
+  for _, id in ipairs(pool) do inPool[id] = true end
+  local allOk, varied, perWorld = true, false, false
+  local first = starters(1)
+  for seed = 1, 40 do
+    local m = starters(seed)
+    local seen = {}
+    for _, v in ipairs(R.STARTERS) do
+      if not (m and m[v] and inPool[m[v]] and not seen[m[v]]) then allOk = false end
+      if m and m[v] then seen[m[v]] = true end
+    end
+    for _, v in ipairs(R.STARTERS) do
+      if m and first and m[v] ~= first[v] then varied = true end
+    end
+    local w1 = starters(seed, { worlds = 2, world = 1 })
+    local w2 = starters(seed, { worlds = 2, world = 2 })
+    for _, v in ipairs(R.STARTERS) do if w1[v] ~= w2[v] then perWorld = true end end
+  end
+  check(allOk, "40 seeds: Gen 1's four starters (three balls and Yellow's PIKACHU) are four different pool Pokémon")
+  check(varied, "and the seed changes them")
+  local again = starters(1)
+  local same = true
+  for _, v in ipairs(R.STARTERS) do if again[v] ~= first[v] then same = false end end
+  check(same, "the same seed draws the same starters on every client")
+  check(perWorld, "each multiworld world draws its own")
+  check(R.build({ seed = 1, data = sdata, victories = {}, logic = L, Rng = Rng }).starters == nil,
+    "randomize_starters = off keeps them")
+  local fr = starters(3, { starterIds = { 1, 4, 7 }, pokemon = {
+    [1] = { dex = 1, evolutions = { { species = 2 } } }, [2] = { dex = 2, evolutions = { { species = 3 } } },
+    [3] = { dex = 3, evolutions = {} }, [252] = { dex = 252, evolutions = { { species = 253 } } },
+    [253] = { dex = 253, evolutions = { { species = 254 } } }, [254] = { dex = 254, evolutions = {} },
+    [4] = { dex = 4, evolutions = { { species = 5 } } }, [5] = { dex = 5, evolutions = { { species = 6 } } },
+    [6] = { dex = 6, evolutions = {} } } })
+  check(fr and fr[1] and fr[4] and fr[7] and fr[1] ~= fr[4] and fr[4] ~= fr[7] and fr[1] ~= fr[7],
+    "FireRed's numbered starters draw from its own data")
+end
+
 -- ---- a world the logic does not know --------------------------------------------------
 do
   local strange = { maps = { NOWHERE = { objects = { { index = 1, item = "HM_CUT" } } } },

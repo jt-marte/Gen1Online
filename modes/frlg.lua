@@ -221,7 +221,14 @@ return function(ctx)
       local sp = Pokemon.speciesFromNational(nat)
       local st = sp and Pokemon.stats(sp)
       if st then
-        speciesCache[sp] = { baseStats = { st.hp, st.atk, st.def, st.spa, st.spd, st.spe }, dex = nat }
+        -- evolutions too: the starters are basic Pokémon that evolve twice
+        local evolutions = {}
+        for _, e in ipairs(Pokemon.evolutions(sp) or {}) do
+          local into = tonumber(e.target or e[3])
+          if into and into > 0 then evolutions[#evolutions + 1] = { species = into } end
+        end
+        speciesCache[sp] = { baseStats = { st.hp, st.atk, st.def, st.spa, st.spd, st.spe }, dex = nat,
+                             evolutions = evolutions }
       end
     end
     for _, nat in ipairs(LEGENDARY_DEX) do
@@ -259,12 +266,78 @@ return function(ctx)
     return (r and r.multiworld and tonumber(r.players)) or 1
   end
 
+  -- Oak's three balls: BULBASAUR, CHARMANDER, SQUIRTLE (internal numbers are
+  -- the national ones up to 251)
+  local STARTERS = { 1, 4, 7 }
+
   local function buildPlan(r, world)
     local pokemon, legendary = M.speciesData()
     return Randomizer.build({ seed = r.seed, locations = M.places(r.items, r.badges), logic = L, Rng = Rng,
       encounters = r.encounters, items = r.items, badges = r.badges, worlds = worlds(r),
       world = world, pokemon = pokemon, legendary = legendary, fieldMovesOk = fieldMovesOk,
-      fallbackItem = "POTION" })
+      fallbackItem = "POTION", starters = r.starters, starterIds = STARTERS })
+  end
+
+  -- ---- the starters -----------------------------------------------------------
+
+  -- Each of Oak's balls puts its species in VAR_TEMP_2 (after its index in
+  -- VAR_TEMP_1); the picture, the question and givemon read the variable.
+  -- The question itself names the vanilla species and its type.
+  local LAB = "FR_OAKS_LAB"
+  local VAR_TEMP_1, VAR_TEMP_2 = 0x4001, 0x4002
+  local TYPE_NAMES = { [0] = "NORMAL", "FIGHTING", "FLYING", "POISON", "GROUND", "ROCK", "BUG", "GHOST",
+    "STEEL", "???", "FIRE", "WATER", "GRASS", "ELECTRIC", "PSYCHIC", "ICE", "DRAGON", "DARK" }
+  local function typeName(species)
+    local t = Pokemon.types(species)
+    return TYPE_NAMES[t and t[1] or 0] or "NORMAL"
+  end
+  function M.starterRows()
+    local raw = G3.raw()
+    local def = raw and raw.data and raw.data.maps and raw.data.maps[LAB]
+    local scripts = (bundle() or {}).scripts or {}
+    local out = {}
+    -- found by place, not value: once applied they hold the new species
+    for _, obj in ipairs(type(def) == "table" and def.objects or {}) do
+      local rows = obj.scriptKey and scripts[obj.scriptKey]
+      for i, row in ipairs(rows or {}) do
+        local prev = rows[i - 1]
+        if row.op == "setvar" and row[1] == VAR_TEMP_2 and type(row[2]) == "number"
+            and prev and prev.op == "setvar" and prev[1] == VAR_TEMP_1 then
+          out[#out + 1] = row
+        end
+      end
+    end
+    return out
+  end
+  local function replacePlain(s, old, new)
+    local at = s:find(old, 1, true)
+    if not at then return s end
+    return s:sub(1, at - 1) .. new .. replacePlain(s:sub(at + #old), old, new)
+  end
+  -- the text key of the question for a vanilla starter ("... X is your choice.")
+  function M.starterQuestion(vanilla)
+    local text = (bundle() or {}).text or {}
+    local mark = " " .. G3.speciesName(vanilla) .. " is your choice."
+    for key, ir in pairs(text) do
+      local first = type(ir) == "table" and ir[1]
+      if type(first) == "table" and type(first.s) == "string" and first.s:find(mark, 1, true) then
+        return key, ir
+      end
+    end
+  end
+  local function starterQuestionFor(ir, vanilla, species)
+    local oldName, newName = G3.speciesName(vanilla), G3.speciesName(species)
+    local oldKind, newKind = typeName(vanilla) .. " POKéMON", typeName(species) .. " POKéMON"
+    local out = {}
+    for i, tok in ipairs(ir) do
+      local copy = {}
+      for k, v in pairs(tok) do copy[k] = v end
+      if type(copy.s) == "string" then
+        copy.s = replacePlain(replacePlain(copy.s, oldName, newName), oldKind, newKind)
+      end
+      out[i] = copy
+    end
+    return out
   end
 
   -- balls and gifts: the item in the script's setorcopyvar rows; hidden
@@ -274,6 +347,19 @@ return function(ctx)
     local function set(t, k, v)
       undoList[#undoList + 1] = { t, k, t[k] }
       t[k] = v
+    end
+    if p.starters then
+      for _, row in ipairs(M.starterRows()) do
+        local to = p.starters[row[2]]
+        if to then
+          local from = row[2]
+          set(row, 2, to)
+          if row.value ~= nil then set(row, "value", to) end
+          local text = (bundle() or {}).text
+          local key, ir = M.starterQuestion(from)
+          if text and key then set(text, key, starterQuestionFor(ir, from, to)) end
+        end
+      end
     end
     for _, loc in ipairs(p.locations or {}) do
       local c = p.content[loc.key]
@@ -300,8 +386,9 @@ return function(ctx)
     local r = rules()
     local key = nil
     if r and r.randomizer and r.seed and G3.raw() and (worlds(r) == 1 or M.world) then
-      key = ("%s/%s%s%s/%d:%d"):format(tostring(r.seed), tostring(r.encounters), tostring(r.items),
-                                       tostring(r.badges), worlds(r), worlds(r) > 1 and M.world or 1)
+      key = ("%s/%s%s%s%s/%d:%d"):format(tostring(r.seed), tostring(r.encounters), tostring(r.items),
+                                         tostring(r.badges), tostring(r.starters), worlds(r),
+                                         worlds(r) > 1 and M.world or 1)
     end
     -- a new script bundle (the engine reloaded it) holds vanilla items again
     if key and planKey == key and locsBundle ~= bundle() then planKey = nil end
@@ -361,7 +448,7 @@ return function(ctx)
   local Evolution = require("src.core.game3.evolution")
   local origNational = Evolution.nationalAllows
   Evolution.nationalAllows = function(target, sess, ...)
-    if plan and plan.species then return true end
+    if plan and (plan.species or plan.starters) then return true end
     return origNational(target, sess, ...)
   end
 
@@ -659,7 +746,10 @@ return function(ctx)
     return false
   end
 
-  -- the first wild Pokémon in each area (map) is the only one that counts
+  -- The first wild Pokémon in each area (map) is the only one that may be
+  -- caught, whatever it is.  Until the player first has Poké Balls (Route 1
+  -- and 22 before Oak's parcel) nothing counts; from then on every area's
+  -- first encounter does, even with no ball in the bag.
   mod.events:on("battle.started", function(ev)
     battleInfo = nil
     currentBattle = type(ev) == "table" and ev or nil
@@ -667,17 +757,15 @@ return function(ctx)
     -- nothing to catch: the old man's demo, the POKé DUDE, a ghost
     local b = type(ev.battle) == "table" and ev.battle or {}
     if b.oldManTutorial or b.pokedude or b.ghost or b.noCatch then return end
-    if not hasBalls() and not b.safari then return end
     local st = state()
+    -- (a save from before this rule: an area already used means it had balls)
+    if not st.hadBalls and (hasBalls() or b.safari or next(st.areas)) then st.hadBalls = true end
+    if not st.hadBalls then return end
     local area = G3.currentMap() or "?"
-    local sp = tonumber(ev.speciesId)
-    local d = session() and session().dex
     if st.areas[area] then
       battleInfo = { catchable = false, why = "NUZLOCKE: YOU ALREADY HAD YOUR ENCOUNTER HERE!" }
-    elseif sp and d and d.owned and d.owned[sp] then
-      battleInfo = { catchable = false, why = "NUZLOCKE: YOU ALREADY OWN THIS POKéMON (DUPES CLAUSE)!" }
     else
-      st.areas[area] = sp or true
+      st.areas[area] = tonumber(ev.speciesId) or true
       battleInfo = { catchable = true }
     end
   end)
@@ -723,7 +811,7 @@ return function(ctx)
     if not M.hardcore() then return end
     -- link battles are friendly; the first rival fight in Oak's lab never costs
     if battle and battle.kind == "link" then return end
-    if G3.currentMap() == "FR_PALLET_TOWN_PROFESSOR_OAKS_LAB" then return end
+    if G3.currentMap() == "FR_OAKS_LAB" then return end
     M.bury(type(ev) == "table" and ev.result == "lose")
   end)
 

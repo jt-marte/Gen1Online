@@ -4,8 +4,10 @@
 -- a Red player each get a world their game can finish).
 --
 --   plan = Randomizer.build{ seed=, data=, victories=, logic=, Rng=,
---                            encounters=, items=, badges=, worlds=, world= }
+--                            encounters=, items=, badges=, starters=,
+--                            worlds=, world= }
 --   plan.species[VANILLA] = REPLACEMENT          (wild, fishing, static)
+--   plan.starters[VANILLA_STARTER] = REPLACEMENT (Oak's gifts)
 --   plan.content[key] = { item=, count= }        (every shuffled place)
 --   plan.gifts[VANILLA_ITEM], plan.gyms[VICTORY_KEY] -> content
 --   local undo = Randomizer.apply(plan, data, victories); undo()
@@ -22,6 +24,8 @@ local R = {}
 
 -- Never mixed into the wild pool; they shuffle among themselves.
 R.LEGENDARY = { ARTICUNO = true, ZAPDOS = true, MOLTRES = true, MEWTWO = true, MEW = true }
+-- Gen 1's starters: Red and Blue's three balls, then Yellow's PIKACHU
+R.STARTERS = { "BULBASAUR", "CHARMANDER", "SQUIRTLE", "PIKACHU" }
 R.TIERS = 6
 
 local function statTotal(def)
@@ -65,6 +69,47 @@ function R.speciesMap(rng, pokemon, legendary)
     shuffleGroup(group)
   end
   shuffleGroup(legends)
+  return map
+end
+
+-- ---- starters -----------------------------------------------------------------
+
+-- The starters become basic Pokémon that evolve twice, as the real ones do:
+-- species nothing evolves into, whose evolution evolves again (a def's
+-- `evolutions` lists { species = INTO }), never a legendary.  Sorted, so
+-- every client draws from the same list.
+function R.starterPool(pokemon, legendary)
+  legendary = legendary or R.LEGENDARY
+  local evolved = {}
+  for _, def in pairs(pokemon or {}) do
+    for _, e in ipairs(type(def) == "table" and def.evolutions or {}) do evolved[e.species] = true end
+  end
+  local pool = {}
+  for id, def in pairs(pokemon or {}) do
+    if type(def) == "table" and not evolved[id] and not legendary[id] then
+      for _, e in ipairs(def.evolutions or {}) do
+        local mid = pokemon[e.species]
+        if type(mid) == "table" and mid.evolutions and #mid.evolutions > 0 then
+          pool[#pool + 1] = { id = id, dex = tonumber(def.dex) or 999 }
+          break
+        end
+      end
+    end
+  end
+  table.sort(pool, function(a, b)
+    if a.dex ~= b.dex then return a.dex < b.dex end
+    return tostring(a.id) < tostring(b.id)
+  end)
+  for i, e in ipairs(pool) do pool[i] = e.id end
+  return pool
+end
+
+-- vanilla[i] -> a different pool species each (distinct while the pool lasts)
+function R.starterMap(rng, vanilla, pool)
+  if #pool == 0 then return nil end
+  local drawn = rng:shuffle({ unpack(pool) })
+  local map = {}
+  for i, id in ipairs(vanilla) do map[id] = drawn[(i - 1) % #drawn + 1] end
   return map
 end
 
@@ -314,6 +359,13 @@ function R.build(opts)
       plan.speciesTries = try
       if fieldOk(plan.species) then break end
     end
+  end
+  if opts.starters then
+    -- opts.starterIds: the game's own starters, in a fixed order (Gen 1's
+    -- three balls and Yellow's PIKACHU by default); one draw per world
+    local salt = 20000 + (worlds > 1 and world or 0)
+    plan.starters = R.starterMap(Rng.new(opts.seed, salt), opts.starterIds or R.STARTERS,
+      R.starterPool(opts.pokemon or opts.data.pokemon, opts.legendary))
   end
   -- opts.locations: places another game built (FireRed's, modes/frlg.lua)
   local base = opts.locations or R.locations(opts.data, opts.victories or {}, L, opts)

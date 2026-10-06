@@ -216,6 +216,19 @@ if [ "${1:-}" != "quick" ]; then
       printf 'server_url=http://127.0.0.1:1\n' > "$FPROFILE/mods/gen1online-plus/gts_config.txt"
       frlg $g gen1online-frlg gen3_social.lua gen3_social_$g
       step "real $g parties, profile, address, token" "$(result "$G1O_WORK/gen3_social_$g.log" | sed 's/.*\t//')"
+      # you and a friend: two games on one hardcore server, each with their
+      # own first encounter per area
+      if [ -f "$FPROFILE2/$g/rom-cache.complete" ]; then
+        GTS_CONFIG="$G1O_WORK/server/modes_config.txt" GTS_GENERATION=3 "$DEV/server.sh" >/dev/null
+        install_frlg "$FPROFILE"
+        install_frlg "$FPROFILE2"
+        frlg $g gen1online-frlg gen3_friend.lua gen3_friend_host G1O_ROLE=host &
+        sleep 3
+        frlg $g gen1online-frlg2 gen3_friend.lua gen3_friend_guest G1O_ROLE=guest
+        wait
+        step "real $g Nuzlocke with a friend (you)" "$(result "$G1O_WORK/gen3_friend_host.log" | sed 's/.*\t//')"
+        step "real $g Nuzlocke with a friend (friend)" "$(result "$G1O_WORK/gen3_friend_guest.log" | sed 's/.*\t//')"
+      fi
     fi
   done
   # FireRed and LeafGreen hold the same item places, so their players can

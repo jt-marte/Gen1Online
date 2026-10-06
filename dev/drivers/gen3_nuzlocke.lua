@@ -1,10 +1,14 @@
 -- Real FireRed / LeafGreen battles under the hardcore Nuzlocke (the same
 -- server config as gen3_modes.lua: hardcore, randomizer, seed 4242):
+--   0. before the first Poké Balls, a Route 1 encounter doesn't count; a
+--      client without the current rules is turned away by the server
 --   1. the first wild Pokémon on Route 1 (a shuffled RATTATA) is caught with
 --      a MASTER BALL thrown from the battle bag
 --   2. the next one on Route 1: the bag's ball is refused, with the reason,
 --      and the ball is kept; the player runs.  The Safari Zone's own BALL
---      command is refused the same way, with no SAFARI BALL spent
+--      command is refused the same way, with no SAFARI BALL spent.  No
+--      dupes clause: an owned species met first elsewhere is caught; with
+--      an empty bag an area's first encounter still uses it up
 --   3. a MAGIKARP lead faints in a real battle (the battle plays itself):
 --      buried after it, the others stay
 --   4. a party that can't win blacks out: the run ends, run 2 starts in the
@@ -37,7 +41,6 @@ return function(game)
   local s = Runtime.getSession()
   Party.giveMon(s, 129, 2)    -- MAGIKARP: faints first
   Party.giveMon(s, 6, 60)     -- CHARIZARD
-  Bag.add(s.bag, ITEMS.ITEM_MASTER_BALL, 3)
   G3.warpTo("ROUTE_1", 10, 20, "down")
   for _ = 1, 300 do if G3.currentMap() == "FR_ROUTE_1" and H.fieldFree() then break end U.wait(2) end
   check(G3.currentMap() == "FR_ROUTE_1", "on Route 1")
@@ -131,6 +134,17 @@ return function(game)
     return true
   end
 
+  -- 0. no Poké Balls yet (Route 1 before Oak's parcel): nothing counts
+  check(masterBalls() == 0 and not Modes.state().hadBalls, "no Poké Balls yet")
+  check(wild(16, 3) ~= nil and leave(), "a Route 1 encounter with no Poké Balls, run from")
+  check(Modes.state().areas.FR_ROUTE_1 == nil, "it doesn't use Route 1 up")
+  Bag.add(s.bag, ITEMS.ITEM_MASTER_BALL, 3)
+  -- a client without the current rules (an old copy of the mod) is turned away
+  local acc = H.account()
+  local old = H.post({ action = "team_status", trainerId = acc.trainerId, modesVersion = 0 })
+  check(old and old.error == "VERSION_MISMATCH", "the server turns away a client without these rules ("
+    .. tostring(old and old.error) .. ")")
+
   -- 1. the area's first encounter, caught
   local partyBefore = #s.party
   local st = wild(19, 3)
@@ -183,6 +197,41 @@ return function(game)
   check(Safari.balls(s) == safariBalls, "no SAFARI BALL was spent (" .. Safari.balls(s) .. ")")
   check(leave(), "left the Safari battle")
   Safari.exit(s)
+
+  -- 2c. no dupes clause: Route 22's first encounter is the species caught on
+  --     Route 1, and it is caught too
+  G3.warpTo("ROUTE_22", 10, 10, "down")
+  for _ = 1, 300 do if G3.currentMap() == "FR_ROUTE_22" and H.fieldFree() then break end U.wait(2) end
+  s = Runtime.getSession()
+  local before = #s.party
+  st = wild(19, 3)
+  check(st and tonumber(st.enemy.mon.species) == species, "Route 22's first one is another "
+    .. tostring(species and Pokemon.name(species)) .. ", already owned")
+  check(throwBall() and waitEnd() and #Runtime.getSession().party == before + 1, "and caught all the same")
+  s = Runtime.getSession()
+  check(Modes.state().areas.FR_ROUTE_22 ~= nil, "Route 22 is used")
+
+  -- 2d. an empty bag: Viridian City's first encounter still uses it up, so
+  --     with balls again the next one there is refused
+  G3.warpTo("VIRIDIAN_CITY", 20, 20, "down")
+  for _ = 1, 300 do if G3.currentMap() == "FR_VIRIDIAN_CITY" and H.fieldFree() then break end U.wait(2) end
+  local kept = masterBalls()
+  Bag.set(s.bag, ITEMS.ITEM_MASTER_BALL, 0)
+  check(masterBalls() == 0 and wild(16, 3) ~= nil and leave(), "an encounter with no ball in the bag, run from")
+  check(Modes.state().areas.FR_VIRIDIAN_CITY ~= nil, "it still uses the area up")
+  Bag.set(s.bag, ITEMS.ITEM_MASTER_BALL, kept)
+  st = wild(16, 3)
+  throwBall()
+  U.wait(20)
+  check(BagMenu.mode == "message" and tostring(BagMenu.messageText or ""):find("ENCOUNTER HERE", 1, true) ~= nil,
+    "back with balls, the next one there is refused")
+  for _ = 1, 20 do if BagMenu.mode ~= "message" then break end U.tap(game, "a"); U.wait(5) end
+  for _ = 1, 120 do
+    if not BagMenu.isOpen() then break end
+    if BagMenu.mode == "message" then U.tap(game, "a") else U.tap(game, "b") end
+    U.wait(5)
+  end
+  check(masterBalls() == kept and leave(), "the ball is kept; ran")
 
   -- 3. the MAGIKARP lead faints in a real battle and is buried
   G3.warpTo("ROUTE_22", 10, 10, "down")

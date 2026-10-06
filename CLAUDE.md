@@ -157,8 +157,8 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     progression on hidden tiles, post-game maps or the S.S. Anne's cabins, a
     pure permutation), the badges-only / items-only / encounters-only
     variants, the species shuffle (drawn again until CUT has early learners,
-    deterministically; unchanged without encounter data), apply/undo, and
-    multiworld.
+    deterministically; unchanged without encounter data), the starter pool
+    and draws, apply/undo, and multiworld.
   - `wrong_world_test.lua`: each generation's CONNECT is turned away by the
     other generation's server (run as Crystal on Gen 1, and as Red on Crystal).
   - `address_test.lua` (Crystal and Yellow): the CONNECT menu (JOIN / SERVER
@@ -212,7 +212,10 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   learners in 3+ early areas). After connecting it also covers a lost
   report sent again, a full bag sending a team item to the PC, no room at
   all (not counted, comes later), an owed gym prize, and the level cap with
-  gyms open out of order. Last, a new device (the online files deleted):
+  gyms open out of order. The starters: Red/Blue's lab rows through the
+  mod's `script.command` hook (no Red/Blue data here) and Yellow's gift
+  through the overworld's runner (BELLSPROUT for seed 4242, the PIKACHU
+  scene skipped). Last, a new device (the online files deleted):
   REDEEM RECOVERY TOKEN joins the current run in the shuffled world. Needs
   the Yellow cache only.
 - **Real Yellow multiworld** (`dev/drivers/gen1_multiworld.lua`): a server
@@ -266,7 +269,9 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     and badges (finishable, progression never hidden or post-game), badges
     only, 1-3 worlds x 50 seeds replayed as the team, the 386-species
     shuffle, a shuffled wild battle, a ball, a hidden item and the TEA,
-    a badge picked up from a ball, shared finds both ways, the level cap,
+    a starter picked in Oak's lab (CHARMANDER's ball holds SQUIRTLE for
+    seed 4242; the question names it), a badge picked up from a ball,
+    shared finds both ways, the level cap,
     BROCK fought for his slot (SET, no EXP over the cap), a burial, a wipe
     starting run 2, DISCONNECT restoring vanilla, JOIN again reloading run
     2 from the online save, and BUDDY's wipe while ASH is offline making
@@ -274,11 +279,15 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     REDEEM RECOVERY TOKEN joining run 3 in the shuffled world. It prints
     the item places' fingerprint; `run_tests.sh` checks FireRed's and
     LeafGreen's agree.
-  - `gen3_nuzlocke.lua` (FireRed): real battles. A Master Ball thrown from
+  - `gen3_nuzlocke.lua` (FireRed): real battles. A Route 1 encounter before
+    any Poké Ball not counting, an old client (`modesVersion = 0`) turned
+    away, a Master Ball thrown from
     the battle bag, the next encounter's ball refused in the bag (the
     reason in `BagMenu.messageText`) and kept, the Safari Zone's BALL
-    refused with no Safari Ball spent, a fainted MAGIKARP buried, and a
-    real blackout starting the next run. The burial battle puts a level-100
+    refused with no Safari Ball spent, an owned species met first on Route
+    22 caught (no dupes clause), an encounter with an empty bag still using
+    Viridian City up, a fainted MAGIKARP buried, and a real blackout
+    starting the next run. The burial battle puts a level-100
     CHARIZARD with FLAMETHROWER second: a shuffled FUTURE SIGHT is worked
     out against the 1-HP lead (Gen 3) and lands on the next one in, which
     once wiped the party and started a new run mid-test.
@@ -287,6 +296,11 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     game's data `WRONG_WORLD_DATA`, every progression item in one world, a
     world-1 ball picked up for real reaching the team and BUDDY's world-2
     find reaching the client, RUN INFO, and a newcomer refused on CONNECT.
+  - `gen3_friend.lua` (FireRed; two LÖVE processes, host ASH and guest
+    MISTY, on a hardcore server): both get the rules and see each other on
+    Route 1; ASH catches Route 1's first Pokémon and says so in the chat,
+    then MISTY catches hers (the area is each player's own); for both the
+    next Route 1 ball is refused and kept.
   - `gen3_social.lua` (FireRed; plain server, `gts_config.txt` at a dead
     port): JOIN reporting the dead server, SERVER ADDRESS typed through
     `love.textinput`, `Game3:keypressed` and the D-pad (bad addresses
@@ -351,6 +365,12 @@ Transport and framing:
   `modVersion`, `version`, `gameVersion` and `recompVersion`. Accept a client
   when its major.minor matches the server's. Otherwise answer
   `{"success":false,"error":"VERSION_MISMATCH","serverVersion":...}`.
+- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 2: the
+  game modes' rules the client plays). While a game mode is on, the server
+  answers a Gen 1 or FireRed/LeafGreen POST below `MODES_VERSION` (logout
+  excepted) with `VERSION_MISMATCH`, `serverVersion` "0.5.1+ (GAME MODES)":
+  the rules are enforced by each client, so an old copy would play without
+  them. Bump both when the rules change.
 - Errors are `{"success":false,"error":"CODE"}`. The client acts on
   `VERSION_MISMATCH`, `WRONG_GENERATION`, `ALREADY_LOGGED_IN`, `BANNED` and
   `NAME_TAKEN`.
@@ -457,7 +477,7 @@ Quests:
 Game modes (Gen 1 and FireRed/LeafGreen; `server/server_config.txt`,
 `--config`, `GTS_CONFIG`):
 - The rules view `{nuzlocke: "off"|"hardcore", randomizer, encounters, items,
-  badges, sharedKeyItems, active, runId, seed}` rides `/server/info` as
+  badges, starters, sharedKeyItems, active, runId, seed}` rides `/server/info` as
   `rules` and every `sync_pos` answer as `run`, next to `team: {rev, items:
   [ITEM]}`. Sub-flags read false when the randomizer is off;
   `shared_key_items = auto` follows the randomizer.
@@ -719,9 +739,18 @@ off the open internet.
     The S.S. Anne is unlisted on purpose: she sails for good after the
     captain's gift (`EVENT_GOT_HM01`), whatever it is.
   - Shuffled: item balls, hidden items, the twelve `give_item` gifts in
-    `L.GIFTS`, the gym badge slots (gym TMs stay). Not shuffled: Lua-handler
+    `L.GIFTS`, the gym badge slots (gym TMs stay), and the starters
+    (`randomize_starters`, rules view `starters`): `Randomizer.starterPool`
+    is every basic Pokémon that evolves twice (no legendaries), and
+    `plan.starters` maps Red/Blue's three balls and Yellow's PIKACHU
+    (`R.STARTERS`) to distinct ones, salt 20000 (+ world in a multiworld).
+    On Gen 1 the `script.command` hook rewrites Oak's lab rows (the
+    DexEntryMenu, the `ask`, the received line, `give_pokemon`; Yellow's
+    PIKACHU scene rows are skipped) and `load_player_starter_name`; the
+    rival's lines and teams stay vanilla. Yellow's starter is a different
+    Pokémon, so the PIKACHU follower never comes. Not shuffled: Lua-handler
     gifts (Bicycle, HM02, HM05, fossils, Oak's aides), trainers' teams, the
-    starters, gift and trade Pokémon. The Town Map's nest view reads the
+    gift and trade Pokémon. The Town Map's nest view reads the
     vanilla encounter tables.
   - Each client shuffles its own game's data, so Red/Blue and Yellow players
     on one server get different (each finishable) worlds from one seed.
@@ -749,8 +778,12 @@ off the open internet.
     again with every new team view until the team has them; a team item
     is only marked received (`got`) once it found room (bag, else item PC);
     a gym prize with no room anywhere goes to `g1oModes.owed`.
-  - Nuzlocke areas are map ids (each floor counts). Pokémon from the GTS,
-    Wonder Trade and link trades skip the catch rules (a design call).
+  - Nuzlocke areas are map ids (each floor counts). The first wild Pokémon
+    met in an area is the only one that may be caught, whatever it is (no
+    dupes clause). Nothing counts until the player first has Poké Balls
+    (`st.hadBalls`, sticky; a save with any area used counts as having had
+    them); after that an empty bag still uses an area up. Pokémon from the
+    GTS, Wonder Trade and link trades skip the catch rules (a design call).
   - The hardcore rules hook `item.use` (the bag), `ItemEffects.needsTarget`
     (a refused item gets no target picker), `BattleState.safariAction` (the
     Safari Zone's own BALL), `battle.style`, `exp.gain`, and the
@@ -772,6 +805,11 @@ off the open internet.
     badge flag (every script scanned), so badges are plain progression. The
     logic covers Kanto and One to Three Island before the Elite Four;
     post-game maps (Cerulean Cave, Four to Seven Island) hold filler.
+  - Starters: Oak's balls (`FR_OAKS_LAB`) put their species in VAR_TEMP_2
+    after their index in VAR_TEMP_1; `M.starterRows` finds those rows by
+    place, `apply` sets them and rewrites the question text (found by "X is
+    your choice." in the bundle's text table) with the new name and type.
+    FireRed and LeafGreen draw the same three.
   - Species: all 386 by national number, in strength tiers, the legendaries
     (Jirachi and Deoxys included) among themselves. Every wild battle goes
     through `BattleBridge.startWild` (grass, water, fishing, Rock Smash, the

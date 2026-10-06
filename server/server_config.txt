@@ -9,8 +9,12 @@
 # kept as a backup.
 
 # Hardcore Nuzlocke:
-#   - only the first wild Pokemon you meet in each area can be caught
-#     (one per player; species you already own don't count and can't be caught)
+#   - only the first wild Pokemon you meet in each area can be caught,
+#     whatever it is (one per player; a species you already own counts too).
+#     Encounters before you first have Poke Balls (Route 1) don't count; from
+#     then on every area's first one does, even with no ball in your bag
+#   - every player needs the current version of the mod: an older one is
+#     told to update
 #   - a Pokemon that faints is gone for good
 #   - no items in battle (Poke Balls still work), battle style is SET,
 #     and Pokemon stop gaining EXP at the level cap of the next gym (with
@@ -33,10 +37,14 @@ nuzlocke = off
 # randomizer = on | off
 randomizer = off
 
-# What the randomizer shuffles (only when randomizer = on):
+# What the randomizer shuffles (only when randomizer = on).  The starters
+# become basic Pokemon that evolve twice, like the real ones (on Yellow too:
+# Oak hands over something else than PIKACHU, which then doesn't follow you);
+# the rival keeps his usual team.
 randomize_encounters = on
 randomize_items = on
 randomize_badges = on
+randomize_starters = on
 
 # The team shares key items, HMs and badges: whatever one player finds, every
 # player gets.  auto = on whenever the randomizer is.
