@@ -15,6 +15,9 @@
 #                                cache imported (only when a ROM is given)
 #   xdg/love/gen1online-yellow/  the same for Yellow, when G1O_YELLOW_ROM
 #                                names a Yellow ROM (for the voxel driver)
+#   xdg/love/gen1online-frlg/    FireRed and LeafGreen, when G1O_FIRERED_ROM /
+#   xdg/love/gen1online-frlg2/   G1O_LEAFGREEN_ROM name the .gba files (the
+#                                second is the link driver's other player)
 # The tests run this repo's own server (server/gts_server.py, stdlib Python 3).
 # Also clones gen1recomp next to this repo when it isn't there, at the
 # commit the suite was last verified against ($G1O_RECOMP_REF).
@@ -23,7 +26,7 @@ DEV=$(cd "$(dirname "$0")" && pwd)
 REPO=$(dirname "$DEV")
 WORK=${G1O_WORK:-/tmp/gen1online-dev}
 RECOMP=${G1O_RECOMP:-$(dirname "$REPO")/gen1recomp}
-RECOMP_REF=${G1O_RECOMP_REF:-340e2567ec93d8ac74659d7091ebbec8925d7295}
+RECOMP_REF=${G1O_RECOMP_REF:-6613f5bc4239e9076df7366ed4b07b6285194042}
 mkdir -p "$WORK/rpms" "$WORK/root" "$WORK/bin" "$WORK/server"
 
 # --- engine -------------------------------------------------------------------
@@ -100,3 +103,23 @@ if [ -n "${G1O_YELLOW_ROM:-}" ] && [ ! -f "$YPROFILE/yellow/rom-cache.complete" 
 fi
 [ -f "$YPROFILE/yellow/rom-cache.complete" ] && echo "Yellow cache: ready" \
   || echo "Yellow cache: missing (optional: G1O_YELLOW_ROM=<rom> dev/setup.sh for the voxel driver)"
+
+# --- optional FireRed / LeafGreen profiles (G1O_FIRERED_ROM, G1O_LEAFGREEN_ROM:
+# paths to the .gba files).  gen1online-frlg holds both games; the link
+# driver's second player gets its own copy, gen1online-frlg2.
+for game in firered leafgreen; do
+  case $game in
+    firered) rom=${G1O_FIRERED_ROM:-} label=FireRed ;;
+    leafgreen) rom=${G1O_LEAFGREEN_ROM:-} label=LeafGreen ;;
+  esac
+  for identity in gen1online-frlg gen1online-frlg2; do
+    GPROFILE="$WORK/xdg/love/$identity"
+    if [ -n "$rom" ] && [ ! -f "$GPROFILE/$game/rom-cache.complete" ] && [ -x "$WORK/bin/love" ]; then
+      (cd "$RECOMP" && XDG_DATA_HOME="$WORK/xdg" POKEPORT_IDENTITY=$identity \
+        POKEPORT_VERSION=$game POKEPORT_IMPORT_ONLY=1 POKEPORT_IMPORT_ROM="$rom" \
+        "$WORK/bin/love" .)
+    fi
+  done
+  [ -f "$WORK/xdg/love/gen1online-frlg/$game/rom-cache.complete" ] && echo "$label cache: ready" \
+    || echo "$label cache: missing (optional: G1O_$(echo $game | tr a-z A-Z)_ROM=<rom.gba> dev/setup.sh)"
+done

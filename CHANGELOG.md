@@ -6,6 +6,20 @@ A server of our own, built for playing with friends.
 
 ### Added
 
+- **FireRed and LeafGreen.** The mod runs on the engine's Gen 3 games with
+  the whole online side: CONNECT on the START menu (a new online character is
+  a new FireRed game in the bedroom, named on FireRed's naming screen, a boy
+  or a girl to match the avatar), other players walking the field as real
+  overworld sprites (40 trainer avatars; bike and surf sheets) with name tags,
+  GTS on the START menu and the Pokémon Center PC (whole Gen 3 Pokémon on the
+  wire, the in-game trade scene and trade evolutions), Wonder Trade, chat,
+  co-op parties, the 1x lock and a separate online save
+  (`save_online_firered.lua` / `_leafgreen`). PVP is the game's own link
+  battle at the party's real levels and a link trade is the Trade Center's
+  trade screen, both over the server. The mod's menus are drawn as FireRed
+  windows in FireRed's font (`gen3/`). A server hosts one generation:
+  `--gen 3` (or the first FireRed/LeafGreen game to connect) makes a Gen 3
+  world, which FireRed and LeafGreen share.
 - **Hardcore Nuzlocke and a co-op randomizer** (Red, Blue, Yellow), set by the
   host in `server/server_config.txt` (all off by default) for everyone on the
   server. The randomizer shuffles wild Pokémon (within strength tiers;
@@ -98,6 +112,12 @@ A server of our own, built for playing with friends.
 
 ### Fixed
 
+- An offer made right after a battle was thrown away for 5 seconds as if it
+  were a stale answer from that battle (all generations). Only stale answers
+  are dropped now; a new PVP or trade offer, and the answer to a challenge
+  you are waiting on, get through.
+- Server: a wanted list of species numbers was emptied on deposit (FireRed
+  and LeafGreen list species by number).
 - Voxel name tags in DramaticShapeVoxelMod's free cameras (1ST and 3RD): a
   tag was anchored on the south edge of its trainer's cell, so seen from the
   east or west it hung half a sprite to one side. It is centred on the cell

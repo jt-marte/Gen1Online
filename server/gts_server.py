@@ -13,13 +13,14 @@ speaks; clients with the same major.minor are accepted).
 
 Game modes come from server/server_config.txt (or --config): a hardcore
 Nuzlocke and a co-op randomizer, both off by default and played on Gen 1
-worlds.  The server owns the run (its number and its seed) and the team's
+and FireRed/LeafGreen worlds.  The server owns the run (its number and its seed) and the team's
 shared key items and badges; the clients do the rest.  See that file.
 
 A server, or more exactly its data file, is one world for one generation:
-Gen 1 (Red/Blue/Yellow) or Gen 2 (Crystal).  `--gen 1` or `--gen 2` picks it;
-without it the first game to connect decides.  Games of the other generation
-are turned away with WRONG_GENERATION.  To host both, run two servers with
+Gen 1 (Red/Blue/Yellow), Gen 2 (Crystal) or Gen 3 (FireRed/LeafGreen).
+`--gen 1`, `--gen 2` or `--gen 3` picks it; without it the first game to
+connect decides.  Games of another generation are turned away with
+WRONG_GENERATION.  To host several, run one server per generation with
 different --port and --data.
 
 The wire protocol is the one the mod's client (main.lua) speaks, written up
@@ -97,11 +98,13 @@ XP_TABLE = {
 }
 XP_DEFAULT = 10
 
-GENERATION_NAMES = {1: "Gen 1 (Red/Blue/Yellow)", 2: "Gen 2 (Crystal)"}
+GENERATION_NAMES = {1: "Gen 1 (Red/Blue/Yellow)", 2: "Gen 2 (Crystal)",
+                    3: "Gen 3 (FireRed/LeafGreen)"}
 # Recovery tokens are typed on the game's own keyboard: Crystal's box keyboard
-# has digits, Gen 1's naming screen has letters only.
+# and FireRed/LeafGreen's naming screen have digits, Gen 1's has letters only.
 TOKEN_LENGTH = 8
-TOKEN_ALPHABETS = {1: "ABCDEFGHIJKLMNOPQRSTUVWXYZ", 2: "0123456789ABCDEF"}
+TOKEN_ALPHABETS = {1: "ABCDEFGHIJKLMNOPQRSTUVWXYZ", 2: "0123456789ABCDEF",
+                   3: "0123456789ABCDEF"}
 # the client sends GameVersion's displayName ("Pokemon Red"); the Gen 3 names
 # go first because "firered" contains "red"
 GAME_GENERATIONS = (("firered", 3), ("leafgreen", 3), ("emerald", 3), ("ruby", 3),
@@ -113,8 +116,10 @@ MAX_LEVEL = 100
 CHALLENGE_TYPES = ("PVP", "TRADE", "ACCEPT_PVP", "ACCEPT_TRADE", "DECLINE")
 
 # Presence fields a sync_pos may carry; each is echoed to the other players.
+# FireRed/LeafGreen add the avatar's state (bike, surf...), gender and elevation.
 PRESENCE_FIELDS = ("name", "spriteId", "title", "level", "map", "x", "y", "px",
-                   "py", "fx", "fy", "facing", "moving", "species")
+                   "py", "fx", "fy", "facing", "moving", "species", "state",
+                   "gender", "elevation")
 
 # Game modes (server_config.txt).  Booleans read on/off, yes/no, true/false, 1/0;
 # "auto" for shared_key_items means "on when the randomizer is".
@@ -209,7 +214,10 @@ def fold(name):
 
 def mon_name(mon):
     if isinstance(mon, dict):
-        return str(mon.get("nickname") or mon.get("species") or "POKéMON")
+        # FireRed/LeafGreen mons carry their species as a number, and its name
+        # beside it for messages like this one
+        return str(mon.get("nickname") or mon.get("speciesName") or mon.get("species")
+                   or "POKéMON")
     return "POKéMON"
 
 
@@ -325,7 +333,7 @@ def empty_data():
         "nextChatId": 1,
         "nextListingId": 1001,
         "nextClaimId": 1,
-        "generation": None,    # 1 or 2 once set: this world's generation
+        "generation": None,    # 1, 2 or 3 once set: this world's generation
         "run": {},             # {id, seed, started}: the game modes' current run
         "team": {},            # {items: {ITEM: {by, name, time}}, rev}: shared key items
     }
@@ -352,7 +360,7 @@ class GtsStore:
             self._begin_run(1)
         if generation is not None:
             if generation not in GENERATION_NAMES:
-                raise ValueError("generation must be 1 or 2")
+                raise ValueError("generation must be 1, 2 or 3")
             current = self.data["generation"]
             if current is None:
                 self.data["generation"] = generation
@@ -440,7 +448,7 @@ class GtsStore:
         if gen is None:
             return True     # not a game (a script or a test): nothing to check
         if gen not in GENERATION_NAMES:
-            return False    # Gen 3: the mod does not run there
+            return False    # a generation the mod does not run on
         if self.data["generation"] is None and may_claim:
             self.data["generation"] = gen
             self.save()
@@ -910,7 +918,9 @@ class GtsStore:
         if sum(1 for l in listings.values() if l.get("trainerId") == tid) >= MAX_LISTINGS_PER_TRAINER:
             raise ApiError("LISTING_LIMIT")
         wanted = req.get("wanted")
-        wanted = [str(s) for s in wanted if isinstance(s, str) and s][:MAX_WANTED] \
+        # species names on Gen 1 and Crystal, species numbers on FireRed/LeafGreen
+        wanted = [s for s in wanted if (isinstance(s, str) and s)
+                  or (isinstance(s, int) and not isinstance(s, bool) and s > 0)][:MAX_WANTED] \
             if isinstance(wanted, list) else []
         listing_id = "GTS_%d" % self.data["nextListingId"]
         self.data["nextListingId"] += 1
@@ -1473,7 +1483,7 @@ def modes_line(store):
 def banner(host, port, store):
     gen = store.data["generation"]
     world = (GENERATION_NAMES[gen] if gen else
-             "not set yet: the first game to connect decides (or start with --gen 1 or --gen 2)")
+             "not set yet: the first game to connect decides (or start with --gen 1, 2 or 3)")
     lines = ["Gen1Online+ server %s on %s:%d" % (store.version, host, port),
              "Data: %s" % os.path.abspath(store.path),
              "World: %s" % world,
@@ -1507,8 +1517,9 @@ def main(argv=None):
     parser.add_argument("--data", default=os.environ.get("GTS_DB_PATH") or DEFAULT_DATA,
                         help="JSON data file (default server/gts_data.json, or $GTS_DB_PATH)")
     env_gen = to_int(os.environ.get("GTS_GENERATION"), 0) or None
-    parser.add_argument("--gen", type=int, choices=(1, 2), default=env_gen,
-                        help="the world's generation: 1 = Red/Blue/Yellow, 2 = Crystal "
+    parser.add_argument("--gen", type=int, choices=(1, 2, 3), default=env_gen,
+                        help="the world's generation: 1 = Red/Blue/Yellow, 2 = Crystal, "
+                             "3 = FireRed/LeafGreen "
                              "(default: the first game to connect decides, or $GTS_GENERATION)")
     parser.add_argument("--config", default=os.environ.get("GTS_CONFIG") or DEFAULT_CONFIG,
                         help="game modes file (default server/server_config.txt, or $GTS_CONFIG)")

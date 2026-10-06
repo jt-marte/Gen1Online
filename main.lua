@@ -5,12 +5,16 @@
   -- Resolved before anything else: request headers, the default avatar and
   -- the save paths below all read these.
   local MOD_VERSION = "0.5.1"
-  local isGen2 = false
+  local isGen2, isGen3 = false, false
   if mod and mod.generation then
     isGen2 = (mod.generation == 2)
+    isGen3 = (mod.generation == 3)
   else
     local okGv, GvMod = pcall(require, "src.core.GameVersion")
-    if okGv and GvMod and GvMod.generation then isGen2 = (GvMod.generation() == 2) end
+    if okGv and GvMod and GvMod.generation then
+      isGen2 = (GvMod.generation() == 2)
+      isGen3 = (GvMod.generation() == 3)
+    end
   end
 
   -- Diagnostics go to the engine log, and only in developer mode.
@@ -150,6 +154,17 @@
   local Pokemon, Json = require("src.pokemon.Pokemon"), require("src.link.Json")
   local Strings = pcall(require, "src.core.Strings") and require("src.core.Strings") or function(s) return s end
 
+  -- FireRed and LeafGreen (gen3/init.lua): the mod's screens, its view of
+  -- the save and the overworld, Gen 3 Pokémon.  `Game` becomes its game,
+  -- which reads through to the live Game3; GtsUI.G3env is filled in below,
+  -- once the names it closes over exist.
+  if isGen3 then
+    GtsUI.G3env = { mod = mod, requireLocal = requireLocal, diag = diag }
+    GtsUI.G3 = requireLocal("gen3/init.lua")(GtsUI.G3env)
+    Font, Menu, TextBox = GtsUI.G3.Font, GtsUI.G3.Menu, GtsUI.G3.TextBox
+    Game = GtsUI.G3.game
+  end
+
   -- Socket HTTP/HTTPS modules for 24/7 GTS REST Server & Cloudflare Tunnel
   local hasSocketHttp, http = pcall(require, "socket.http")
   if not hasSocketHttp then http = nil end
@@ -272,6 +287,11 @@
     mod.exports = mod.exports or {}
     mod.exports.netNpcs = netNpcs
   end
+  if GtsUI.G3env then
+    GtsUI.G3env.netNpcs = function() return netNpcs end
+    GtsUI.G3env.netPlayerMap = function() return netPlayerMap end
+    GtsUI.G3env.online = function() return isGtsServerConnected end
+  end
 
   -- Custom Trainer Profile State & MMO Leveling Engine (1 to 100)
   local localTrainerTitle = "ACE TRAINER"
@@ -374,6 +394,7 @@
   -- The avatars this game can actually draw: a sprite missing from its data
   -- would leave the trainer invisible.
   function GtsUI.avatarChoices(game)
+    if GtsUI.G3 then return GtsUI.G3.AVATARS end
     local sprites = game and game.data and (isGen2 and game.data.gen2Sprites or game.data.sprites)
     if type(sprites) ~= "table" or next(sprites) == nil then return AVAILABLE_AVATARS end
     local out = {}
@@ -385,10 +406,11 @@
 
   -- Shown when the server hosts the other generation's world.
   function GtsUI.wrongWorldText(serverGen)
-    local worlds = { [1] = "GEN 1 (RED, BLUE AND YELLOW)", [2] = "GEN 2 (CRYSTAL)" }
+    local worlds = { [1] = "GEN 1 (RED, BLUE AND YELLOW)", [2] = "GEN 2 (CRYSTAL)",
+      [3] = "GEN 3 (FIRERED AND LEAFGREEN)" }
+    local mine = isGen3 and "FIRERED/LEAFGREEN" or isGen2 and "CRYSTAL" or "GEN 1"
     return string.format("THIS SERVER IS A %s WORLD.\nYOUR GAME IS %s.\nASK THE HOST FOR A %s SERVER.",
-      worlds[tonumber(serverGen)] or "DIFFERENT", isGen2 and "CRYSTAL" or "GEN 1",
-      isGen2 and "CRYSTAL" or "GEN 1")
+      worlds[tonumber(serverGen)] or "DIFFERENT", mine, mine)
   end
 
   -- Global Trade Station (GTS) Database
@@ -647,7 +669,7 @@
     local rel = (path or ""):gsub("^/+", "")
     local separator = rel:find("?") and "&" or "?"
     local fullUrl = base .. "/" .. rel .. separator .. "version=" .. MOD_VERSION .. "&modVersion=" .. MOD_VERSION
-      .. "&gen=" .. (isGen2 and "2" or "1")
+      .. "&gen=" .. (isGen3 and "3" or isGen2 and "2" or "1")
     local ok, res, code, headers, status = makeHttpRequest({
       url = fullUrl,
       method = "GET",
@@ -678,7 +700,7 @@
     payload.version = MOD_VERSION
     payload.gameVersion = gName
     payload.recompVersion = rVer
-    payload.generation = isGen2 and 2 or 1
+    payload.generation = isGen3 and 3 or isGen2 and 2 or 1
     local jsonStr = Json.encode(payload)
     local response_body = {}
     local sent = false
@@ -751,6 +773,7 @@
     end
   end
   function isPlayerBusy(game)
+    if GtsUI.G3 then return GtsUI.G3.busy() end
     if not game or not game.stack then return true end
     if inBattle then return true end
     local top = game.stack:top()
@@ -854,7 +877,7 @@
     if fetch and fetch.available and fetch:available() then
       if ChatState.fetchJob then return end -- the last poll is still in flight
       local url = getServerUrl():gsub("/+$", "") .. "/chat/history?version="
-        .. MOD_VERSION .. "&modVersion=" .. MOD_VERSION .. "&gen=" .. (isGen2 and "2" or "1")
+        .. MOD_VERSION .. "&modVersion=" .. MOD_VERSION .. "&gen=" .. (isGen3 and "3" or isGen2 and "2" or "1")
       ChatState.fetchJob = fetch:get(url, { accept = "application/json", maxSeconds = 5 })
       if ChatState.fetchJob then return end
     end
@@ -1022,8 +1045,6 @@
     end
   end
   function ChatInputScreen:draw()
-    local Font = require("src.render.Font")
-    local Theme = require("src.ui.Theme")
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.rectangle("fill", 0, 0, 160, 144)
     love.graphics.setColor(0, 0, 0, 1)
@@ -1064,7 +1085,8 @@
   -- keypressed method and swallowed the key from the engine.
   if mod and mod.hooks and mod.hooks.wrap then
     mod.hooks:wrap("input.key", function(nextFn, game, ev)
-      local top = game and game.stack and game.stack:top()
+      local g = GtsUI.G3 and GtsUI.G3.wrap(game) or game
+      local top = g and g.stack and g.stack:top()
       if ev and ev.phase == "pressed" and top and type(top) == "table" and top.gtsTextInput then
         local ok, handled = pcall(top.onKeyPressed, top, ev.key)
         if ok and handled ~= false then return end
@@ -1262,9 +1284,12 @@
     end
     return table.concat(pages, "\f")
   end
+  -- FireRed: the same pages, measured in its font and dialogue box
+  if GtsUI.G3 then wrapText = GtsUI.G3.wrapText end
 
   -- Helper to list all Gen 1 Pokémon species sorted alphabetically
   local function getAllGen1Species(data)
+    if GtsUI.G3 then return GtsUI.G3.allSpecies() end
     local speciesList = {}
     if data and data.pokemon then
       for key, def in pairs(data.pokemon) do
@@ -1746,7 +1771,7 @@
     local gName, rVer = getClientVersionInfo()
     payload.gameVersion = gName
     payload.recompVersion = rVer
-    payload.generation = isGen2 and 2 or 1
+    payload.generation = isGen3 and 3 or isGen2 and 2 or 1
     asyncPending[#asyncPending + 1] = {
       url = getServerUrl() .. "/gts",
       body = Json.encode(payload),
@@ -1755,11 +1780,13 @@
     }
     while #asyncPending > 30 do table.remove(asyncPending, 1) end
   end
+  if GtsUI.G3env then GtsUI.G3env.send, GtsUI.G3env.post = pvpBattleSend, gtsApiPost end
 
   -- Generation-aware party pack for the wire: Gen 2 uses packMon2 so both
   -- peers rebuild identical copies with unpackMon2; Gen 1 keeps the vanilla
   -- packParty path.
   local function packPartyForGame(game, party)
+    if GtsUI.G3 then return Protocol.packParty3(party or {}) end
     if isGen2 then
       if Protocol.packParty2 then return Protocol.packParty2(party or {}) end
       local okP, PvpEngine = pcall(requireLocal, "pvp/engine.lua")
@@ -1877,7 +1904,7 @@
             local gName, rVer = getClientVersionInfo()
             decoded.gameVersion = gName
             decoded.recompVersion = rVer
-            decoded.generation = isGen2 and 2 or 1
+            decoded.generation = isGen3 and 3 or isGen2 and 2 or 1
             req.body = Json.encode(decoded)
 
             if decoded.action == "sync_pos" then
@@ -2072,7 +2099,13 @@
           -- 2. Live Network Challenge Receiver (PVP Battle or Trade Popup!)
           if res.challenge then
             local nowT = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
-            local inCooldown = (nowT - lastBattleEndTime) < 5.0
+            -- Right after a battle, a stale answer (an ACCEPT or DECLINE that
+            -- was queued for the battle just fought) must not start another
+            -- one.  A new offer, or the answer to the challenge this player
+            -- is waiting on now, is not stale.
+            local fresh = res.challenge.type == "PVP" or res.challenge.type == "TRADE"
+              or isWaitingForChallenge
+            local inCooldown = (nowT - lastBattleEndTime) < 5.0 and not fresh
 
             if inCooldown then
               -- Post-battle cooldown: silently wipe stale challenges from the server
@@ -2224,11 +2257,13 @@
   end
 
   -- Patch SPRITE_RED with walker = true for 3D Voxel camera while preserving GBC color palette
-  pcall(function()
-    mod.content.sprites:patch("SPRITE_RED", {
-      walker = true,
-    })
-  end)
+  if not isGen3 then -- FireRed has no Gen 1 sprite registry
+    pcall(function()
+      mod.content.sprites:patch("SPRITE_RED", {
+        walker = true,
+      })
+    end)
+  end
 
   local activeQuestsCache = {}
 
@@ -2274,6 +2309,7 @@
   -- pokedex.caught; Save.summary is the engine's own count of both.
   local function getBadgeCount(save)
     if not save then return 0 end
+    if GtsUI.G3 then return GtsUI.G3.badgeCount() end
     if isGen2 then
       local okSave, Gen2Save = pcall(require, "src.core.gen2.Save")
       local summary = okSave and Gen2Save.summary and Gen2Save.summary(save)
@@ -2290,6 +2326,7 @@
   -- Calculate Total Pokédex Caught from Save
   local function getPokedexCount(save)
     if not save then return 0 end
+    if GtsUI.G3 then return GtsUI.G3.dexCount() end
     if isGen2 then
       local okSave, Gen2Save = pcall(require, "src.core.gen2.Save")
       local summary = okSave and Gen2Save.summary and Gen2Save.summary(save)
@@ -2327,6 +2364,22 @@
 
   loadOnlineSave = function(game)
     local save = storageRead("online_save")
+    if GtsUI.G3 then
+      if type(save) == "table" and type(save.gen3) == "table" and save.onlineAccount
+          and save.onlineAccount.token then
+        return save
+      end
+      -- an account with no online save yet starts from a copy of the
+      -- current game, as on Gen 1
+      local acc = storageRead("online_account")
+      local snap = (type(acc) == "table" and acc.token) and GtsUI.G3.snapshot() or nil
+      if snap then
+        snap.modData = snap.modData or {}
+        snap.modData["gen1online-plus"] = { onlineAccount = acc }
+        return { onlineAccount = acc, gen3 = snap }
+      end
+      return nil
+    end
     if save and type(save) == "table" and save.onlineAccount and save.onlineAccount.token then
       return save
     end
@@ -2348,6 +2401,16 @@
   end
 
   writeOnlineSave = function(saveTable)
+    if GtsUI.G3 then
+      -- the live session, always: whatever table the caller holds
+      local snap = GtsUI.G3.snapshot()
+      if not snap then return false end
+      local acc = GtsUI.G3.modData().onlineAccount
+      local written = storageWrite("online_save", { onlineAccount = acc, gen3 = snap, savedAt = os.time() })
+      if acc then storageWrite("online_account", acc) end
+      if not written then diag("online save could not be written") end
+      return written
+    end
     -- ALWAYS fold the live world state in first: game.save.events, mapScenes,
     -- variableSprites, scriptMem, playerState and backupWarp are only written
     -- into the save by Game2:snapshotSave(). Writing game.save without it
@@ -2536,6 +2599,37 @@
   -- LAUNCH NATIVE LOCKSTEP GEN 1 LINK BATTLES (LinkBattle.newHost / LinkBattle.newGuest)
   startPvpBattle = function(game, opponentName, opponentId, remotePartyPacked, isHostPlayer, seed, roomId)
     if inBattle then return end  -- Double-start guard
+    if GtsUI.G3 then
+      -- FireRed's own link battle over the server (gen3/link.lua)
+      if not game.save or not game.save.party or #game.save.party == 0 then
+        game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO BATTLE!")))
+        return
+      end
+      local trainerId = getTrainerInfo(game.save)
+      inBattle = true
+      local started = GtsUI.G3.startPvp(game, opponentName, opponentId, isHostPlayer, roomId, function(result, why)
+        inBattle = false
+        isWaitingForChallenge = false
+        lastBattleEndTime = (_G.love and _G.love.timer and _G.love.timer.getTime)
+                              and _G.love.timer.getTime() or os.time()
+        if netInChannel then while netInChannel:pop() do end end
+        pvpBattleSend({ action = "clear_challenge", trainerId = trainerId })
+        local extra = { opponentName = opponentName or "TRAINER", opponentId = opponentId or "0" }
+        if result == "win" then
+          addMmoXp(game, "pvp_win", nil, extra)
+          syncLocalProfile(game, 1)
+          performForcedSave(game)
+        elseif result then
+          addMmoXp(game, "pvp_loss", nil, extra)
+          performForcedSave(game)
+        else
+          game.stack:push(TextBox.new(game, wrapText(why == "cancelled" and "THE LINK WAS CANCELED."
+            or string.format("COULDN'T LINK WITH %s! (%s)", opponentName or "THE OTHER TRAINER", tostring(why or "?")))))
+        end
+      end)
+      if not started then inBattle = false end
+      return
+    end
     if not game or not game.save or not game.save.party or #game.save.party == 0 then
       inBattle = false
       game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO BATTLE!")))
@@ -2765,6 +2859,24 @@
   -- LAUNCH REAL VANILLA LINK TRADE ENGINE WITH CUTSCENE & TRADE EVOLUTIONS
   startLinkTrade = function(game, partnerName, partnerId, isHostPlayer, roomId)
     local myId, myName = getTrainerInfo(game.save)
+    if GtsUI.G3 then
+      -- the Trade Center's own trade screen over the server (gen3/link.lua)
+      GtsUI.G3.startTrade(game, partnerName, partnerId, isHostPlayer, roomId, function(result, why)
+        isWaitingForChallenge = false
+        lastBattleEndTime = (_G.love and _G.love.timer and _G.love.timer.getTime)
+                              and _G.love.timer.getTime() or os.time()
+        if netInChannel then while netInChannel:pop() do end end
+        pvpBattleSend({ action = "clear_challenge", trainerId = myId })
+        if result then
+          performForcedSave(game)
+          syncLocalProfile(game, 0)
+        else
+          game.stack:push(TextBox.new(game, wrapText(why == "cancelled" and "THE LINK WAS CANCELED."
+            or string.format("COULDN'T LINK WITH %s! (%s)", partnerName or "THE OTHER TRAINER", tostring(why or "?")))))
+        end
+      end)
+      return
+    end
 
     if isGen2 then
       -- The engine's LinkState (link cable trade) is Gen 1 only; a Gen 2
@@ -2880,6 +2992,11 @@
 
     -- 2. Restore local offline save from backup or disk (save_gold.lua / save.lua)
     local localSave = offlineSaveBackup or loadOfflineSave()
+    if GtsUI.G3 then
+      if localSave then GtsUI.G3.enter(localSave) end
+      GtsUI.G3.applyAvatar(nil)
+      localSave = nil
+    end
     if localSave and game then
       game.save = localSave
       if game.adoptSave then game:adoptSave(game.save) end
@@ -2932,7 +3049,7 @@
 
   local okGame2, Game2Mod = false, nil
   if isGen2 then okGame2, Game2Mod = pcall(require, "src.core.Game2") end
-  for _, cls in ipairs({ Game, (okGame2 and Game2Mod) or nil }) do
+  for _, cls in ipairs(isGen3 and {} or { Game, (okGame2 and Game2Mod) or nil }) do
     if cls and cls.returnToTitle then
       local origReturnToTitle = cls.returnToTitle
       cls.returnToTitle = function(self, ...)
@@ -2947,7 +3064,8 @@
   -- (Gen 1) and Game2 (link battles and minigames use it): logicSpeed
   -- answers 1 and a fast-forward frame in flight is ended cleanly, and the
   -- player's saved GAME SPEED option is left alone for when they go offline.
-  for _, cls in ipairs({ Game, (okGame2 and Game2Mod) or nil }) do
+  if GtsUI.G3 then GtsUI.G3.installGame(disconnectOnTitle) end
+  for _, cls in ipairs(isGen3 and {} or { Game, (okGame2 and Game2Mod) or nil }) do
     if cls and cls.speedLocked then
       local origSpeedLocked = cls.speedLocked
       cls.speedLocked = function(self, ...)
@@ -3021,7 +3139,7 @@
     end
   end
 
-  if not isGen2 then
+  if not isGen2 and not isGen3 then
     local okTilt, Tilt = pcall(require, "src.render.Tilt")
     if okTilt and type(Tilt) == "table" and Tilt.active then
       GtsUI.tiltActive = function() return Tilt.active() end
@@ -3819,22 +3937,27 @@
   -- packets earlier clients deposited (Gen 1 packMon dropped all of that and
   -- unpackMon rebuilt stats with Gen 1 formulas).
   function GtsUI.packMon(mon)
+    if GtsUI.G3 then return GtsUI.G3.packMon(mon) end
     if isGen2 and Protocol.packMon2 then return Protocol.packMon2(mon) end
     return Protocol.packMon(mon)
   end
 
   function GtsUI.unpackMon(game, packed)
+    if GtsUI.G3 then return GtsUI.G3.unpackMon(packed) end
     if isGen2 and Protocol.unpackMon2 then return Protocol.unpackMon2(game.data, packed) end
     return Protocol.unpackMon(game.data, packed)
   end
 
   function GtsUI.monLabelName(game, mon)
+    if type(mon) ~= "table" then return "POKéMON" end
+    if GtsUI.G3 then return GtsUI.G3.monName(mon) end
     return mon.nickname or (game.data and game.data.pokemon and game.data.pokemon[mon.species]
       and game.data.pokemon[mon.species].name) or mon.species or "?"
   end
 
   -- Helper to get all Pokémon across Party and PC Storage Boxes
   function GtsUI.getAllPlayerMons(game)
+    if GtsUI.G3 then return GtsUI.G3.allMons() end
     local list = {}
     local save = game and game.save
     if not save then return list end
@@ -3888,6 +4011,7 @@
 
   -- Helper to remove a Pokémon from Party or PC Storage Box
   function GtsUI.removePlayerMon(game, item)
+    if GtsUI.G3 then return GtsUI.G3.removeMon(item) end
     local save = game and game.save
     if not save or not item then return nil end
     if item.source == "party" then
@@ -3915,6 +4039,7 @@
   -- a box mon goes back to its slot, a party mon to the end of the party
   -- (the party mail behind its slot has already moved up with the party).
   function GtsUI.restorePlayerMon(game, item, mon)
+    if GtsUI.G3 then return GtsUI.G3.restoreMon(item, mon) end
     local save = game and game.save
     if not save or not item or not mon then return end
     if item.source == "box" then
@@ -3934,6 +4059,7 @@
 
   -- Is there a party slot or box space for one more Pokémon?
   function GtsUI.hasRoom(game)
+    if GtsUI.G3 then return GtsUI.G3.hasRoom() end
     local save = game and game.save
     if not save then return false end
     if #(save.party or {}) < 6 then return true end
@@ -3958,6 +4084,7 @@
   -- Helper to add a received Pokémon to Party or PC Storage Box.  Answers
   -- "party", index | "box", boxIndex | nil when there is no room anywhere.
   function GtsUI.addPlayerMon(game, mon)
+    if GtsUI.G3 then return GtsUI.G3.addMon(mon) end
     local save = game and game.save
     if not save or not mon then return nil end
     save.party = save.party or {}
@@ -3988,6 +4115,21 @@
 
   -- Execute complete trade sequence: Pre-Save -> Cable Trade Animation -> Trade Evolution -> Post-Save -> MMO XP
   function GtsUI.performTradeWithAnimationAndEvolution(game, sentMon, receivedPacked, otName, otId, onComplete)
+    if GtsUI.G3 then
+      -- FireRed's in-game trade scene, then a trade evolution
+      local ok = GtsUI.G3.receive(game, sentMon, receivedPacked, otName,
+        function() performForcedSave(game) end,
+        function(receivedMon)
+          performForcedSave(game)
+          if addMmoXp then addMmoXp(game, "gts_trade", 100) end
+          if onComplete then onComplete(receivedMon) end
+        end)
+      if not ok then
+        game.stack:push(TextBox.new(game, wrapText(GtsUI.G3.hasRoom()
+          and "THAT POKéMON ISN'T IN THIS GAME!" or "YOUR PARTY AND PC BOXES ARE FULL!")))
+      end
+      return
+    end
     -- 1. Unpack received mon and preserve full stats & OT
     local receivedMon = GtsUI.unpackMon(game, receivedPacked)
     if not receivedMon then
@@ -4122,7 +4264,7 @@
   function GtsUI.openGtsSummaryCard(game, listing)
     local trainerId, buyerName = getTrainerInfo(game.save)
     local offered = listing.offeredMon or {}
-    local offName = offered.nickname or (game.data.pokemon[offered.species] and game.data.pokemon[offered.species].name) or offered.species or "POKéMON"
+    local offName = GtsUI.monLabelName(game, offered)
     local otName = listing.trainerName or offered.ot or "TRAINER"
     local otId = listing.trainerId or offered.otId or 0
 
@@ -4230,13 +4372,13 @@
                 gtsDb.listings[listing.id] = nil
                 gtsDb.user_counts[tostring(listing.trainerId)] = math.max(0, (gtsDb.user_counts[tostring(listing.trainerId)] or 1) - 1)
 
-                GtsUI.addGtsReceipt(string.format("%s TRADED %s TO %s FOR %s", buyerName, sentMon.nickname or sentMon.species, otName, offName))
+                GtsUI.addGtsReceipt(string.format("%s TRADED %s TO %s FOR %s", buyerName, GtsUI.monLabelName(game, sentMon), otName, offName))
 
                 game.stack:pop() -- close summary card
 
                 -- Run Trade Animation & Trade Evolution
                 GtsUI.performTradeWithAnimationAndEvolution(game, sentMon, receivedPacked, otName, otId, function(receivedMon)
-                  local rName = receivedMon.nickname or (game.data.pokemon[receivedMon.species] and game.data.pokemon[receivedMon.species].name) or receivedMon.species
+                  local rName = GtsUI.monLabelName(game, receivedMon)
                   game.stack:push(TextBox.new(game, wrapText(string.format("GTS TRADE COMPLETE!\nRECEIVED %s!", rName))))
                 end)
               end
@@ -4297,7 +4439,7 @@
 
       for id, listing in pairs(gtsDb.listings) do
         local offered = listing.offeredMon or {}
-        local offName = offered.nickname or (game.data.pokemon[offered.species] and game.data.pokemon[offered.species].name) or offered.species or "MON"
+        local offName = GtsUI.monLabelName(game, offered)
         local tName = listing.trainerName or "OT"
         if #offName > 7 then offName = offName:sub(1, 7) end
         if #tName > 5 then tName = tName:sub(1, 5) end
@@ -4514,11 +4656,11 @@
         gtsDb.listings[res.listing.id] = res.listing
 
         gtsDb.user_counts[tostring(trainerId)] = (gtsDb.user_counts[tostring(trainerId)] or 0) + 1
-        GtsUI.addGtsReceipt(string.format("%s DEPOSITED %s", trainerName, depositMon.nickname or depositMon.species))
+        GtsUI.addGtsReceipt(string.format("%s DEPOSITED %s", trainerName, GtsUI.monLabelName(game, depositMon)))
         if addMmoXp then addMmoXp(game, "gts_deposit", 25) end
         performForcedSave(game)
 
-        local msg = string.format("%s WAS DEPOSITED TO GTS!\n(LISTINGS: %d/10)", depositMon.nickname or depositMon.species, gtsDb.user_counts[tostring(trainerId)])
+        local msg = string.format("%s WAS DEPOSITED TO GTS!\n(LISTINGS: %d/10)", GtsUI.monLabelName(game, depositMon), gtsDb.user_counts[tostring(trainerId)])
         game.stack:push(TextBox.new(game, wrapText(msg)))
       end)
     end
@@ -4533,7 +4675,7 @@
           end
           local partyItems = {}
           for idx, mon in ipairs(game.save.party) do
-            local monName = mon.nickname or (game.data.pokemon[mon.species] and game.data.pokemon[mon.species].name) or mon.species
+            local monName = GtsUI.monLabelName(game, mon)
             if #monName > 8 then monName = monName:sub(1, 8) end
             table.insert(partyItems, {
               label = string.format("%s (LV%d)", monName, mon.level or 1),
@@ -4549,6 +4691,21 @@
       {
         label = "FROM PC BOXES",
         onSelect = function()
+          if GtsUI.G3 then
+            local items = {}
+            for _, it in ipairs(GtsUI.G3.allMons()) do
+              if it.source == "box" then
+                items[#items + 1] = { label = it.label, onSelect = function() handleDepositSelection(it) end }
+              end
+            end
+            if #items == 0 then
+              game.stack:push(TextBox.new(game, wrapText("YOUR PC STORAGE BOXES ARE EMPTY!")))
+              return
+            end
+            items[#items + 1] = { label = "BACK", onSelect = function() end }
+            game.stack:push(Menu.new(game, items, { tx = 0, ty = 0, tw = 20, maxVisible = 7, startCloses = true }))
+            return
+          end
           local BoxesMod = nil
           pcall(function() BoxesMod = require(isGen2 and "src.core.gen2.Boxes" or "src.pokemon.Boxes") end)
           local boxes = (BoxesMod and BoxesMod.ensure and BoxesMod.ensure(game.save)) or game.save.boxes
@@ -4598,7 +4755,7 @@
     for id, listing in pairs(gtsDb.listings) do
       if tostring(listing.trainerId) == tostring(trainerId) then
         local offered = listing.offeredMon or {}
-        local offName = offered.nickname or (game.data.pokemon[offered.species] and game.data.pokemon[offered.species].name) or offered.species or "MON"
+        local offName = GtsUI.monLabelName(game, offered)
         if #offName > 7 then offName = offName:sub(1, 7) end
         table.insert(items, {
           label = string.format("TAKE %s LV%d", offName, offered.level or 1),
@@ -4639,7 +4796,7 @@
     local claims = gtsDb.claim_boxes[tostring(trainerId)] or {}
     for idx, claim in ipairs(claims) do
       local packed = claim.mon or {}
-      local cName = packed.nickname or (game.data.pokemon[packed.species] and game.data.pokemon[packed.species].name) or packed.species or "MON"
+      local cName = GtsUI.monLabelName(game, packed)
       local fromStr = claim.fromName or "TRADER"
       if #cName > 7 then cName = cName:sub(1, 7) end
       if #fromStr > 5 then fromStr = fromStr:sub(1, 5) end
@@ -4989,7 +5146,7 @@
           end
           local favItems = {}
           for _, mon in ipairs(game.save.party) do
-            local mName = mon.nickname or (game.data.pokemon[mon.species] and game.data.pokemon[mon.species].name) or mon.species
+            local mName = GtsUI.monLabelName(game, mon)
             table.insert(favItems, {
               label = mName:sub(1, 14),
               onSelect = function()
@@ -5049,6 +5206,7 @@
 
   -- Apply custom sprite avatar to local player immediately on overworld
   applyPlayerSprite = function(game, spriteId)
+    if GtsUI.G3 then return GtsUI.G3.applyAvatar(spriteId) end
     if not game or not spriteId then return end
     local gWorld = getWorld(game)
     if not gWorld or not gWorld.player then return end
@@ -5068,6 +5226,7 @@
   -- Back to the player's own look after going offline: World:applyPlayerState
   -- picks Chris or Kris by gender, and the bike/surf sheet for that state.
   function GtsUI.restorePlayerSprite(game)
+    if GtsUI.G3 then return GtsUI.G3.applyAvatar(nil) end
     local gWorld = getWorld(game)
     if isGen2 and gWorld and gWorld.applyPlayerState then
       pcall(gWorld.applyPlayerState, gWorld, gWorld.playerState)
@@ -5083,6 +5242,7 @@
   -- keyboard when digits are needed, since only BoxNameInput carries 0-9 --
   -- and that screen leaves popping itself to the caller.
   function GtsUI.nameEntry(game, opts)
+    if GtsUI.G3 then return GtsUI.G3.nameEntry(game, opts) end
     if isGen2 then
       local okScreens, Screens = pcall(require, "src.ui.Screens")
       if okScreens and Screens and Screens.push then
@@ -5129,6 +5289,29 @@
           localSelectedSprite = acc.spriteId or (isGen2 and "SPRITE_CHRIS" or "SPRITE_RED")
           if acc.title then localTrainerTitle = acc.title end
           if acc.favoriteMon then localFavoriteMon = acc.favoriteMon end
+
+          if GtsUI.G3 then
+            -- this account's online game, or a new one in the bedroom
+            local saved = loadOnlineSave(game)
+            local mine = saved and saved.onlineAccount and tostring(saved.onlineAccount.token or ""):upper()
+              == tostring(acc.token or enteredToken or ""):upper()
+            currentGame = game
+            GtsUI.G3.enter(mine and saved.gen3
+              or GtsUI.G3.newGameSave(acc.name or "RED", GtsUI.G3.genderOf(acc.spriteId), acc.trainerId))
+            isGtsServerConnected = true
+            GtsUI.G3.modData().onlineAccount = acc
+            if acc.name then game.save.player.name = acc.name end
+            saveOnlineAccount(game.save)
+            applyPlayerSprite(game, localSelectedSprite)
+            writeOnlineSave(game.save)
+            syncLocalProfile(game, 0)
+            fetchGtsServerSync(acc.trainerId)
+            startChatSession(game)
+            game.stack:push(TextBox.new(game, wrapText(string.format("TOKEN REDEEMED!\nWELCOME BACK, %s!\nMMO LEVEL %d RESTORED!", acc.name or "TRAINER", mmoLevel)), function()
+              openOnlineOptionsMenu(game)
+            end))
+            return
+          end
 
           local newSave = nil
           -- Restore the existing online save (party, flags, map scenes,
@@ -5259,6 +5442,32 @@
               mmoToken = acc.token
               localSelectedSprite = chosenSprite
               isGtsServerConnected = true
+
+              if GtsUI.G3 then
+                -- a new FireRed game: the bedroom, the chosen name, and a
+                -- boy or a girl to match the avatar
+                netNpcs = {}
+                mod.exports.netNpcs = netNpcs
+                netFollowers = {}
+                isWaitingForChallenge = false
+                currentGame = game
+                GtsUI.G3.enter(GtsUI.G3.newGameSave(chosenName, GtsUI.G3.genderOf(chosenSprite), tostring(newTid)))
+                GtsUI.G3.modData().onlineAccount = {
+                  trainerId = tostring(newTid), name = chosenName, level = 1, xp = 0,
+                  token = acc.token, spriteId = chosenSprite, title = localTrainerTitle,
+                  favoriteMon = localFavoriteMon,
+                }
+                applyPlayerSprite(game, chosenSprite)
+                saveOnlineAccount(game.save)
+                writeOnlineSave(game.save)
+                syncLocalProfile(game, 0)
+                fetchGtsServerSync(newTid)
+                startChatSession(game)
+                game.stack:push(TextBox.new(game, wrapText(string.format("PLAYER CREATED!\nTRAINER ID: %d\nTOKEN: %s\nWELCOME TO KANTO ONLINE!", newTid, acc.token or "READY")), function()
+                  openOnlineOptionsMenu(game)
+                end))
+                return
+              end
 
               -- ALWAYS build a brand-new save for a new character.  Reusing
               -- game.save here is what kept the old character's flags, map
@@ -5680,7 +5889,11 @@
                   local wWorld = getWorld(game)
                   if wRes and wRes.success and wWorld and wWorld.setMap then
                     pcall(function() require("src.core.Sound").play(game.data, "Teleport_Exit1") end)
-                    wWorld:setMap(wRes.map or defaultStartingOutdoor, (wRes.x or 5) + 1, wRes.y or 5, "down")
+                    if GtsUI.G3 then
+                      GtsUI.G3.warpTo(wRes.map or defaultStartingOutdoor, (wRes.x or 5) + 1, wRes.y or 5, "down")
+                    else
+                      wWorld:setMap(wRes.map or defaultStartingOutdoor, (wRes.x or 5) + 1, wRes.y or 5, "down")
+                    end
                     local msg = string.format("WARPED TO %s!", m.name or "TEAMMATE")
                     game.stack:push(TextBox.new(game, wrapText(msg)))
                   else
@@ -5868,7 +6081,10 @@
           if game and game.save then
             writeOnlineSave(game.save)
           end
-          if offlineSaveBackup then
+          if GtsUI.G3 then
+            if offlineSaveBackup then GtsUI.G3.enter(offlineSaveBackup) end
+            GtsUI.G3.applyAvatar(nil)
+          elseif offlineSaveBackup then
             game.save = offlineSaveBackup
             if game.adoptSave then game:adoptSave(game.save) end
             local ow = getWorld(game)
@@ -5924,7 +6140,7 @@
     end
     -- One generation per server: a Gen 1 world turns Crystal away, and back.
     local srvGen = srvInfo and tonumber(srvInfo.generation)
-    if srvGen and srvGen ~= (isGen2 and 2 or 1) then
+    if srvGen and srvGen ~= (isGen3 and 3 or isGen2 and 2 or 1) then
       game.stack:push(TextBox.new(game, wrapText(GtsUI.wrongWorldText(srvGen))))
       return
     end
@@ -5938,7 +6154,9 @@
     end
 
     -- 2. Backup the local offline save in memory and capture exact offline coordinates
-    if game and game.save and not isGtsServerConnected then
+    if GtsUI.G3 and not isGtsServerConnected then
+      offlineSaveBackup = GtsUI.G3.snapshot()
+    elseif game and game.save and not isGtsServerConnected then
       local ow = getWorld(game)
       if game.snapshotSave then
         pcall(function() game:snapshotSave() end)
@@ -5994,8 +6212,13 @@
     localTrainerTitle = onlineAcc.title or "ACE TRAINER"
     localFavoriteMon = onlineAcc.favoriteMon or "PIKACHU"
 
-    game.save = onlineSave
-    if game.adoptSave then game:adoptSave(game.save) end
+    if GtsUI.G3 then
+      GtsUI.G3.enter(onlineSave.gen3)
+      GtsUI.G3.modData().onlineAccount = onlineAcc
+    else
+      game.save = onlineSave
+      if game.adoptSave then game:adoptSave(game.save) end
+    end
 
     local ow = getWorld(game)
     if isGen2 and ow and ow.loadPlayerData then
@@ -6009,7 +6232,7 @@
     local py = (game.save.position and game.save.position.y) or (game.save.player and game.save.player.y) or defaultStartingOutdoorY
     local pFacing = (game.save.position and game.save.position.facing) or (game.save.player and game.save.player.facing) or "down"
 
-    if ow and ow.setMap and pMap and px and py then
+    if ow and ow.setMap and pMap and px and py and not GtsUI.G3 then
       pcall(ow.setMap, ow, pMap, px, py, pFacing)
     end
 
@@ -6090,7 +6313,7 @@
   -- Server game modes on Gen 1 (hardcore Nuzlocke, the co-op randomizer,
   -- shared key items): modes/init.lua.  The server's server_config.txt picks
   -- them; they only ever act while connected to a server that has them on.
-  if not isGen2 then
+  if not isGen2 and not isGen3 then
     local okModes, err = pcall(function()
       GtsUI.Modes = requireLocal("modes/init.lua")({
         mod = mod,
@@ -6109,6 +6332,8 @@
     if not okModes then diag("game modes unavailable: %s", tostring(err)) end
     if mod and mod.exports then mod.exports.modes = GtsUI.Modes end
   end
+  -- the menus' entry points and the FireRed layer, for the dev drivers
+  if mod and mod.exports then mod.exports.ui, mod.exports.gen3 = GtsUI, GtsUI.G3 end
 
 
 return function(mod)
@@ -6137,6 +6362,8 @@ return function(mod)
   mod.hooks:wrap("ui.start_menu.items", function(nextFn, game, items)
     local list = nextFn and nextFn(game, items) or items
     if not list or type(list) ~= "table" then list = items end
+    local G3 = GtsUI.G3
+    if G3 then game = G3.wrap(game) end
 
     -- While connected to the online server, hide the engine's SAVE row: online
     -- saves are written automatically to the server-backed save, so a manual
@@ -6157,6 +6384,7 @@ return function(mod)
     end
 
     local connectItem = {
+      id = "gen1online",
       label = isGtsServerConnected and "ONLINE" or "CONNECT",
       onSelect = function()
         if isGtsServerConnected then
@@ -6173,10 +6401,16 @@ return function(mod)
         targetIndex = i
         break
       end
+      -- FireRed: above EXIT, which only closes the menu (QUIT to the title
+      -- logs out through Game3.returnToTitle)
+      if G3 and item and item.id == "exit" then
+        targetIndex = i
+        break
+      end
     end
 
     table.insert(list, targetIndex, connectItem)
-    wrapQuitItems(game, list)
+    if not G3 then wrapQuitItems(game, list) end
     return list
   end)
 
@@ -6356,6 +6590,25 @@ return function(mod)
     end
   end)
 
+  -- FireRed: battle XP from the engine's battle events (its battles don't go
+  -- through Gen 1's BattleState.finish), and GTS on the Pokémon Center PC
+  if GtsUI.G3 then
+    local battleKind = nil
+    onEvent("battle.started", function(payload) battleKind = payload and payload.kind end)
+    onEvent("battle.ended", function(payload)
+      local kind = battleKind
+      battleKind = nil
+      if not (isGtsServerConnected and payload and payload.result == "win") then return end
+      if kind ~= "wild" and kind ~= "trainer" then return end
+      addMmoXp(Game, kind == "trainer" and "trainer_battle" or "wild_battle")
+      gtsApiPost({ action = "report_battle_stat", trainerId = getTrainerId(Game.save),
+        battleType = kind == "trainer" and "npc" or "wild" })
+      performForcedSave(Game)
+      syncLocalProfile(Game, 0)
+    end)
+    GtsUI.G3.installPc(function() GtsUI.openGtsMainMenu(Game) end)
+  end
+
   -- 7. PC Box Storage Operations
   local BoxesModule = pcall(require, "src.pokemon.Boxes") and require("src.pokemon.Boxes") or nil
   if BoxesModule and BoxesModule.deposit then
@@ -6520,6 +6773,7 @@ return function(mod)
           moving = p.moving,
           species = followerSpecies
         }
+        if GtsUI.G3 then GtsUI.G3.presence(payload) end
 
         netOutChannel:push({
           url = getServerUrl() .. "/gts",
@@ -6532,7 +6786,7 @@ return function(mod)
   end
 
   -- Hook Gen 1 Overworld drawWorld to render remote player sprites
-  if not isGen2 and type(OverworldState) == "table" then
+  if not isGen2 and not GtsUI.G3 and type(OverworldState) == "table" then
     local dwKey = "draw" .. "World"
     local origGen1DrawWorld = OverworldState[dwKey]
     if origGen1DrawWorld then
@@ -6566,7 +6820,13 @@ return function(mod)
     if isWaitingForChallenge then return end
 
     local p1 = self.player
-    local fx, fy = p1:facingCell()
+    local fx, fy
+    if p1.facingCell then
+      fx, fy = p1:facingCell()
+    else
+      local d = Collision.DELTA[p1.facing] or { 0, 1 }
+      fx, fy = p1.cellX + d[1], p1.cellY + d[2]
+    end
 
     for tid, pNpc in pairs(netNpcs) do
       if pNpc.cellX == fx and pNpc.cellY == fy then
@@ -7014,10 +7274,17 @@ return function(mod)
 
   -- Wrap Game.update to continuously service active GtsNetAdapter during battle
   mod.hooks:wrap("core.update", function(nextFn, game, dt)
+    local raw = game
+    if GtsUI.G3 then
+      game = GtsUI.G3.wrap(game)
+      GtsUI.G3.UI.Stack:ensureLayer()
+      GtsUI.G3.UI.nextFrame()
+      GtsUI.G3.tick(dt)
+    end
     currentGame = game
     -- (the 1x speed lock while connected is Game2.speedLocked, below)
 
-    if nextFn then nextFn(game, dt) end
+    if nextFn then nextFn(raw, dt) end
 
     -- Continuous frame service for background jobs (sync, placement, and battle messages)
     Jobs.step(game, dt)
@@ -7057,25 +7324,32 @@ return function(mod)
         local trainerId, trainerName = getTrainerInfo(game.save)
         local followerSpecies = game.save.party and game.save.party[1] and game.save.party[1].species
         local delta = Collision.DELTA[p.facing] or { 0, 1 }
+        local keepalive = {
+          action = "sync_pos",
+          trainerId = trainerId,
+          name = trainerName,
+          title = localTrainerTitle,
+          map = ow.map.id,
+          x = p.cellX,
+          y = p.cellY,
+          px = p.px,
+          py = p.py,
+          fx = p.cellX - delta[1],
+          fy = p.cellY - delta[2],
+          facing = p.facing,
+          moving = false,
+          species = followerSpecies
+        }
+        if GtsUI.G3 then
+          -- a menu stops the field, so this is the only sync then: it
+          -- carries the whole presence, as a step's does
+          keepalive.sessionId, keepalive.spriteId, keepalive.level = clientSessionId, localSelectedSprite, mmoLevel
+          GtsUI.G3.presence(keepalive)
+        end
 
         netOutChannel:push({
           url = getServerUrl() .. "/gts",
-          body = Json.encode({
-            action = "sync_pos",
-            trainerId = trainerId,
-            name = trainerName,
-            title = localTrainerTitle,
-            map = ow.map.id,
-            x = p.cellX,
-            y = p.cellY,
-            px = p.px,
-            py = p.py,
-            fx = p.cellX - delta[1],
-            fy = p.cellY - delta[2],
-            facing = p.facing,
-            moving = false,
-            species = followerSpecies
-          })
+          body = Json.encode(keepalive)
         })
       end
     end

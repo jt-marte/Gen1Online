@@ -555,6 +555,21 @@ class GtsTests(ServerTest):
         return self.post("deposit", trainerId=tid, trainerName=name, offeredMon=m,
                          wanted=wanted if wanted is not None else ["KADABRA"])
 
+    def test_gen_3_species_are_numbers(self):
+        # FireRed/LeafGreen: species numbers on the wanted list and the mons,
+        # the name beside the number for the history
+        seller = self.register("SELLER")
+        buyer = self.register("BUYER")
+        offered = {"species": 64, "speciesName": "KADABRA", "level": 30, "personality": 123}
+        res = self.deposit(seller["trainerId"], "SELLER", offered, wanted=[1, True, 0, "x"])
+        self.assertEqual(res["listing"]["wanted"], [1, "x"])
+        self.assertEqual(self.get("/gts/browse")["history"][0]["text"], "SELLER DEPOSITED KADABRA")
+        self.assertError(self.post("trade", listingId=res["listing"]["id"], buyerId=buyer["trainerId"],
+                                   buyerName="BUYER", sentMon={"species": 4}), "NOT_WANTED")
+        res = self.post("trade", listingId=res["listing"]["id"], buyerId=buyer["trainerId"],
+                        buyerName="BUYER", sentMon={"species": 1, "speciesName": "BULBASAUR"})
+        self.assertEqual(res["receivedMon"], offered)
+
     def test_deposit_browse_trade_claim(self):
         seller = self.register("SELLER")
         buyer = self.register("BUYER")
@@ -868,11 +883,29 @@ class GenerationTests(ServerTest):
         self.assertRegex(res["account"]["token"], r"^[A-Z]{8}$")
         self.assertEqual(self.get("/server/info")["generation"], 1)
 
-    def test_gen_3_is_never_admitted(self):
-        res = self.post("register_player", name="MAY", game="Pokemon Emerald")
-        self.assertError(res, "WRONG_GENERATION")
-        self.assertIsNone(res["serverGeneration"])
-        self.assertIsNone(self.get("/server/info")["generation"])
+    def test_firered_and_leafgreen_share_a_gen_3_world(self):
+        res = self.post("register_player", name="LEAF", game="Pokemon LeafGreen")
+        self.assertTrue(res["success"])
+        # FireRed/LeafGreen's naming screen has digits: hex tokens, as on Crystal
+        self.assertRegex(res["account"]["token"], r"^[0-9A-F]{8}$")
+        self.assertEqual(self.get("/server/info")["generation"], 3)
+        self.assertTrue(self.post("register_player", name="RED", game="Pokemon FireRed")["success"])
+        for game in ("Pokemon Red", "Pokemon Crystal"):
+            res = self.post("get_quests", game=game)
+            self.assertError(res, "WRONG_GENERATION")
+            self.assertEqual(res["serverGeneration"], 3)
+        self.assertTrue(self.get("/gts/browse?gen=3")["success"])
+
+    def test_gen_3_presence_carries_the_avatar_state(self):
+        a = self.register("LEAF", game="Pokemon LeafGreen")
+        b = self.register("RED", game="Pokemon FireRed")
+        self.post("sync_pos", trainerId=a["trainerId"], sessionId="a", name="LEAF",
+                  map="PALLET_TOWN", x=5, y=6, state="BIKE", gender=1, elevation=3,
+                  game="Pokemon LeafGreen")
+        res = self.post("sync_pos", trainerId=b["trainerId"], sessionId="b", name="RED",
+                        map="PALLET_TOWN", x=6, y=6, game="Pokemon FireRed")
+        [leaf] = res["players"]
+        self.assertEqual((leaf["state"], leaf["gender"], leaf["elevation"]), ("BIKE", 1, 3))
 
     def test_the_generation_survives_a_restart(self):
         self.post("get_quests", game="Pokemon Yellow")
@@ -918,7 +951,7 @@ class GenOneServerTests(ServerTest):
 
     def test_the_flag_rejects_other_generations(self):
         with self.assertRaises(ValueError):
-            gts_server.GtsStore(os.path.join(self.dir, "other.json"), generation=3)
+            gts_server.GtsStore(os.path.join(self.dir, "other.json"), generation=4)
 
 
 class BindingTests(ServerTest):
