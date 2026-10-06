@@ -29,14 +29,16 @@ return function(ctx)
   local okV, victories = pcall(require, "data.scripts.victories")
   if not (okV and type(victories) == "table") then victories = {} end
 
-  local M = { rules = nil, world = nil }
+  -- lib: the pure modules, for the dev drivers' checks on real game data
+  local M = { rules = nil, world = nil, lib = { Rng = Rng, logic = L, randomizer = Randomizer } }
   local plan, planKey, undo = nil, nil, nil
   local reports, retryAt = {}, 0     -- shared finds waiting to reach the server
   local notes = {}                   -- texts for when the overworld is free
   local granting = false             -- adding the team's items: not a find
   local lastTeamRev = nil
   local pendingRestart = false
-  local wipeQueued = false
+  local wipeQueued, wipeRetryAt = false, 0
+  local owedAt = 0                   -- next try at a gym prize that found no room
   local battleInfo = nil             -- { catchable, why } for this wild battle
   local currentBattle = nil          -- the battle on screen, any kind
 
@@ -77,12 +79,39 @@ return function(ctx)
     return isBadge(id) or itemDef(id).keyItem == true or id:match("^HM_") ~= nil
   end
 
+  -- each gym's beaten flag, by the badge vanilla gives there
+  local GYM_FLAG = {}
+  for _, reward in pairs(victories) do
+    if type(reward) == "table" and reward.badge and reward.flag then
+      GYM_FLAG[reward.badge] = reward.flag
+    end
+  end
+
+  -- The randomizer opens the gyms in any order (Blaine can come before Lt.
+  -- Surge, the badges from anywhere), so the cap is the highest of: the next
+  -- leader by badges held, by leaders beaten, and the weakest leader this
+  -- player can reach now (the logic's own gym needs) and has not beaten.  A
+  -- fight the way on needs is never above the cap.
   function M.levelCap(save)
-    local inv = (save or Game.save or {}).inventory or {}
-    local n = 0
-    for _, b in ipairs(BADGES) do if (inv[b] or 0) > 0 then n = n + 1 end end
+    save = save or Game.save or {}
+    local flags, have = save.flags or {}, {}
+    for _, store in ipairs({ save.inventory or {}, save.pcItems or {} }) do
+      for id, n in pairs(store) do
+        if (tonumber(n) or 1) > 0 then have[id] = true end
+      end
+    end
     local caps = GameVersion.isYellow and GameVersion.isYellow() and CAPS.yellow or CAPS.red
-    return caps[n + 1] or 100
+    local held, beaten, weakest = 0, 0, 0
+    for i, b in ipairs(BADGES) do
+      if have[b] then held = held + 1 end
+      if GYM_FLAG[b] and flags[GYM_FLAG[b]] then
+        beaten = beaten + 1
+      elseif L.GYMS[b] and L.satisfied(L.expand(L.GYMS[b]), have)
+          and (weakest == 0 or caps[i] < weakest) then
+        weakest = caps[i]
+      end
+    end
+    return math.max(caps[held + 1] or 100, caps[beaten + 1] or 100, weakest)
   end
 
   -- ---- the randomized world: built from the seed, put back when it ends ---------
@@ -180,10 +209,27 @@ return function(ctx)
 
   -- ---- the team's shared key items ------------------------------------------------
 
+  -- st.found keeps this player's own finds in the save, so one that never
+  -- reached the server (out of reach, or the game closed first) goes again
   local function report(id)
     local st = state()
     st.got[id] = true
-    if sharing() then reports[#reports + 1] = id end
+    if sharing() then
+      st.found = st.found or {}
+      st.found[id] = true
+      reports[#reports + 1] = id
+    end
+  end
+
+  local function resend(team)
+    local st = state()
+    if not (M.rules and st.run == M.rules.runId and st.found) then return end
+    local known = {}
+    for _, id in ipairs(team.items or {}) do known[id] = true end
+    for _, id in ipairs(reports) do known[id] = true end
+    for id in pairs(st.found) do
+      if not known[id] then reports[#reports + 1] = id end
+    end
   end
 
   -- every find goes through Bag.add (item balls, hidden items, gifts, gym TMs)
@@ -203,15 +249,25 @@ return function(ctx)
     return ok
   end
 
+  -- "bag", "pc" (a full bag: the item PC takes it) or nil (no room at all)
   local function give(save, id, count)
     if isBadge(id) then
       save.inventory = save.inventory or {}
       if (save.inventory[id] or 0) < 1 then save.inventory[id] = 1 end
-      return true
+      return "bag"
     end
-    if Bag.add(save, id, count or 1, Game.data) then return true end
-    -- a full bag: the item PC takes it
-    return Bag.pcAdd and Bag.pcAdd(save, id, count or 1, Game.data) or false
+    if Bag.add(save, id, count or 1, Game.data) then return "bag" end
+    if Bag.pcAdd and Bag.pcAdd(save, id, count or 1, Game.data) then return "pc" end
+    return nil
+  end
+
+  -- this player's own find handed over by the mod (a gym leader's slot)
+  local function receive(save, id, count)
+    local where = give(save, id, count)
+    -- Bag.add reported it, but a badge and the item PC skip that
+    if where and M.isShared(id) and (isBadge(id) or where == "pc") then report(id) end
+    if where == "pc" then note(itemName(id) .. " WAS SENT TO YOUR PC.") end
+    return where
   end
 
   function M.applyTeam(team)
@@ -222,13 +278,18 @@ return function(ctx)
     local names = {}
     for _, id in ipairs(team.items or {}) do
       if M.isShared(id) and not st.got[id] then
-        st.got[id] = true
         granting = true
-        local ok = give(Game.save, id, 1)
+        local where = give(Game.save, id, 1)
         granting = false
-        if ok then names[#names + 1] = itemName(id) end
+        if where then
+          st.got[id] = true
+          names[#names + 1] = itemName(id) .. (where == "pc" and " (IN YOUR PC)" or "")
+        else
+          lastTeamRev = nil      -- no room in the bag or the PC: again next sync
+        end
       end
     end
+    resend(team)
     if #names > 0 then
       ctx.writeOnlineSave(Game.save)
       note("YOUR TEAM FOUND " .. table.concat(names, ", ") .. "!")
@@ -272,9 +333,13 @@ return function(ctx)
     reward.badge = badge
     if not beaten then
       if content then
-        give(save, content.item, content.count)
-        -- a badge skips Bag.add (and its report); anything else went through it
-        if isBadge(content.item) and M.isShared(content.item) then report(content.item) end
+        if not receive(save, content.item, content.count) then
+          -- no room in the bag or the PC: owed until there is (M.tick)
+          local st = state(save)
+          st.owed = st.owed or {}
+          table.insert(st.owed, { item = content.item, count = content.count })
+          note("NO ROOM FOR " .. itemName(content.item) .. "!\fMAKE ROOM IN YOUR BAG OR PC TO GET IT.")
+        end
       elseif not had and save.inventory and save.inventory[badge] and M.isShared(badge) then
         report(badge)
       end
@@ -467,11 +532,12 @@ return function(ctx)
     note(("RUN %d BEGINS!\f%s"):format(r.runId, M.describe()))
   end
 
-  local function postWipe()
+  local function postWipe(now)
+    if now < wipeRetryAt then return end
     local st = state()
     local res = ctx.post({ action = "run_wipe", trainerId = trainerId(), token = token(),
                            runId = st.run }, 3.0)
-    if res == nil then return end            -- unreachable: try again next frame
+    if res == nil then wipeRetryAt = now + 3 return end   -- unreachable: try again
     wipeQueued = false
     if res.success and res.run then
       M.rules = res.run
@@ -599,6 +665,10 @@ return function(ctx)
       if res.run then M.rules = res.run end
       M.applyTeam(res.team)
     end
+    -- a wipe the server never heard of (out of reach, then the game closed)
+    if st.wiped and st.run == M.rules.runId and M.rules.nuzlocke == "hardcore" then
+      wipeQueued = true
+    end
   end
 
   function M.synced(game, res)
@@ -619,13 +689,28 @@ return function(ctx)
       pendingRestart = true
     end
     local now = love and love.timer and love.timer.getTime() or os.time()
-    if wipeQueued then postWipe() end
+    if wipeQueued then postWipe(now) end
     if #reports > 0 then postReports(now) end
+    -- the overworld's own "scripted" test: a new run or a box must never
+    -- land in the middle of a cutscene (the S.S. Anne sailing, an escort...)
     local ow = game.overworld
     local idle = ow and ow.player and game.stack and game.stack:top() == ow
       and not ow.player.moving and not ow.transitioning
+      and not (ow.runner and ow.runner:isRunning()) and #(ow.scriptMoves or {}) == 0
+      and (ow.hopLand or 0) <= 0 and not (ow.engaging or ow.emote or ow.teleportOut
+        or ow.flyAnim or ow.flyArrive or ow.spinArrive or ow.holeFall or ow.holeArrive
+        or ow.cutAnim or ow.shipAnim)
     if not idle then return end
     if pendingRestart and not wipeQueued then return M.restart(game) end
+    if st.owed and st.owed[1] and now >= owedAt then
+      owedAt = now + 2
+      local c = st.owed[1]
+      if receive(game.save, c.item, c.count) then
+        table.remove(st.owed, 1)
+        note(("%s GOT %s!"):format(tostring(game.save.player and game.save.player.name or "YOU"),
+                                   itemName(c.item)))
+      end
+    end
     -- a poisoned Pokémon fainting on the overworld
     if M.hardcore() and not st.wiped then
       for _, m in ipairs(game.save.party or {}) do

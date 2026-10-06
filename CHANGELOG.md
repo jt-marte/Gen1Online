@@ -35,6 +35,25 @@ A server of our own, built for playing with friends.
   refused on CONNECT before anything changes. ONLINE > RUN INFO names your
   world and how many of the team's key items it holds. Server: `multiworld`
   and `players` in the rules view, and the `run_join` action.
+- **The game modes are checked for soft locks** on real Yellow data
+  (`dev/drivers/gen1_modes.lua`): every item ball is walked to with what the
+  logic says its map needs, and 900 worlds (1 to 3 per seed) are replayed as
+  the team. That found, and this fixes: the S.S. Anne's cabins could hold a
+  badge or key item, lost for good once she sails (they hold filler now; the
+  captain's own gift still may); Route 12's TM and the Safari Zone's Nugget
+  need SURF, the Warden's Rare Candy STRENGTH and Silph 5F's Protein the
+  CARD KEY, which the logic didn't ask for. The species shuffle now keeps
+  wild Pokémon that learn CUT in at least three early areas (a Squirtle
+  start on Red or Blue had none to fall back on). A find that never reached
+  the server (out of reach, or the game closed first) is kept in the save
+  and sent again; a team item with no room in the bag goes to the item PC
+  and says so, and one with no room anywhere comes on a later sync instead
+  of being lost; a gym prize with no room is owed. The hardcore level cap
+  follows the gyms the player can actually reach, since shuffled badges
+  open them out of order (Blaine before Lt. Surge). A new run or a box never
+  lands mid-cutscene, and a wipe the server can't hear yet is retried every
+  3 seconds instead of every frame, and sent on the next connect if the game
+  was closed first.
 - `server/gts_server.py`: a single-file, standard-library Python 3.8+ server
   that speaks the client's protocol. `python3 server/gts_server.py` (or
   `server/start.sh`, or double-clicking `server/start.bat`) listens on port

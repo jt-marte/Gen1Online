@@ -38,11 +38,10 @@ L.MAPS = {
   ROUTE_22 = {}, MT_MOON_1F = {}, MT_MOON_B1F = {}, MT_MOON_B2F = {},
   ROUTE_4 = {}, CERULEAN_CITY = {}, ROUTE_24 = {}, ROUTE_25 = {}, BILLS_HOUSE = {},
   ROUTE_5 = {}, ROUTE_6 = {}, UNDERGROUND_PATH_NORTH_SOUTH = {}, ROUTE_11 = {},
-  SS_ANNE_1F_ROOMS = { "S_S_TICKET" }, SS_ANNE_2F_ROOMS = { "S_S_TICKET" },
-  SS_ANNE_B1F_ROOMS = { "S_S_TICKET" }, SS_ANNE_KITCHEN = { "S_S_TICKET" },
-  SS_ANNE_BOW = { "S_S_TICKET" }, SS_ANNE_1F = { "S_S_TICKET" },
-  SS_ANNE_2F = { "S_S_TICKET" }, SS_ANNE_3F = { "S_S_TICKET" },
-  SS_ANNE_B1F = { "S_S_TICKET" }, SS_ANNE_CAPTAINS_ROOM = { "S_S_TICKET" },
+  -- The S.S. Anne is NOT listed: once the captain hands over his gift
+  -- (whatever it is) the ship sails for good, and a badge left in one of her
+  -- cabins would be lost.  Her items are filler; the captain's gift (L.GIFTS)
+  -- is the last thing she gives, so it may hold progression.
   -- after Cut
   VERMILION_CITY = { "CUT" }, ROUTE_2 = { "CUT" }, DIGLETTS_CAVE = { "CUT" },
   ROUTE_9 = { "CUT" }, ROUTE_10 = { "CUT" }, ROCK_TUNNEL_1F = { "CUT" },
@@ -55,18 +54,22 @@ L.MAPS = {
   POKEMON_TOWER_5F = { "CUT" }, POKEMON_TOWER_6F = { "CUT", "SILPH_SCOPE" },
   POKEMON_TOWER_7F = { "CUT", "SILPH_SCOPE" },
   SAFFRON_CITY = { "CUT" }, COPYCATS_HOUSE_2F = { "CUT" }, FIGHTING_DOJO = { "CUT" },
-  SILPH_CO_5F = { "CUT" },
+  -- every Silph floor has card key doors; the Card Key's own ball (L.SPOTS)
+  -- is outside 5F's, its Protein is behind one
   SILPH_CO_1F = { "CUT", "CARD_KEY" }, SILPH_CO_2F = { "CUT", "CARD_KEY" },
   SILPH_CO_3F = { "CUT", "CARD_KEY" }, SILPH_CO_4F = { "CUT", "CARD_KEY" },
+  SILPH_CO_5F = { "CUT", "CARD_KEY" },
   SILPH_CO_6F = { "CUT", "CARD_KEY" }, SILPH_CO_7F = { "CUT", "CARD_KEY" },
   SILPH_CO_8F = { "CUT", "CARD_KEY" }, SILPH_CO_9F = { "CUT", "CARD_KEY" },
   SILPH_CO_10F = { "CUT", "CARD_KEY" }, SILPH_CO_11F = { "CUT", "CARD_KEY" },
-  -- Fuchsia and the routes around it
-  ROUTE_12 = { "FUCHSIA" }, ROUTE_13 = { "FUCHSIA" }, ROUTE_14 = { "FUCHSIA" },
+  -- Fuchsia and the routes around it.  Route 12's TM and the Safari Zone
+  -- center's Nugget sit across water, the Warden's Rare Candy behind a
+  -- boulder (dev/drivers/gen1_modes.lua walks every map to check this table)
+  ROUTE_12 = { "FUCHSIA", "SURF" }, ROUTE_13 = { "FUCHSIA" }, ROUTE_14 = { "FUCHSIA" },
   ROUTE_15 = { "FUCHSIA" }, FUCHSIA_CITY = { "FUCHSIA" },
-  SAFARI_ZONE_GATE = { "FUCHSIA" }, SAFARI_ZONE_CENTER = { "FUCHSIA" },
+  SAFARI_ZONE_GATE = { "FUCHSIA" }, SAFARI_ZONE_CENTER = { "FUCHSIA", "SURF" },
   SAFARI_ZONE_EAST = { "FUCHSIA" }, SAFARI_ZONE_NORTH = { "FUCHSIA" },
-  SAFARI_ZONE_WEST = { "FUCHSIA" }, WARDENS_HOUSE = { "FUCHSIA" },
+  SAFARI_ZONE_WEST = { "FUCHSIA" }, WARDENS_HOUSE = { "FUCHSIA", "STRENGTH" },
   ROUTE_16 = { "FUCHSIA", "BIKE_VOUCHER" }, ROUTE_17 = { "FUCHSIA", "BIKE_VOUCHER" },
   ROUTE_18 = { "FUCHSIA", "BIKE_VOUCHER" },
   -- over water
@@ -88,9 +91,10 @@ L.MAPS = {
 
 -- Single spots that need less than the rest of their map (by map, then the
 -- item vanilla puts there).  The Lift Key's own ball is on the floor its
--- elevator serves.
+-- elevator serves; the Card Key's is outside Silph 5F's locked doors.
 L.SPOTS = {
   ROCKET_HIDEOUT_B4F = { LIFT_KEY = { "CUT" } },
+  SILPH_CO_5F = { CARD_KEY = { "CUT" } },
 }
 
 -- NPC gifts handed over by a script's give_item row, by the item the
@@ -135,6 +139,20 @@ L.PROGRESSION = {
 
 -- What finishing the game takes: the Elite Four are past Victory Road.
 L.GOAL = { "BADGES8", "SURF", "STRENGTH" }
+
+-- Field moves the way on needs a Pokémon for, and the wild areas (encounter
+-- map ids) open before them.  The species shuffle keeps a Pokémon that can
+-- learn the move in at least `areas` of these (fewer only if vanilla has
+-- fewer).  Only Cut needs it: on Red and Blue nothing else is sure to learn
+-- it in time (a Squirtle start), while Surf and Strength always have gift
+-- Pokémon first (the Mt. Moon Magikarp, the Dojo's Hitmons, the Celadon
+-- Eevee, the Silph Lapras).
+L.FIELD_MOVES = {
+  { move = "CUT", areas = 3,
+    maps = { "ROUTE_1", "ROUTE_2", "ROUTE_22", "VIRIDIAN_FOREST", "ROUTE_3", "MT_MOON_1F",
+             "MT_MOON_B1F", "MT_MOON_B2F", "ROUTE_4", "ROUTE_24", "ROUTE_25", "ROUTE_5",
+             "ROUTE_6", "ROUTE_11", "DIGLETTS_CAVE" } },
+}
 
 -- A requirement list flattened to plain item ids (a set).
 function L.expand(req, out)

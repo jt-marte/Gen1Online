@@ -65,6 +65,40 @@ function R.speciesMap(rng, pokemon)
   return map
 end
 
+local function teaches(pokemon, species, move)
+  local def = pokemon[species]
+  for _, m in ipairs(type(def) == "table" and def.tmhm or {}) do
+    if m == move then return true end
+  end
+  return false
+end
+
+-- Whether a species map leaves each of the logic's field moves (L.FIELD_MOVES)
+-- a wild Pokémon that learns it in enough of the areas open before the move
+-- is needed.  Only the walking table counts (grass, and every tile of a
+-- cave): water encounters need Surf.  Without encounter data (or areas the
+-- data does not know) there is nothing to check.
+function R.fieldMovesOk(species, data, L)
+  local enc, pokemon = data and data.encounters, data and data.pokemon
+  if type(enc) ~= "table" or type(pokemon) ~= "table" then return true end
+  for _, need in ipairs(L.FIELD_MOVES or {}) do
+    local vanilla, now = 0, 0
+    for _, mapId in ipairs(need.maps) do
+      local v, n = false, false
+      local t = type(enc[mapId]) == "table" and enc[mapId].grass
+      for _, slot in ipairs(type(t) == "table" and t.slots or {}) do
+        v = v or teaches(pokemon, slot.species, need.move)
+        n = n or teaches(pokemon, species[slot.species] or slot.species, need.move)
+      end
+      if v then vanilla = vanilla + 1 end
+      if n then now = now + 1 end
+    end
+    if now < math.min(need.areas, vanilla) then return false end
+  end
+  return true
+end
+R.SPECIES_TRIES = 50
+
 -- ---- where items are --------------------------------------------------------------
 
 local function sortedKeys(t)
@@ -262,7 +296,12 @@ function R.build(opts)
   if opts.encounters then
     -- one shuffle per world in a multiworld (a single world keeps salt 1)
     local salt = worlds > 1 and (1000 + world) or 1
-    plan.species = R.speciesMap(Rng.new(opts.seed, salt), opts.data.pokemon)
+    -- shuffled again (the same way on every client) until Cut has learners
+    for try = 1, R.SPECIES_TRIES do
+      plan.species = R.speciesMap(Rng.new(opts.seed, salt + 10000 * (try - 1)), opts.data.pokemon)
+      plan.speciesTries = try
+      if R.fieldMovesOk(plan.species, opts.data, L) then break end
+    end
   end
   local base = R.locations(opts.data, opts.victories or {}, L, opts)
   plan.fingerprint = R.fingerprint(base)

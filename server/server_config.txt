@@ -12,7 +12,8 @@
 #     (one per player; species you already own don't count and can't be caught)
 #   - a Pokemon that faints is gone for good
 #   - no items in battle (Poke Balls still work), battle style is SET,
-#     and Pokemon stop gaining EXP at the level cap of the next gym
+#     and Pokemon stop gaining EXP at the level cap of the next gym (with
+#     shuffled badges: the weakest gym leader you can reach and haven't beaten)
 #   - if ANY player's whole party faints, the run is over for the whole team:
 #     the server starts a new run (with a new seed) and everyone starts over
 # nuzlocke = off | hardcore
@@ -21,7 +22,9 @@ nuzlocke = off
 # Co-op randomizer: wild Pokemon, items and gym badges are shuffled.
 # A gym leader might hand over a POTION while the BOULDERBADGE lies on the
 # floor somewhere or comes from an NPC.  Placement follows the game's
-# progression, so a run can always be finished.
+# progression, so a run can always be finished (nothing you need is left
+# aboard the S.S. Anne, and the early routes always have wild Pokemon that
+# can learn CUT).
 # randomizer = on | off
 randomizer = off
 

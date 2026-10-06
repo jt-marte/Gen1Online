@@ -52,6 +52,9 @@ for mapId in pairs(L.MAPS) do
 end
 maps.ROCKET_HIDEOUT_B4F.objects[3] = { index = 3, item = "SILPH_SCOPE", hidden = true }
 maps.CERULEAN_CAVE_1F = { objects = { { index = 1, item = "RARE_CANDY" } } }   -- NEVER
+-- the S.S. Anne sails for good after the captain's gift: her cabins are filler
+maps.SS_ANNE_1F_ROOMS = { objects = { { index = 1, item = "RARE_CANDY" }, { index = 2, item = "POTION" } } }
+maps.SS_ANNE_B1F_ROOMS = { objects = { { index = 1, item = "POTION" } } }
 local hidden = { ROUTE_9 = { { item = "POTION", x = 4, y = 4 } },
                  CERULEAN_CITY = { { item = "RARE_CANDY", x = 1, y = 1 } } }
 local victories, gymKeys = {}, {}
@@ -95,6 +98,7 @@ end
 -- ---- placement --------------------------------------------------------------------
 do
   local okAll, hiddenProg, neverProg, kinds = true, 0, 0, {}
+  local shipProg, captainProg = 0, 0
   local isProg = {}
   for _, id in ipairs(L.PROGRESSION) do isProg[id] = true end
   for seed = 1, 200 do
@@ -107,12 +111,17 @@ do
         kinds[loc.kind] = true
         if loc.kind == "hidden" then hiddenProg = hiddenProg + 1 end
         if loc.reqSet.__NEVER__ then neverProg = neverProg + 1 end
+        if (loc.map or ""):find("^SS_ANNE") then shipProg = shipProg + 1 end
+        if loc.key == "gift:HM_CUT" then captainProg = captainProg + 1 end
       end
     end
   end
   check(okAll, "200 seeds: every world can be finished")
   check(hiddenProg == 0, "no badge or key item on an invisible tile")
   check(neverProg == 0, "none in a post-game map")
+  check(shipProg == 0 and captainProg > 0,
+    "none in the S.S. Anne's cabins (she sails), but the captain's own gift can hold one ("
+    .. captainProg .. " of 200)")
   check(kinds.ball and kinds.gift and kinds.gym, "progression lands in balls, gifts and gyms")
 
   local plan = build(77)
@@ -185,6 +194,62 @@ do
     end
   end
   check(maxJump <= math.ceil(148 / R.TIERS), "a species swaps with one of similar strength (max gap " .. maxJump .. ")")
+end
+
+-- ---- Pokémon that can learn Cut, before Cut is needed -------------------------------
+do
+  -- every fifth species learns Cut; each early area holds two species, and
+  -- vanilla has learners in four of them
+  local mons = {}
+  for id, def in pairs(pokemon) do
+    mons[id] = { dex = def.dex, baseStats = def.baseStats, tmhm = (def.dex % 5 == 0) and { "CUT" } or {} }
+  end
+  local enc, early = {}, L.FIELD_MOVES[1].maps
+  for i, mapId in ipairs(early) do
+    local a = i <= 4 and ("MON" .. (i * 5)) or ("MON" .. (i * 5 + 1))
+    enc[mapId] = { grass = { rate = 25, slots = { { species = a, level = 3 }, { species = "MON" .. (i * 5 + 2), level = 3 } } } }
+  end
+  local data2 = setmetatable({ pokemon = mons, encounters = enc }, { __index = data })
+  local function areas(species)
+    local n = 0
+    for _, mapId in ipairs(early) do
+      local any = false
+      for _, slot in ipairs(enc[mapId].grass.slots) do
+        local s = species[slot.species] or slot.species
+        for _, m in ipairs(mons[s].tmhm) do if m == "CUT" then any = true end end
+      end
+      if any then n = n + 1 end
+    end
+    return n
+  end
+  local allOk, rerolled, kept, same = true, 0, true, true
+  for seed = 1, 300 do
+    local plan = R.build({ seed = seed, data = data2, victories = victories, logic = L, Rng = Rng,
+                           encounters = true })
+    if areas(plan.species) < 3 then allOk = false end
+    if plan.speciesTries > 1 then
+      rerolled = rerolled + 1
+    else
+      local first = R.speciesMap(Rng.new(seed, 1), mons)
+      for k, v in pairs(first) do if plan.species[k] ~= v then kept = false end end
+    end
+    local again = R.build({ seed = seed, data = data2, victories = victories, logic = L, Rng = Rng,
+                            encounters = true })
+    for k, v in pairs(plan.species) do if again.species[k] ~= v then same = false end end
+  end
+  check(allOk, "300 seeds: Cut learners in at least 3 of the early wild areas")
+  check(rerolled > 0 and kept, ("a shuffle short of them is drawn again (%d of 300), "
+    .. "any other seed keeps its first shuffle"):format(rerolled))
+  check(same, "and every client draws the same one")
+  local w2 = R.build({ seed = 5, data = data2, victories = victories, logic = L, Rng = Rng,
+                       encounters = true, worlds = 2, world = 2 })
+  check(areas(w2.species) >= 3, "each multiworld world gets its own Cut learners")
+  local plain = R.build({ seed = 5, data = data, victories = victories, logic = L, Rng = Rng,
+                          encounters = true })
+  local first = R.speciesMap(Rng.new(5, 1), pokemon)
+  local unchanged = plain.speciesTries == 1
+  for k, v in pairs(first) do if plain.species[k] ~= v then unchanged = false end end
+  check(unchanged, "without encounter data there is nothing to check: the first shuffle stays")
 end
 
 -- ---- apply / undo --------------------------------------------------------------------

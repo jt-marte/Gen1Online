@@ -138,9 +138,11 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     and Yellow.
   - `modes_test.lua` (plain LuaJIT, no engine or ROM): the pinned RNG, 200
     seeds of placement on a synthetic world (always finishable, no
-    progression on hidden tiles or post-game maps, a pure permutation), the
-    badges-only / items-only / encounters-only variants, the species shuffle,
-    and apply/undo.
+    progression on hidden tiles, post-game maps or the S.S. Anne's cabins, a
+    pure permutation), the badges-only / items-only / encounters-only
+    variants, the species shuffle (drawn again until CUT has early learners,
+    deterministically; unchanged without encounter data), apply/undo, and
+    multiworld.
   - `wrong_world_test.lua`: each generation's CONNECT is turned away by the
     other generation's server (run as Crystal on Gen 1, and as Red on Crystal).
   - `address_test.lua` (Crystal and Yellow): the CONNECT menu (JOIN / SERVER
@@ -184,8 +186,17 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   through the overworld's script runner, Brock's `checkVictoryRewards`, team
   finds both ways (BUDDY over raw HTTP), RUN INFO, the Nuzlocke hooks (battle
   events are emitted, not fought), a wipe starting run 2 and BUDDY's wipe
-  starting run 3, and DISCONNECT restoring the vanilla world. Needs the
-  Yellow cache only.
+  starting run 3, and DISCONNECT restoring the vanilla world. First, on the
+  vanilla data, the soft-lock checks: every item ball on a logic map is
+  walked to (a BFS from the map's warps and edges on the engine's own
+  `Map`/`Collision`, with Cut trees, water, boulders and locked Silph doors
+  as walls unless the map's requirement has the HM or Card Key; ledges one
+  way), and 900 worlds (150 seeds, 1-3 worlds) are replayed as the team
+  (finishable, no progression hidden/post-game/on the S.S. Anne, Cut
+  learners in 3+ early areas). After connecting it also covers a lost
+  report sent again, a full bag sending a team item to the PC, no room at
+  all (not counted, comes later), an owed gym prize, and the level cap with
+  gyms open out of order. Needs the Yellow cache only.
 - **Real Yellow multiworld** (`dev/drivers/gen1_multiworld.lua`): a server
   with `randomizer = on`, `multiworld = on`, `players = 2`, `seed = 4242`.
   The client joins as world 1, BUDDY (raw HTTP) as world 2, a third trainer
@@ -620,7 +631,12 @@ off the open internet.
 - Game modes (`modes/`), by design or not yet done:
   - `logic.lua` is hand-written and conservative per map; an unlisted map
     holds filler only. If no placement works in 60 tries (a data set it
-    doesn't know) the items stay vanilla and the player is told.
+    doesn't know) the items stay vanilla and the player is told. The
+    driver's map walk checks it on Yellow only (no Red/Blue data here), and
+    only within each map: whether a map can be entered with what it lists
+    (gates, guards, cross-map paths) is from the engine's scripts by hand.
+    The S.S. Anne is unlisted on purpose: she sails for good after the
+    captain's gift (`EVENT_GOT_HM01`), whatever it is.
   - Shuffled: item balls, hidden items, the twelve `give_item` gifts in
     `L.GIFTS`, the gym badge slots (gym TMs stay). Not shuffled: Lua-handler
     gifts (Bicycle, HM02, HM05, fossils, Oak's aides), trainers' teams, the
@@ -637,8 +653,21 @@ off the open internet.
     data (`withVanilla` in `modes/init.lua`): an applied shuffle changes the
     map objects. A world's items are only reachable by its player, so a
     player who stops playing can stall the run; no takeover by design.
-  - Field moves still need a party Pokémon that learns the HM; the species
-    shuffle doesn't guarantee one early.
+  - Field moves still need a party Pokémon that knows the HM. The species
+    shuffle is drawn again (salt + 10000 per try, the same on every client)
+    until `L.FIELD_MOVES` holds: CUT learners in 3+ early wild areas. SURF and
+    STRENGTH always have gift Pokémon in time (the Mt. Moon Magikarp, the
+    Dojo's Hitmons, the Celadon Eevee, the Silph Lapras). In a hardcore run
+    the catch rules can still leave a player without one: blacking out on
+    purpose restarts the run.
+  - The hardcore level cap is the highest of: the next leader by badges
+    held, by leaders beaten (`victories` flags), and the weakest leader not
+    yet beaten whose gym the logic says is open with the bag and PC. In gym
+    order that is the vanilla cap.
+  - Each player's own finds are kept in the save (`g1oModes.found`) and sent
+    again with every new team view until the team has them; a team item
+    is only marked received (`got`) once it found room (bag, else item PC);
+    a gym prize with no room anywhere goes to `g1oModes.owed`.
   - Nuzlocke areas are map ids (each floor counts). Pokémon from the GTS,
     Wonder Trade and link trades skip the catch rules (a design call).
   - The hardcore rules hook `item.use` (the bag), `ItemEffects.needsTarget`
