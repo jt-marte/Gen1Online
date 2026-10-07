@@ -48,6 +48,7 @@ return function(ctx)
     st.got = st.got or {}
     st.areas = st.areas or {}
     st.graveyard = st.graveyard or {}
+    st.trades = st.trades or {}      -- { [leaders beaten] = Pokémon received }
     return st
   end
   M.state = state
@@ -728,6 +729,18 @@ return function(ctx)
   local LEADERS = { "FLAG_DEFEATED_BROCK", "FLAG_DEFEATED_MISTY", "FLAG_DEFEATED_LT_SURGE",
     "FLAG_DEFEATED_ERIKA", "FLAG_DEFEATED_KOGA", "FLAG_DEFEATED_SABRINA", "FLAG_DEFEATED_BLAINE",
     "FLAG_DEFEATED_LEADER_GIOVANNI" }
+
+  -- gym leaders this player has beaten: their defeat flags, never the badges
+  -- held (the randomizer moves the badges).  The save argument is Gen 1's
+  -- (one interface); here it is the live session's.
+  function M.gymsBeaten()
+    local beaten = 0
+    for i = 1, #LEADERS do
+      if Gen3Compat.getFlag(LEADERS[i]) then beaten = beaten + 1 end
+    end
+    return beaten
+  end
+
   function M.levelCap()
     local s = session()
     local have = {}
@@ -737,19 +750,91 @@ return function(ctx)
         if key and (tonumber(slot.qty or slot.count) or 1) > 0 then have[key] = true end
       end
     end
-    local held, beaten, weakest = 0, 0, 0
+    local held, beaten, weakest = 0, M.gymsBeaten(), 0
     for i = 1, 8 do
       if Flags.getFlag(store(), nil, BADGE_FLAG + i - 1) then held = held + 1; have["BADGE" .. i] = true end
     end
     for i = 1, 8 do
-      if Gen3Compat.getFlag(LEADERS[i]) then
-        beaten = beaten + 1
-      elseif L.satisfied(L.expand(L.GYMS["BADGE" .. i]), have) and (weakest == 0 or CAPS[i] < weakest) then
+      if not Gen3Compat.getFlag(LEADERS[i])
+          and L.satisfied(L.expand(L.GYMS["BADGE" .. i]), have) and (weakest == 0 or CAPS[i] < weakest) then
         weakest = CAPS[i]
       end
     end
     return math.max(CAPS[held + 1] or 100, CAPS[beaten + 1] or 100, weakest)
   end
+
+  -- Trades (hardcore, tradesPerGym > 0): the Pokémon this player may receive
+  -- online (a GTS buy or claim, a Wonder Trade, a link trade) between two gym
+  -- leaders.  A stretch is the number of leaders beaten, so beating one opens
+  -- a fresh allowance, and a new run (a new state) starts over.  0: no limit.
+  function M.tradeLimit()
+    if not M.hardcore() then return 0 end
+    return math.max(0, tonumber(rules().tradesPerGym) or 0)
+  end
+
+  local function tradesUsed()
+    return tonumber(state().trades[tostring(M.gymsBeaten())]) or 0
+  end
+
+  -- nil: no limit
+  function M.tradesLeft()
+    local limit = M.tradeLimit()
+    if limit <= 0 then return nil end
+    return math.max(0, limit - tradesUsed())
+  end
+
+  -- nil when a trade may go ahead, else why not
+  function M.tradeRefusal()
+    local left = M.tradesLeft()
+    if left == nil or left > 0 then return nil end
+    if M.gymsBeaten() >= #LEADERS then
+      return "HARDCORE NUZLOCKE: NO TRADES LEFT!\fNO GYM LEADERS ARE LEFT TO BEAT."
+    end
+    local limit = M.tradeLimit()
+    return ("HARDCORE NUZLOCKE: %s SINCE YOUR LAST GYM LEADER!\fBEAT THE NEXT ONE TO TRADE AGAIN.")
+      :format(limit > 1 and ("YOU ALREADY MADE YOUR %d TRADES"):format(limit) or "YOU ALREADY TRADED")
+  end
+
+  -- a Pokémon received: counted in this stretch.  Returns the trades left.
+  function M.tradeDone()
+    if M.tradeLimit() <= 0 or not session() then return nil end
+    local st, key = state(), tostring(M.gymsBeaten())
+    st.trades[key] = (tonumber(st.trades[key]) or 0) + 1
+    ctx.writeOnlineSave()
+    local left = M.tradesLeft()
+    note((M.gymsBeaten() >= #LEADERS and "TRADE USED: %d LEFT."
+          or "TRADE USED: %d LEFT UNTIL THE NEXT GYM LEADER."):format(left))
+    return left
+  end
+
+  -- a leader beaten opens a new stretch.  His defeat flag is the game's own
+  -- (the mod never grants one, so granting doesn't matter); the event names
+  -- it, or gives its number, resolved through Flags.IDS once it is filled.
+  local LEADER_NAME, leaderIds = {}, nil
+  for _, name in ipairs(LEADERS) do LEADER_NAME[name] = true end
+  local function isLeaderFlag(ev)
+    if LEADER_NAME[ev.name] then return true end
+    local n = tonumber(ev.id)
+    if not n then return false end
+    local ids = leaderIds
+    if not ids then
+      ids = {}
+      local found = 0
+      for _, name in ipairs(LEADERS) do
+        local v = Flags.IDS and Flags.IDS[name]
+        if v then ids[v] = true; found = found + 1 end
+      end
+      if found == #LEADERS then leaderIds = ids end   -- else ask again next time
+    end
+    return ids[n] == true
+  end
+  mod.events:on("flag.changed", function(ev)
+    if not (type(ev) == "table" and ev.value and isLeaderFlag(ev)) then return end
+    local limit = M.tradeLimit()
+    if limit > 0 then
+      note(("GYM LEADER BEATEN! YOU MAY TRADE %d MORE TIME%s."):format(limit, limit == 1 and "" or "S"))
+    end
+  end)
 
   -- SET: no switching after a knockout
   local Options = require("src.core.game3.options")
@@ -990,7 +1075,11 @@ return function(ctx)
     local r = M.rules
     if not (r and r.active) then return "" end
     local parts = {}
-    if r.nuzlocke == "hardcore" then parts[#parts + 1] = "HARDCORE NUZLOCKE" end
+    if r.nuzlocke == "hardcore" then
+      local n = tonumber(r.tradesPerGym) or 0
+      parts[#parts + 1] = "HARDCORE NUZLOCKE"
+        .. (n > 0 and (" (%d TRADE%s PER GYM LEADER)"):format(n, n == 1 and "" or "S") or "")
+    end
     if r.randomizer then parts[#parts + 1] = "RANDOMIZER" end
     if r.multiworld then
       parts[#parts + 1] = ("MULTIWORLD (YOU ARE WORLD %s OF %d)"):format(tostring(M.world or "?"), worlds(r))
@@ -1004,6 +1093,11 @@ return function(ctx)
     local lines = { M.describe() }
     if M.hardcore() then
       lines[#lines + 1] = ("LEVEL CAP: %d."):format(M.levelCap())
+      local limit = M.tradeLimit()
+      if limit > 0 then
+        lines[#lines + 1] = (M.gymsBeaten() >= #LEADERS and "TRADES: %d OF %d LEFT."
+          or "TRADES: %d OF %d LEFT UNTIL THE NEXT GYM LEADER."):format(M.tradesLeft(), limit)
+      end
       local dead = {}
       for _, g in ipairs(st.graveyard) do dead[#dead + 1] = tostring(g.name) end
       lines[#lines + 1] = #dead > 0 and ("FALLEN: " .. table.concat(dead, ", ") .. ".") or "NO POKéMON LOST YET."

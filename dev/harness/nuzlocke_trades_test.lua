@@ -1,0 +1,469 @@
+-- The hardcore Nuzlocke's trade limit on Gen 1 (G1O_GAME=yellow) against a
+-- Gen 1 server with `nuzlocke = hardcore` and `nuzlocke_trades = 1`
+-- (dev/server.sh with GTS_CONFIG): one Pokémon received by trade per stretch
+-- of gym leaders beaten.  A deposit is free; a GTS buy uses the trade; then
+-- every other way in is refused (a second buy, a GTS deposit, a Wonder Trade
+-- deposit, a LINK TRADE offer, an accepted TRADE challenge, a GTS claim).
+-- Beating Brock opens a new allowance, which survives DISCONNECT and JOIN,
+-- and with no limit in the rules nothing counts.  BUDDY is raw HTTP.
+local Rig = dofile(os.getenv("G1O_DEV") .. "/harness/rig.lua")
+assert(Rig.generation == 1, "run with G1O_GAME=yellow")
+local PORT = os.getenv("GTS_PORT") or "17781"
+local BASE = "http://127.0.0.1:" .. PORT
+Rig.overrides["gts_config.txt"] = "server_url=" .. BASE .. "\n"
+
+local fails = 0
+local function check(cond, label)
+  print((cond and "PASS " or "FAIL ") .. label)
+  if not cond then fails = fails + 1 end
+  return cond
+end
+
+local Json = require("src.link.Json")
+local http = require("socket.http")
+local ltn12 = require("ltn12")
+local socket = require("socket")
+
+local exports   -- the mod's exports, once loaded (modesVersion comes from them)
+local function post(payload)
+  payload.modVersion = payload.modVersion or "0.5.1"
+  payload.gameVersion = payload.gameVersion or "Pokemon Yellow"
+  payload.generation = payload.generation or 1
+  -- a hardcore server turns away POSTs below its rules version
+  payload.modesVersion = payload.modesVersion or (exports and exports.ui and exports.ui.MODES_VERSION)
+  local body = Json.encode(payload)
+  local out = {}
+  http.request({ url = BASE .. "/gts", method = "POST", source = ltn12.source.string(body),
+    headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body),
+      ["X-Mod-Version"] = "0.5.1" }, sink = ltn12.sink.table(out) })
+  local ok, res = pcall(Json.decode, table.concat(out))
+  return ok and res or nil
+end
+local function get(path)
+  local out = {}
+  http.request({ url = BASE .. path .. (path:find("?", 1, true) and "&" or "?") .. "version=0.5.1&gen=1",
+    sink = ltn12.sink.table(out) })
+  local ok, res = pcall(Json.decode, table.concat(out))
+  return ok and res or nil
+end
+
+-- ---- the game: Gen 1 data just big enough for the mod's paths ----------------
+local game = Rig.newGame()
+local world = game.overworld
+local SPECIES = { PIKACHU = 25, BULBASAUR = 1, PIDGEY = 16, RATTATA = 19, ABRA = 63,
+  KADABRA = 64, ZUBAT = 41, SPEAROW = 21, EKANS = 23, MEOWTH = 52 }
+for sp, dex in pairs(SPECIES) do
+  game.data.pokemon[sp] = { name = sp, dex = dex, types = { "NORMAL" }, growthRate = "MEDIUM_FAST",
+    baseStats = { hp = 45, attack = 45, defense = 45, speed = 45, special = 45 },
+    level1Moves = { "TACKLE" }, learnset = {} }
+end
+game.data.moves = { TACKLE = { id = "TACKLE", pp = 35, power = 35, type = "NORMAL" } }
+for _, id in ipairs({ "SPRITE_RED", "SPRITE_BLUE" }) do
+  game.data.sprites[id] = { id = id, image = "assets/none.png", frames = 6,
+    frameWidth = 16, frameHeight = 16 }
+end
+
+-- screens the rig cannot draw keep their callbacks: the Gen 1 naming screen
+-- (it pops itself, then calls onDone) and the Gen 1 trade animation
+local NamingScreen = require("src.ui.NamingScreen")
+NamingScreen.new = function(g, opts)
+  local stub = { naming = true, opts = opts }
+  function stub.finish(name) g.stack:pop(); opts.onDone(name, true) end
+  return stub
+end
+local tradeAnim
+local TradeAnim = require("src.ui.TradeAnim")
+TradeAnim.new = function(g, opts)
+  tradeAnim = { tradeAnim = true, opts = opts }
+  return tradeAnim
+end
+
+local ok, err = Rig.load(game)
+check(ok, "loader:load completes on " .. Rig.gameId .. " (" .. tostring(err) .. ")")
+exports = Rig.loader.exports["gen1online-plus"]
+check(exports ~= nil and exports.modes ~= nil and exports.ui ~= nil, "the mod and its game modes are loaded")
+local Modes = exports.modes
+check(tonumber(exports.ui.MODES_VERSION) ~= nil, "the client's rules version: " .. tostring(exports.ui.MODES_VERSION))
+-- the leaders' defeat flags come from the engine's victories table
+check(Modes.gymsBeaten({ flags = { EVENT_BEAT_BROCK = true } }) == 1
+  and Modes.gymsBeaten({ flags = { EVENT_BEAT_BROCK = true, EVENT_BEAT_MISTY = true } }) == 2
+  and Modes.gymsBeaten({ flags = {} }) == 0, "gymsBeaten counts the leaders' defeat flags")
+check(Modes.tradesLeft(game.save) == nil and not Modes.tradeRefusal(game.save),
+  "offline: no trade limit")
+
+-- swallowed mod errors fail the test
+local function dump(label)
+  check(#Rig.errors == 0, label .. ": no swallowed mod errors (" .. #Rig.errors .. ")")
+  Rig.dump(label)
+end
+
+-- ---- UI driver ----------------------------------------------------------------
+local TextBox = require("src.render.TextBox")
+local messages = {}
+local function top() return game.stack:top() end
+local function textOf(s)
+  local out = {}
+  local function walk(v)
+    if type(v) == "string" then out[#out + 1] = v
+    elseif type(v) == "table" then for _, x in ipairs(v) do walk(x) end end
+  end
+  walk(s and (s.pages or s.text))
+  return table.concat(out, " ")
+end
+local function describe(s)
+  if not s then return "nil" end
+  if s.items then
+    local l = {}
+    for _, it in ipairs(s.items) do l[#l + 1] = tostring(it.label) end
+    return "Menu{" .. table.concat(l, " | ") .. "}"
+  end
+  if getmetatable(s) == TextBox then return "TextBox{" .. textOf(s) .. "}" end
+  if s == world then return "Overworld" end
+  if s.naming then return "Naming{" .. tostring(s.opts.title) .. "}" end
+  if s.tradeAnim then return "TradeStub" end
+  return tostring(s)
+end
+local function pick(pattern)
+  local s = top()
+  if not (s and s.items) then error("expected a menu, top is " .. describe(s), 2) end
+  for _, it in ipairs(s.items) do
+    if tostring(it.label):find(pattern) then
+      if not it.keepOpen then game.stack:pop() end
+      if it.onSelect then it.onSelect() end
+      return true
+    end
+  end
+  error("no item '" .. pattern .. "' in " .. describe(s), 2)
+end
+local function closeTexts()
+  for _ = 1, 20 do
+    local s = top()
+    if not (s and getmetatable(s) == TextBox) then return end
+    messages[#messages + 1] = textOf(s)
+    game.stack:pop()
+    if s.onDone then s.onDone() end
+  end
+end
+local function said(pattern)
+  for _, m in ipairs(messages) do if m:find(pattern) then return m end end
+  return nil
+end
+local function popTo(state) while top() and top() ~= state do game.stack:pop() end end
+-- a Gen 1 frame: the overworld on top updates (the mod's wrapper around the
+-- rig's stand-in), through the core.update hook
+local function frames(n)
+  for _ = 1, n do
+    local okF, e = pcall(Rig.hook, "core.update", function(g, dt)
+      local t = g.stack:top()
+      if t and t.update then t:update(dt) end
+    end, game, 1 / 60)
+    if not okF then Rig.record("frame", e) end
+    socket.sleep(0.004)
+  end
+end
+local function waitUntil(cond, seconds)
+  local deadline = socket.gettime() + (seconds or 8)
+  while socket.gettime() < deadline do
+    frames(10)
+    if cond() then return true end
+  end
+  return cond() and true or false
+end
+local function startMenu(list)
+  return Rig.hook("ui.start_menu.items", function(g, l) return l end, game, list or {})
+end
+local function item(list, label)
+  for _, it in ipairs(list) do if it.label == label then return it end end
+end
+local function openGts(entry)
+  popTo(world)
+  messages = {}
+  item(Rig.hook("ui.pc.items", function(g, l) return l end, game, {}), "GTS").onSelect()
+  pick(entry)
+  return describe(top())
+end
+local function partySpecies()
+  local out = {}
+  for _, m in ipairs(game.save.party or {}) do out[#out + 1] = m.species end
+  return table.concat(out, ",")
+end
+local function finishTradeAnim()
+  if not tradeAnim then return false end
+  local anim = tradeAnim
+  tradeAnim = nil
+  popTo(anim)
+  game.stack:pop()   -- Gen 1's TradeAnim pops itself, then calls onDone
+  anim.opts.onDone()
+  closeTexts()
+  return true
+end
+-- every Pokémon alive: the hardcore rules bury a fainted one on idle frames
+local function mon(species, level)
+  return { species = species, level = level or 5, nickname = species, hp = 20, maxHp = 20,
+    moves = { { id = "TACKLE", pp = 35 } }, dvs = { attack = 8, defense = 8, speed = 8, special = 8 } }
+end
+-- the notes the modes show once the overworld is free
+local function notes()
+  popTo(world)
+  for _ = 1, 4 do frames(10); closeTexts() end
+  popTo(world)
+end
+local function runInfo()
+  popTo(world)
+  messages = {}
+  local online = item(startMenu(), "ONLINE")
+  if not online then return nil end
+  online.onSelect()
+  pick("RUN INFO")
+  closeTexts()
+  popTo(world)
+  return table.concat(messages, " / ")
+end
+local function listingOf(tid, species)
+  for lid, l in pairs((get("/gts/browse") or {}).listings or {}) do
+    if tostring(l.trainerId) == tid and (not species or (l.offeredMon or {}).species == species) then
+      return lid, l
+    end
+  end
+end
+local function buddySync(extra)
+  local p = { action = "sync_pos", trainerId = "777777", sessionId = "buddy-session",
+    name = "BUDDY", spriteId = "SPRITE_RED", map = world.map.id, x = 5, y = 7,
+    px = 80, py = 112, facing = "up", moving = false }
+  for k, v in pairs(extra or {}) do p[k] = v end
+  return post(p)
+end
+local REFUSED = "ALREADY TRADED"
+
+-- ---- 1. CONNECT, create a character on the hardcore server ------------------------
+local info = get("/server/info") or {}
+check(info.rules and info.rules.nuzlocke == "hardcore" and info.rules.tradesPerGym == 1,
+  "/server/info: hardcore, tradesPerGym = 1 (" .. tostring(info.rules and info.rules.tradesPerGym) .. ")")
+item(startMenu(), "CONNECT").onSelect()
+pick("^JOIN")
+check(top() and top().items, "no online save yet -> create/redeem menu")
+pick("CREATE NEW PLAYER")
+check(top() and top().naming, "CREATE NEW PLAYER opens the Gen 1 naming screen")
+top().finish("ASH")
+pick("BLUE / RIVAL")
+closeTexts()
+check(said("PLAYER CREATED") ~= nil, "server registered the character: " .. table.concat(messages, " / "))
+-- a new character's PLAYER CREATED box has no modes line (the returning
+-- player's CONNECTED box does: section 7)
+check(tostring(Modes.describe()):find("1 TRADE PER GYM LEADER", 1, true) ~= nil,
+  "the modes name the limit: " .. tostring(Modes.describe()))
+popTo(world)
+local myId = tostring(game.save.player.id)
+check(game.save.player.name == "ASH", "game now runs the online character")
+check(Modes.rules and Modes.rules.tradesPerGym == 1, "the client plays tradesPerGym = 1")
+game.save.flags = game.save.flags or {}
+game.save.party = {
+  { species = "PIKACHU", nickname = "PIKACHU", level = 7, hp = 24, maxHp = 24,
+    moves = { { id = "TACKLE", pp = 35 } }, dvs = { attack = 9, defense = 8, speed = 7, special = 6 } },
+  { species = "PIDGEY", nickname = "PIDGEY", level = 5, hp = 19, maxHp = 19,
+    moves = { { id = "TACKLE", pp = 35 } }, dvs = { attack = 5, defense = 5, speed = 5, special = 5 } },
+  { species = "RATTATA", nickname = "RATTATA", level = 4, hp = 17, maxHp = 17,
+    moves = { { id = "TACKLE", pp = 35 } }, dvs = { attack = 4, defense = 4, speed = 4, special = 4 } },
+  { species = "SPEAROW", nickname = "SPEAROW", level = 4, hp = 17, maxHp = 17,
+    moves = { { id = "TACKLE", pp = 35 } }, dvs = { attack = 4, defense = 4, speed = 4, special = 4 } },
+}
+check(Modes.gymsBeaten(game.save) == 0, "no gym leader beaten yet")
+check(Modes.tradesLeft(game.save) == 1 and not Modes.tradeRefusal(game.save), "1 trade left, none refused")
+local ri = runInfo() or ""
+check(ri:find("TRADES: 1 OF 1", 1, true) ~= nil, "RUN INFO: " .. ri)
+dump("connect")
+
+-- ---- 2. a GTS deposit is free -----------------------------------------------------------
+openGts("DEPOSIT MON")
+pick("FROM PARTY")
+pick("RATTATA")
+pick("ADD")
+pick("J %- L")
+pick("KADABRA")
+pick("CONFIRM")
+closeTexts()
+check(said("RATTATA WAS DEPOSITED") ~= nil, "deposit allowed: " .. table.concat(messages, " / "))
+local myListing = listingOf(myId, "RATTATA")
+check(myListing ~= nil, "the server holds the RATTATA listing")
+check(partySpecies() == "PIKACHU,PIDGEY,SPEAROW", "RATTATA left the party (" .. partySpecies() .. ")")
+check(Modes.tradesLeft(game.save) == 1, "a deposit uses no trade")
+popTo(world)
+
+-- ---- 3. a GTS buy uses the trade ----------------------------------------------------------
+local dep = post({ action = "deposit", trainerId = "777777", trainerName = "BUDDY",
+  offeredMon = mon("ABRA", 12), wanted = { "PIDGEY" } })
+check(dep and dep.success, "BUDDY lists an ABRA for a PIDGEY (" .. tostring(dep and dep.error) .. ")")
+openGts("BROWSE TRADES")
+pick("ALL ACTIVE")
+pick("ABRA")
+game.input:press("a")
+top():update(1 / 60)
+pick("GIVE PIDGEY")
+check(tradeAnim ~= nil and tradeAnim.opts.sent and tradeAnim.opts.sent.species == "PIDGEY", "PIDGEY is the one leaving")
+check(finishTradeAnim() and said("GTS TRADE COMPLETE") ~= nil, "the GTS trade completes")
+check(partySpecies() == "PIKACHU,SPEAROW,ABRA", "ABRA arrived, PIDGEY left (" .. partySpecies() .. ")")
+check(Modes.tradesLeft(game.save) == 0, "the trade is used: 0 left (" .. tostring(Modes.tradesLeft(game.save)) .. ")")
+messages = {}
+notes()
+check(said("TRADE USED: 0 LEFT") ~= nil, "the note says so: " .. table.concat(messages, " / "))
+dump("buy")
+
+-- ---- 4. every other way in is refused -----------------------------------------------------
+-- a second buy
+local second = post({ action = "deposit", trainerId = "777777", trainerName = "BUDDY",
+  offeredMon = mon("EKANS", 9), wanted = { "SPEAROW" } })
+check(second and second.success, "BUDDY lists an EKANS for a SPEAROW")
+openGts("BROWSE TRADES")
+pick("ALL ACTIVE")
+pick("EKANS")
+game.input:press("a")
+top():update(1 / 60)
+pick("GIVE SPEAROW")
+closeTexts()
+check(said(REFUSED) ~= nil and tradeAnim == nil, "a second buy is refused: " .. table.concat(messages, " / "))
+check(partySpecies() == "PIKACHU,SPEAROW,ABRA", "the party is unchanged (" .. partySpecies() .. ")")
+check(listingOf("777777", "EKANS") ~= nil, "the EKANS listing is still on the server")
+-- a GTS deposit
+openGts("DEPOSIT MON")
+pick("FROM PARTY")
+pick("SPEAROW")
+closeTexts()
+check(said(REFUSED) ~= nil, "a GTS deposit is refused: " .. table.concat(messages, " / "))
+popTo(world)
+check(partySpecies() == "PIKACHU,SPEAROW,ABRA" and listingOf(myId, "SPEAROW") == nil,
+  "the SPEAROW stays in the party (" .. partySpecies() .. ")")
+-- a Wonder Trade deposit
+openGts("WONDER TRADE")
+pick("DEPOSIT")
+pick("SPEAROW")
+closeTexts()
+check(said(REFUSED) ~= nil, "a Wonder Trade deposit is refused: " .. table.concat(messages, " / "))
+popTo(world)
+local wt = post({ action = "wonder_trade_status", trainerId = myId }) or {}
+check(partySpecies() == "PIKACHU,SPEAROW,ABRA" and wt.success and wt.mine == nil and wt.poolCount == 0,
+  "nothing went into the pool (" .. tostring(wt.poolCount) .. ")")
+-- a LINK TRADE offer to BUDDY on the map
+waitUntil(function() buddySync(); return exports.netNpcs["777777"] ~= nil end, 10)
+local buddy = exports.netNpcs["777777"]
+check(buddy ~= nil, "BUDDY is on the map")
+world.player.cellX, world.player.cellY, world.player.facing = 5, 6, "down"
+if buddy then buddy.cellX, buddy.cellY = 5, 7 end
+messages = {}
+check(pcall(world.interact, world), "A press facing BUDDY")
+check(top() and top().items and describe(top()):find("LINK TRADE"), "BUDDY's menu offers LINK TRADE: " .. describe(top()))
+pick("LINK TRADE")
+closeTexts()
+check(said(REFUSED) ~= nil, "a LINK TRADE offer is refused: " .. table.concat(messages, " / "))
+check((buddySync() or {}).challenge == nil, "BUDDY receives no offer")
+popTo(world)
+-- a TRADE challenge from BUDDY, accepted: turned down with a DECLINE
+local sent = post({ action = "send_challenge", targetId = myId, fromId = "777777", fromName = "BUDDY",
+  challengeType = "TRADE", roomId = "TRADE_test" })
+check(sent and sent.success, "BUDDY offers a link trade")
+local prompt = waitUntil(function()
+  buddySync()
+  local t = top()
+  return t and t.items and describe(t):find("ACCEPT TRADE", 1, true) ~= nil
+end, 10)
+check(prompt, "the client is asked: " .. describe(top()))
+messages = {}
+if prompt then pick("ACCEPT TRADE") end
+closeTexts()
+check(said(REFUSED) ~= nil, "accepting is refused: " .. table.concat(messages, " / "))
+local answer
+waitUntil(function()
+  answer = (buddySync() or {}).challenge
+  return answer ~= nil
+end, 5)
+check(answer and answer.type == "DECLINE", "BUDDY gets a DECLINE (" .. tostring(answer and answer.type) .. ")")
+post({ action = "clear_challenge", trainerId = "777777" })
+popTo(world)
+frames(20)
+popTo(world)
+check(Modes.tradesLeft(game.save) == 0 and partySpecies() == "PIKACHU,SPEAROW,ABRA", "still 0 trades left")
+dump("refusals")
+
+-- ---- 5. a GTS claim is refused too ----------------------------------------------------------
+local bought = post({ action = "trade", listingId = myListing, buyerId = "777777", buyerName = "BUDDY",
+  sentMon = mon("KADABRA", 20) })
+check(bought and bought.success, "BUDDY buys the RATTATA with a KADABRA (" .. tostring(bought and bought.error) .. ")")
+openGts("MY LISTINGS")
+pick("GET KADABRA")
+closeTexts()
+check(said(REFUSED) ~= nil and tradeAnim == nil, "the claim is refused: " .. table.concat(messages, " / "))
+check(#(((get("/gts/claims?trainerId=" .. myId) or {}).claims) or {}) == 1, "the KADABRA waits on the server")
+check(partySpecies() == "PIKACHU,SPEAROW,ABRA", "the party is unchanged")
+popTo(world)
+
+-- ---- 6. beating Brock opens a new allowance -------------------------------------------------
+game.save.flags.EVENT_BEAT_BROCK = true
+check(Modes.gymsBeaten(game.save) == 1, "Brock beaten")
+check(Modes.tradesLeft(game.save) == 1 and not Modes.tradeRefusal(game.save), "1 trade left again")
+ri = runInfo() or ""
+check(ri:find("TRADES: 1 OF 1", 1, true) ~= nil, "RUN INFO: " .. ri)
+openGts("MY LISTINGS")
+pick("GET KADABRA")
+check(finishTradeAnim(), "the claim goes through now")
+check(partySpecies() == "PIKACHU,SPEAROW,ABRA,KADABRA", "KADABRA joined the party (" .. partySpecies() .. ")")
+check(#(((get("/gts/claims?trainerId=" .. myId) or {}).claims) or {}) == 0, "the claim box is empty")
+check(Modes.tradesLeft(game.save) == 0, "and that trade is used")
+messages = {}
+notes()
+check(said("TRADE USED: 0 LEFT") ~= nil, "the note says so: " .. table.concat(messages, " / "))
+dump("brock")
+
+-- ---- 7. the count survives DISCONNECT and JOIN ------------------------------------------------
+popTo(world)
+messages = {}
+item(startMenu(), "ONLINE").onSelect()
+pick("DISCONNECT")
+closeTexts()
+check(game.save.onlineAccount == nil, "offline save restored")
+check(Modes.tradesLeft(game.save) == nil, "offline: no limit")
+popTo(world)
+frames(60)
+messages = {}
+item(startMenu(), "CONNECT").onSelect()
+pick("^JOIN")
+closeTexts()
+popTo(world)
+check(game.save.player.name == "ASH", "reconnect restores the online character")
+check(said("1 TRADE PER GYM LEADER") ~= nil, "the CONNECTED text names the limit: " .. table.concat(messages, " / "))
+check(Modes.gymsBeaten(game.save) == 1, "Brock is still beaten (" .. Modes.gymsBeaten(game.save) .. ")")
+check(Modes.tradesLeft(game.save) == 0, "and the trade still used (" .. tostring(Modes.tradesLeft(game.save)) .. ")")
+check(partySpecies():find("KADABRA", 1, true) ~= nil, "the KADABRA was saved (" .. partySpecies() .. ")")
+dump("reconnect")
+
+-- ---- 8. no limit: nothing counts ---------------------------------------------------------------
+local synced = Modes.synced
+Modes.synced = function(g, res)
+  if type(res) == "table" and type(res.run) == "table" then res.run.tradesPerGym = 0 end
+  return synced(g, res)
+end
+Modes.rules.tradesPerGym = 0
+check(Modes.tradesLeft(game.save) == nil and not Modes.tradeRefusal(game.save), "tradesPerGym = 0: no limit")
+local free = post({ action = "deposit", trainerId = "777777", trainerName = "BUDDY",
+  offeredMon = mon("ZUBAT", 8), wanted = { "SPEAROW" } })
+check(free and free.success, "BUDDY lists a ZUBAT for a SPEAROW")
+openGts("BROWSE TRADES")
+pick("ALL ACTIVE")
+pick("ZUBAT")
+game.input:press("a")
+top():update(1 / 60)
+pick("GIVE SPEAROW")
+check(finishTradeAnim() and said("GTS TRADE COMPLETE") ~= nil, "the buy goes through")
+check(partySpecies():find("ZUBAT", 1, true) ~= nil and partySpecies():find("SPEAROW", 1, true) == nil,
+  "ZUBAT arrived, SPEAROW left (" .. partySpecies() .. ")")
+messages = {}
+notes()
+check(said("TRADE USED") == nil, "no trade note: " .. table.concat(messages, " / "))
+ri = runInfo() or ""
+check(ri ~= "" and ri:find("TRADES:", 1, true) == nil, "RUN INFO has no TRADES line: " .. ri)
+check(Modes.rules and Modes.rules.tradesPerGym == 0, "the next syncs keep the pin")
+Modes.synced = synced
+local st = Modes.state(game.save)
+check(#(st.graveyard or {}) == 0 and not st.wiped, "nobody was buried along the way")
+dump("unlimited")
+
+print(fails == 0 and "ALL PASS" or (fails .. " FAILED"))
+os.exit(fails == 0 and 0 or 1)

@@ -994,7 +994,7 @@ class CommandLineTests(unittest.TestCase):
 class RulesFileTests(unittest.TestCase):
     def test_defaults_are_all_off(self):
         view = gts_server.rules_view(gts_server.parse_rules(""))
-        self.assertEqual(view, {"nuzlocke": "off", "randomizer": False, "encounters": False,
+        self.assertEqual(view, {"nuzlocke": "off", "tradesPerGym": 0, "randomizer": False, "encounters": False,
                                 "items": False, "badges": False, "starters": False,
                                 "wildLegendaries": 0.0, "trainers": "off",
                                 "sharedKeyItems": False,
@@ -1033,6 +1033,22 @@ class RulesFileTests(unittest.TestCase):
             gts_server.parse_rules("randomize_trainers = some")
         self.assertEqual(gts_server.rules_view(gts_server.parse_rules("randomize_trainers = on"))["trainers"],
                          "off", "only with the randomizer")
+
+    def test_trades_between_gym_leaders(self):
+        def trades(text):
+            return gts_server.rules_view(gts_server.parse_rules("nuzlocke = hardcore\n" + text))["tradesPerGym"]
+        self.assertEqual(trades(""), 0, "unlimited by default")
+        self.assertEqual(trades("nuzlocke_trades = off"), 0)
+        self.assertEqual(trades("nuzlocke_trades = on"), 1)
+        self.assertEqual(trades("nuzlocke_trades = 1"), 1)
+        self.assertEqual(trades("nuzlocke_trades = 3"), 3)
+        for bad in ("0.5", "-1", "100", "lots"):
+            with self.assertRaises(ValueError) as ctx:
+                gts_server.parse_rules("nuzlocke_trades = " + bad)
+            self.assertIn("line 1", str(ctx.exception), bad)
+        plain = gts_server.rules_view(gts_server.parse_rules("nuzlocke_trades = 1"))
+        self.assertEqual(plain["tradesPerGym"], 0, "only with the hardcore Nuzlocke")
+        self.assertFalse(plain["active"], "the limit alone turns no mode on")
 
     def test_host_and_port(self):
         rules = gts_server.parse_rules("host = 127.0.0.1\nport = 8000\n")
@@ -1080,7 +1096,7 @@ class RulesFileTests(unittest.TestCase):
 class GameModeTests(ServerTest):
     generation = 1
     game = "Pokemon Red"
-    rules = {"nuzlocke": "hardcore", "randomizer": True, "seed": 12345}
+    rules = {"nuzlocke": "hardcore", "nuzlocke_trades": 1, "randomizer": True, "seed": 12345}
 
     def find(self, account, item, run_id=1, **extra):
         return self.post("team_found", trainerId=account["trainerId"], token=account["token"],
@@ -1088,9 +1104,9 @@ class GameModeTests(ServerTest):
 
     def test_the_rules_reach_every_client(self):
         rules = self.get("/server/info")["rules"]
-        self.assertEqual((rules["nuzlocke"], rules["randomizer"], rules["items"],
+        self.assertEqual((rules["nuzlocke"], rules["tradesPerGym"], rules["randomizer"], rules["items"],
                           rules["sharedKeyItems"], rules["active"]),
-                         ("hardcore", True, True, True, True))
+                         ("hardcore", 1, True, True, True, True))
         self.assertEqual((rules["runId"], rules["seed"]), (1, 12345))
         red = self.register("RED")
         res = self.sync(red["trainerId"])
@@ -1262,6 +1278,11 @@ class ModesCommandLineTests(unittest.TestCase):
             f.write("nuzlocke = hardcore\nseed = 7\n")
         store = gts_server.GtsStore(data, rules=gts_server.load_rules(config))
         self.assertIn("hardcore Nuzlocke; run 1, seed 7", gts_server.banner("127.0.0.1", 7779, store))
+        with open(config, "w", encoding="utf-8") as f:
+            f.write("nuzlocke = hardcore\nnuzlocke_trades = 1\nseed = 7\n")
+        limited = gts_server.GtsStore(data, rules=gts_server.load_rules(config))
+        self.assertIn("hardcore Nuzlocke, 1 trade between gym leaders; run 1, seed 7",
+                      gts_server.banner("127.0.0.1", 7779, limited))
         store.new_run()
         self.assertEqual(gts_server.GtsStore(data).data["run"]["id"], 2)
         with open(config, "w", encoding="utf-8") as f:

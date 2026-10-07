@@ -201,6 +201,13 @@ return function(env)
     elseif a.kind == "trade" then
       local LT = req("src.core.game3.link.trade")
       local Menu = req("src.ui.game3.link_trade_menu")
+      -- each trade done over this link uses one of the hardcore trade
+      -- limit's (main.lua's GtsUI.tradeUsed, through G3.onLinkTrade)
+      a.counted = a.counted or (a.tradesBefore or 0)
+      while LT and (LT.completed or 0) > a.counted do
+        a.counted = a.counted + 1
+        if G3.onLinkTrade then pcall(G3.onLinkTrade) end
+      end
       -- both cancelled (the trade screen has faded out), or the link dropped
       local left = LT and LT.state == "exit" and not (Menu and Menu.isOpen())
       local dropped = LT and LT.state == "off"

@@ -67,6 +67,7 @@ return function(ctx)
     st.got = st.got or {}
     st.areas = st.areas or {}
     st.graveyard = st.graveyard or {}
+    st.trades = st.trades or {}      -- { [leaders beaten] = Pokémon received }
     return st
   end
   M.state = state
@@ -86,6 +87,18 @@ return function(ctx)
       GYM_FLAG[reward.badge] = reward.flag
     end
   end
+  local function leaderBeaten(flags, badge) return GYM_FLAG[badge] and flags[GYM_FLAG[badge]] end
+
+  -- gym leaders this player has beaten: their defeat flags, never the badges
+  -- held (the randomizer moves the badges)
+  function M.gymsBeaten(save)
+    save = save or Game.save or {}
+    local flags, beaten = save.flags or {}, 0
+    for _, b in ipairs(BADGES) do
+      if leaderBeaten(flags, b) then beaten = beaten + 1 end
+    end
+    return beaten
+  end
 
   -- The randomizer opens the gyms in any order (Blaine can come before Lt.
   -- Surge, the badges from anywhere), so the cap is the highest of: the next
@@ -101,17 +114,62 @@ return function(ctx)
       end
     end
     local caps = GameVersion.isYellow and GameVersion.isYellow() and CAPS.yellow or CAPS.red
-    local held, beaten, weakest = 0, 0, 0
+    local held, beaten, weakest = 0, M.gymsBeaten(save), 0
     for i, b in ipairs(BADGES) do
       if have[b] then held = held + 1 end
-      if GYM_FLAG[b] and flags[GYM_FLAG[b]] then
-        beaten = beaten + 1
-      elseif L.GYMS[b] and L.satisfied(L.expand(L.GYMS[b]), have)
+      if not leaderBeaten(flags, b) and L.GYMS[b] and L.satisfied(L.expand(L.GYMS[b]), have)
           and (weakest == 0 or caps[i] < weakest) then
         weakest = caps[i]
       end
     end
     return math.max(caps[held + 1] or 100, caps[beaten + 1] or 100, weakest)
+  end
+
+  -- Trades (hardcore, tradesPerGym > 0): the Pokémon this player may receive
+  -- online (a GTS buy or claim, a Wonder Trade, a link trade) between two gym
+  -- leaders.  A stretch is the number of leaders beaten, so beating one opens
+  -- a fresh allowance, and a new run (a new state) starts over.  0: no limit.
+  function M.tradeLimit()
+    if not M.hardcore() then return 0 end
+    return math.max(0, tonumber(rules().tradesPerGym) or 0)
+  end
+
+  local function tradesUsed(save)
+    local trades = state(save).trades or {}
+    return tonumber(trades[tostring(M.gymsBeaten(save))]) or 0
+  end
+
+  -- nil: no limit
+  function M.tradesLeft(save)
+    local limit = M.tradeLimit()
+    if limit <= 0 then return nil end
+    return math.max(0, limit - tradesUsed(save))
+  end
+
+  -- nil when a trade may go ahead, else why not
+  function M.tradeRefusal(save)
+    local left = M.tradesLeft(save)
+    if left == nil or left > 0 then return nil end
+    if M.gymsBeaten(save) >= #BADGES then
+      return "HARDCORE NUZLOCKE: NO TRADES LEFT!\fNO GYM LEADERS ARE LEFT TO BEAT."
+    end
+    local limit = M.tradeLimit()
+    return ("HARDCORE NUZLOCKE: %s SINCE YOUR LAST GYM LEADER!\fBEAT THE NEXT ONE TO TRADE AGAIN.")
+      :format(limit > 1 and ("YOU ALREADY MADE YOUR %d TRADES"):format(limit) or "YOU ALREADY TRADED")
+  end
+
+  -- a Pokémon received: counted in this stretch.  Returns the trades left.
+  function M.tradeDone(save)
+    if M.tradeLimit() <= 0 then return nil end
+    save = save or Game.save
+    if type(save) ~= "table" then return nil end
+    local st, key = state(save), tostring(M.gymsBeaten(save))
+    st.trades[key] = (tonumber(st.trades[key]) or 0) + 1
+    ctx.writeOnlineSave(save)
+    local left = M.tradesLeft(save)
+    note((M.gymsBeaten(save) >= #BADGES and "TRADE USED: %d LEFT."
+          or "TRADE USED: %d LEFT UNTIL THE NEXT GYM LEADER."):format(left))
+    return left
   end
 
   -- ---- the randomized world: built from the seed, put back when it ends ---------
@@ -462,6 +520,11 @@ return function(ctx)
       elseif not had and save.inventory and save.inventory[badge] and M.isShared(badge) then
         report(badge)
       end
+      -- a new stretch: the trade allowance starts over
+      local limit = M.tradeLimit()
+      if ok and limit > 0 then
+        note(("GYM LEADER BEATEN! YOU MAY TRADE %d MORE TIME%s."):format(limit, limit == 1 and "" or "S"))
+      end
     end
     if not ok then error(err, 0) end
   end
@@ -730,7 +793,11 @@ return function(ctx)
     local r = M.rules
     if not (r and r.active) then return "" end
     local parts = {}
-    if r.nuzlocke == "hardcore" then parts[#parts + 1] = "HARDCORE NUZLOCKE" end
+    if r.nuzlocke == "hardcore" then
+      local n = tonumber(r.tradesPerGym) or 0
+      parts[#parts + 1] = "HARDCORE NUZLOCKE"
+        .. (n > 0 and (" (%d TRADE%s PER GYM LEADER)"):format(n, n == 1 and "" or "S") or "")
+    end
     if r.randomizer then parts[#parts + 1] = "RANDOMIZER" end
     if r.multiworld then
       parts[#parts + 1] = ("MULTIWORLD (%s WORLD %s OF %d)"):format("YOU ARE",
@@ -746,6 +813,11 @@ return function(ctx)
     local lines = { M.describe() }
     if M.hardcore() then
       lines[#lines + 1] = ("LEVEL CAP: %d."):format(M.levelCap(save))
+      local limit = M.tradeLimit()
+      if limit > 0 then
+        lines[#lines + 1] = (M.gymsBeaten(save) >= #BADGES and "TRADES: %d OF %d LEFT."
+          or "TRADES: %d OF %d LEFT UNTIL THE NEXT GYM LEADER."):format(M.tradesLeft(save), limit)
+      end
       local dead = {}
       for _, g in ipairs(st.graveyard) do dead[#dead + 1] = tostring(g.name) end
       lines[#lines + 1] = #dead > 0 and ("FALLEN: " .. table.concat(dead, ", ") .. ".")
