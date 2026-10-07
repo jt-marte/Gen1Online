@@ -826,14 +826,19 @@ off the open internet.
     (`st.hadBalls`, sticky; a save with any area used counts as having had
     them); after that an empty bag still uses an area up. Pokémon from the
     GTS, Wonder Trade and link trades skip the catch rules (a design call).
-    With `nuzlocke_trades = N` a player may receive N Pokémon through them
-    per stretch between gym leaders beaten (`M.gymsBeaten`, the leader flags,
-    not badges); `st.trades[beaten] = used` in the mode state. The clients
-    gate GTS buy/claim, Wonder claim and link trades (`Modes.tradeRefusal`),
-    refuse deposits while used up, and count in
-    `performTradeWithAnimationAndEvolution` (`Modes.tradeDone`), on
-    `trade.completed` while a Gen 1 cable trade is live (then `exitWith` at
-    0 left), and per `LT.completed` step in `gen3/link.lua`.
+    With `nuzlocke_trades = N` a player gets N trades per stretch between
+    gym leaders beaten (`M.gymsBeaten`, the leader flags, not badges);
+    `st.trades[beaten] = used` and `st.reserved[id] = stretch` in the mode
+    state. A GTS buy and each link trade count when done
+    (`Modes.tradeDone`); a GTS or Wonder Trade deposit counts when it goes in
+    (`Modes.tradeReserve`, refused at 0 left) and a withdraw in the same
+    stretch gives it back (`Modes.tradeRelease`); claims never count and are
+    never refused, so nothing gets stuck in a claim box or the pool. Link
+    trades: refused on the offer and the accept (`Modes.tradeRefusal`); a
+    Gen 1 cable trade counts on `trade.completed` (the mod's room or the
+    game's own Cable Club) and at 0 left the link is closed after that trade
+    (a `bye` to the partner); FireRed counts per `LT.completed` step in
+    `gen3/link.lua` and refuses in `canTradeSelectedMon`.
   - The hardcore rules hook `item.use` (the bag), `ItemEffects.needsTarget`
     (a refused item gets no target picker), `BattleState.safariAction` (the
     Safari Zone's own BALL), `battle.style`, `exp.gain`, and the

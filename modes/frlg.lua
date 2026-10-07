@@ -795,15 +795,46 @@ return function(ctx)
       :format(limit > 1 and ("YOU ALREADY MADE YOUR %d TRADES"):format(limit) or "YOU ALREADY TRADED")
   end
 
-  -- a Pokémon received: counted in this stretch.  Returns the trades left.
-  function M.tradeDone()
+  local function leftText(left)
+    return (M.gymsBeaten() >= #LEADERS and "%d LEFT." or "%d LEFT UNTIL THE NEXT GYM LEADER."):format(left)
+  end
+
+  -- A trade made: counted in this stretch.  Returns the trades left.  `what`
+  -- names it for the note (a GTS buy, a link trade...).  The first argument
+  -- is Gen 1's save (one interface); the state here is the session's.
+  function M.tradeDone(_, what)
     if M.tradeLimit() <= 0 or not session() then return nil end
     local st, key = state(), tostring(M.gymsBeaten())
     st.trades[key] = (tonumber(st.trades[key]) or 0) + 1
     ctx.writeOnlineSave()
     local left = M.tradesLeft()
-    note((M.gymsBeaten() >= #LEADERS and "TRADE USED: %d LEFT."
-          or "TRADE USED: %d LEFT UNTIL THE NEXT GYM LEADER."):format(left))
+    note(("%s USED A TRADE: %s"):format(what or "THAT", leftText(left)))
+    return left
+  end
+
+  -- A GTS or Wonder Trade deposit is the trade: it uses the allowance when it
+  -- goes in, so whatever comes back for it is always the player's to claim
+  -- (nothing is ever stuck in a claim box or the pool).  Taking the deposit
+  -- back in the same stretch gives the trade back.
+  function M.tradeReserve(_, id, what)
+    local left = M.tradeDone(nil, what)
+    if left == nil then return nil end
+    local st = state()
+    st.reserved = st.reserved or {}
+    st.reserved[tostring(id)] = tostring(M.gymsBeaten())
+    return left
+  end
+
+  function M.tradeRelease(_, id)
+    if M.tradeLimit() <= 0 or not session() then return nil end
+    local st, key = state(), tostring(M.gymsBeaten())
+    local stretch = st.reserved and st.reserved[tostring(id)]
+    if st.reserved then st.reserved[tostring(id)] = nil end
+    if stretch ~= key then return M.tradesLeft() end   -- an older stretch's trade: spent
+    st.trades[key] = math.max(0, (tonumber(st.trades[key]) or 0) - 1)
+    ctx.writeOnlineSave()
+    local left = M.tradesLeft()
+    note("TRADE TAKEN BACK: " .. leftText(left))
     return left
   end
 
