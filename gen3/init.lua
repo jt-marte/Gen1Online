@@ -725,6 +725,14 @@ return function(env)
       local origCan = NTrade.canTradeSelectedMon
       NTrade.canTradeSelectedMon = function(party, monIdx, opts, ...)
         if not env.online() then return origCan(party, monIdx, opts, ...) end
+        -- the hardcore Nuzlocke's trade limit (main.lua sets G3.tradeRefusal):
+        -- the screen says the Pokémon can't be traded now, and the reason
+        -- shows once the link ends (G3.tradeNote, read by main.lua)
+        local okR, why = pcall(function() return G3.tradeRefusal and G3.tradeRefusal() end)
+        if okR and why then
+          G3.tradeNote = why
+          return NTrade.CANT_TRADE_INVALID_MON or 4
+        end
         local o = {}
         for k, v in pairs(type(opts) == "table" and opts or {}) do o[k] = v end
         o.nationalDex = true

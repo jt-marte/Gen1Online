@@ -148,7 +148,7 @@
   -- The game modes' rules this client plays (modes/): sent with every POST.
   -- A server running a mode turns away clients below its MODES_VERSION, so
   -- nobody plays an old copy of the Nuzlocke rules without knowing.
-  GtsUI.MODES_VERSION = 4
+  GtsUI.MODES_VERSION = 5
 
 
   local Game, Input, OverworldState, BattleState = require("src.core.Game"), require("src.core.Input"), require("src.world.OverworldController"), require("src.battle.BattleState")
@@ -2217,6 +2217,17 @@
                           game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
                           return
                         end
+                        -- the hardcore trade limit: turned down, as DECLINE does
+                        if GtsUI.tradeRefusal(game) then
+                          gtsApiPost({
+                            action = "send_challenge",
+                            targetId = challengerId,
+                            fromId = myId,
+                            fromName = myName,
+                            challengeType = "DECLINE"
+                          }, 0.5)
+                          return
+                        end
                         gtsApiPost({
                           action = "send_challenge",
                           targetId = challengerId,
@@ -2896,6 +2907,10 @@
           game.stack:push(TextBox.new(game, wrapText(why == "cancelled" and "THE LINK WAS CANCELED."
             or string.format("COULDN'T LINK WITH %s! (%s)", partnerName or "THE OTHER TRAINER", tostring(why or "?")))))
         end
+        -- a trade the hardcore limit refused on the Trade Center screen
+        local note = GtsUI.G3.tradeNote
+        GtsUI.G3.tradeNote = nil
+        if note then game.stack:push(TextBox.new(game, wrapText(note))) end
       end)
       return
     end
@@ -2922,6 +2937,8 @@
     linkState.verdict = "full"
     linkState:startMode("trade", isHostPlayer)
 
+    -- only this LinkState's trades count toward the hardcore trade limit
+    GtsUI.linkTradeLive = linkState
     game.stack:push(linkState)
   end
 
@@ -4141,7 +4158,7 @@
     if GtsUI.G3 then
       -- FireRed's in-game trade scene, then a trade evolution
       local ok = GtsUI.G3.receive(game, sentMon, receivedPacked, otName,
-        function() performForcedSave(game) end,
+        function() GtsUI.tradeUsed(game) performForcedSave(game) end,
         function(receivedMon)
           performForcedSave(game)
           if addMmoXp then addMmoXp(game, "gts_trade", 100) end
@@ -4165,6 +4182,8 @@
 
     -- Add to player party / boxes
     local whereTo, slot = GtsUI.addPlayerMon(game, receivedMon)
+    -- one trade used of the hardcore limit, once the Pokémon is here
+    if whereTo then GtsUI.tradeUsed(game) end
 
     -- Update Pokédex seen & caught flags
     if game.save then
@@ -4353,6 +4372,7 @@
                   game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKéMON IN PARTY TO TRADE FROM PARTY!")))
                   return
                 end
+                if GtsUI.tradeRefusal(game) then return end
 
                 -- Remove chosen mon
                 local sentMon = GtsUI.removePlayerMon(game, choice)
@@ -4638,6 +4658,7 @@
     end
 
     local function handleDepositSelection(chosenItem)
+      if GtsUI.tradeRefusal(game) then return end
       if chosenItem.source == "party" and #game.save.party < 2 then
         game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKéMON IN PARTY TO DEPOSIT FROM PARTY!")))
         return
@@ -4830,6 +4851,7 @@
             game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
             return
           end
+          if GtsUI.tradeRefusal(game) then return end
           local res = gtsApiPost({ action = "claim", trainerId = trainerId, index = idx - 1, claimId = claim.id }, 2.0)
           if not (res and res.success and res.claimed and res.claimed.mon) then
             game.stack:push(TextBox.new(game, wrapText(res
@@ -4892,6 +4914,7 @@
             game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
             return
           end
+          if GtsUI.tradeRefusal(game) then return end
           local res = gtsApiPost({ action = "wonder_trade_claim", trainerId = trainerId }, 2.0)
           local got = res and res.success and res.claim
           if not (got and got.mon) then
@@ -4964,6 +4987,7 @@
                   game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 2 POKéMON IN PARTY TO DEPOSIT FROM PARTY!")))
                   return
                 end
+                if GtsUI.tradeRefusal(game) then return end
 
                 performForcedSave(game)
                 local depositMon = GtsUI.removePlayerMon(game, choice)
@@ -6367,6 +6391,68 @@
     if not okModes then diag("game modes unavailable: %s", tostring(err)) end
     if mod and mod.exports then mod.exports.modes = GtsUI.Modes end
   end
+
+  -- The hardcore Nuzlocke's trade limit (modes/).  Every way a Pokémon comes
+  -- in by trade asks first, before anything leaves or a request is posted,
+  -- and counts once the Pokémon is here (GtsUI.tradeUsed).  Gifts and the
+  -- in-game trades never count.  TextBox and wrapText are FireRed's there.
+  function GtsUI.tradeRefusal(game)
+    local M = GtsUI.Modes
+    if not (M and M.tradeRefusal and game and game.save) then return false end
+    local ok, why = pcall(M.tradeRefusal, game.save)
+    if not ok then diag("trade limit check failed: %s", tostring(why)) return false end
+    if not why then return false end
+    game.stack:push(TextBox.new(game, wrapText(why)))
+    return true
+  end
+  function GtsUI.tradeUsed(game)
+    local M = GtsUI.Modes
+    if not (M and M.tradeDone and game and game.save) then return end
+    local ok, err = pcall(M.tradeDone, game.save)
+    if not ok then diag("trade count failed: %s", tostring(err)) end
+  end
+  -- Gen 1 cable trades over the server (startLinkTrade sets linkTradeLive).
+  -- trade.completed fires inside the trade's commit with the LinkState still
+  -- on top: when that was the last trade, its link is closed, so the
+  -- LinkState ends itself after this trade's scene instead of starting
+  -- another round, and the reason shows once the player is on the field.
+  function GtsUI.linkTradeCompleted(game)
+    local ls = GtsUI.linkTradeLive
+    if not ls or GtsUI.G3 or isGen2 or not (game and game.save) then return end
+    GtsUI.tradeUsed(game)
+    local M = GtsUI.Modes
+    local okL, left = pcall(function() return M and M.tradesLeft and M.tradesLeft(game.save) end)
+    if not (okL and tonumber(left) and tonumber(left) <= 0) then return end
+    if type(ls) == "table" and ls.net and ls.net.close then pcall(ls.net.close, ls.net) end
+    local okW, why = pcall(function() return M.tradeRefusal and M.tradeRefusal(game.save) end)
+    GtsUI.linkTradeNote = okW and why or nil
+  end
+  -- every frame while one is pending: forget the cable trade once its
+  -- LinkState is off the stack, then show the note on the field
+  function GtsUI.linkTradeTick(game)
+    local states = game and game.stack and game.stack.states
+    if type(states) ~= "table" then return end
+    if GtsUI.linkTradeLive then
+      for _, s in ipairs(states) do
+        if s == GtsUI.linkTradeLive then return end
+      end
+      GtsUI.linkTradeLive = nil
+    end
+    if GtsUI.linkTradeNote and not isPlayerBusy(game) then
+      local note = GtsUI.linkTradeNote
+      GtsUI.linkTradeNote = nil
+      game.stack:push(TextBox.new(game, wrapText(note)))
+    end
+  end
+  -- FireRed/LeafGreen's link trades (gen3/link.lua counts them, and the
+  -- Trade Center screen asks before an offer: gen3/init.lua)
+  if GtsUI.G3 then
+    GtsUI.G3.onLinkTrade = function() GtsUI.tradeUsed(GtsUI.G3.game) end
+    GtsUI.G3.tradeRefusal = function()
+      local M, save = GtsUI.Modes, GtsUI.G3.game.save
+      return M and M.tradeRefusal and save and M.tradeRefusal(save) or nil
+    end
+  end
   -- the menus' entry points and the FireRed layer, for the dev drivers
   if mod and mod.exports then mod.exports.ui, mod.exports.gen3 = GtsUI, GtsUI.G3 end
 
@@ -6594,6 +6680,8 @@ return function(mod)
 
   -- 4. Trades & Pokémon Received
   onEvent("trade.completed", function(payload)
+    -- a cable trade over the server uses one of the hardcore limit's trades
+    GtsUI.linkTradeCompleted(Game)
     if Game and Game.save then
       performForcedSave(Game)
       syncLocalProfile(Game, 0)
@@ -6915,6 +7003,7 @@ return function(mod)
                 Game.stack:push(TextBox.new(Game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
                 return
               end
+              if GtsUI.tradeRefusal(Game) then return end
               local myId, myName = getTrainerInfo(Game.save)
               local roomId = "TRADE_"
                 .. tostring(math.min(tonumber(myId) or 0, tonumber(targetTid) or 0))
@@ -7196,6 +7285,7 @@ return function(mod)
                   curGame.stack:push(TextBox.new(curGame, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
                   return
                 end
+                if GtsUI.tradeRefusal(curGame) then return end
                 local myId, myName = getTrainerInfo(curGame.save)
                 local roomId = "TRADE_"
                   .. tostring(math.min(tonumber(myId) or 0, tonumber(targetTid) or 0))
@@ -7323,6 +7413,8 @@ return function(mod)
 
     -- Continuous frame service for background jobs (sync, placement, and battle messages)
     Jobs.step(game, dt)
+    -- a cable trade's end, and the trade limit's note (GtsUI.linkTradeTick)
+    if GtsUI.linkTradeLive or GtsUI.linkTradeNote then pcall(GtsUI.linkTradeTick, game) end
     -- Advance the non-blocking sync client every frame (non-blocking and
     -- crash-proof) so it can complete requests and recover from stalls.
     asyncPoll()
