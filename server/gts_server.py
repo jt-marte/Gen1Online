@@ -127,6 +127,7 @@ RULE_DEFAULTS = {
     "host": "0.0.0.0",            # where the server listens (not a game mode)
     "port": DEFAULT_PORT,
     "nuzlocke": "off",            # off | hardcore
+    "nuzlocke_trades": 0,         # hardcore: Pokémon received through trades between gym leaders (0 = unlimited)
     "randomizer": False,
     "randomize_encounters": True,
     "randomize_items": True,
@@ -140,13 +141,14 @@ RULE_DEFAULTS = {
     "seed": None,
 }
 NUZLOCKE_MODES = ("off", "hardcore")
+TRADES_MAX = 99                 # nuzlocke_trades: trades allowed between two gym leaders
 TRAINER_MODES = ("off", "gyms", "on")   # gyms: gym leaders, their gyms, Elite Four, Champion
 # The game modes' rules a client plays (it sends modesVersion with every
 # POST).  While a mode is on, a Gen 1 or FireRed/LeafGreen client below this
 # is turned away with VERSION_MISMATCH, so nobody plays an old copy of the
 # rules (2: the strict first encounter, no dupes clause; 3: wild legendaries;
-# 4: randomized trainers).
-MODES_VERSION = 4
+# 4: randomized trainers; 5: trades limited between gym leaders).
+MODES_VERSION = 5
 MODES_GENERATIONS = (1, 3)
 MAX_WORLDS = 8
 SEED_MAX = 2147483646           # the client's Park-Miller generator takes 1..2^31-2
@@ -267,6 +269,8 @@ def parse_rules(text):
                 if value not in NUZLOCKE_MODES:
                     raise ValueError("nuzlocke is off or hardcore, not %r" % value)
                 rules[key] = value
+            elif key == "nuzlocke_trades":
+                rules[key] = parse_trades(value)
             elif key == "seed":
                 if value:
                     seed = int(value)
@@ -320,6 +324,23 @@ def parse_chance(value):
     return chance
 
 
+def parse_trades(value):
+    """nuzlocke_trades: off (unlimited), on (1) or how many Pokémon a player
+    may receive through trades between two gym leaders."""
+    word = value.strip().lower()
+    if word in ("", "off", "no", "false", "0"):
+        return 0
+    if word in ("on", "yes", "true"):
+        return 1
+    try:
+        count = int(word)
+    except ValueError:
+        count = -1
+    if not 1 <= count <= TRADES_MAX:
+        raise ValueError("nuzlocke_trades is off, on, or a number from 1 to %d" % TRADES_MAX)
+    return count
+
+
 def listen_address(cli_host, cli_port, rules, environ=None):
     """Where to listen: a command-line flag wins, then $PORT, then
     server_config.txt's host and port, then 0.0.0.0:7779."""
@@ -345,8 +366,12 @@ def rules_view(rules):
     shared = rules.get("shared_key_items")
     if shared == "auto":
         shared = rando
+    hardcore = (rules.get("nuzlocke") or "off") == "hardcore"
     view = {
         "nuzlocke": rules.get("nuzlocke") or "off",
+        # Pokémon a player may receive through the GTS, Wonder Trade or a link
+        # trade between two gym leaders; 0 = no limit.  Each client enforces it.
+        "tradesPerGym": int(rules.get("nuzlocke_trades") or 0) if hardcore else 0,
         "randomizer": rando,
         "encounters": rando and bool(rules.get("randomize_encounters")),
         "items": rando and bool(rules.get("randomize_items")),
@@ -1536,6 +1561,9 @@ def modes_line(store):
     parts = []
     if view["nuzlocke"] != "off":
         parts.append("%s Nuzlocke" % view["nuzlocke"])
+        if view["tradesPerGym"]:
+            parts.append("%d trade%s between gym leaders" % (view["tradesPerGym"],
+                                                             "" if view["tradesPerGym"] == 1 else "s"))
     if view["randomizer"]:
         shuffled = [name for name in ("encounters", "items", "badges", "starters") if view[name]]
         parts.append("randomizer (%s)" % (", ".join(shuffled) or "nothing shuffled"))

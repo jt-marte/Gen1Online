@@ -33,6 +33,15 @@ port = 7779
 # nuzlocke = off | hardcore
 nuzlocke = off
 
+# Trades in the hardcore Nuzlocke: how many Pokemon each player may receive
+# through the GTS, Wonder Trade or a link trade between two gym leaders.
+# With 1, you may trade once; beating a gym leader lets you trade once more,
+# until the next leader (your own gym leaders beaten, not the team's).  A
+# GTS or Wonder Trade deposit is refused while your trades are used up; a
+# Pokemon that reaches your claim box then waits for your next gym leader.
+# nuzlocke_trades = off (no limit) | 1 | 2 | ...
+nuzlocke_trades = off
+
 # Co-op randomizer: wild Pokemon, items and gym badges are shuffled.
 # A gym leader might hand over a POTION while the BOULDERBADGE lies on the
 # floor somewhere or comes from an NPC.  Placement follows the game's

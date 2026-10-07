@@ -6,6 +6,14 @@ A server of our own, built for playing with friends.
 
 ### Added
 
+- **Trades limited between gym leaders** in the hardcore Nuzlocke
+  (`nuzlocke_trades = off | 1 | 2 ...`, off by default): each player may
+  receive that many Pokémon through the GTS, Wonder Trade or a link trade
+  between two gym leaders they beat; beating a leader opens the next
+  allowance. A GTS or Wonder Trade deposit is refused while the trades are
+  used up, a claim waits in the box until the next leader, a link trade is
+  refused on the offer and ends after the last allowed trade. RUN INFO shows
+  the trades left. The rules version goes to 5.
 - `server/server_config.txt` also sets where the server listens: `host`
   and `port` (command-line flags win, then `$PORT`). The README is
   shorter.

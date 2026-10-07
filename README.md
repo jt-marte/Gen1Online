@@ -42,6 +42,7 @@ Red/Blue/Yellow and FireRed/LeafGreen servers; everyone on the server plays the 
 host = 0.0.0.0             # 127.0.0.1 = this PC only
 port = 7779
 nuzlocke = hardcore        # off | hardcore
+nuzlocke_trades = 1        # off | how many trades between gym leaders
 randomizer = on            # off | on
 randomize_encounters = on
 randomize_items = on
@@ -55,7 +56,7 @@ players = 2                # multiworld only
 seed =                     # a number replays the same world
 ```
 
-- **Hardcore Nuzlocke**: only the first wild Pokémon you meet in each area can be caught (encounters before your first Poké Balls don't count), fainted Pokémon are gone for good, no items in battle, SET style, and a level cap at the next gym leader's ace. If any player's whole party faints, the run ends for everyone and a new world begins.
+- **Hardcore Nuzlocke**: only the first wild Pokémon you meet in each area can be caught (encounters before your first Poké Balls don't count), fainted Pokémon are gone for good, no items in battle, SET style, and a level cap at the next gym leader's ace. If any player's whole party faints, the run ends for everyone and a new world begins. With `nuzlocke_trades = 1`, each player may receive one Pokémon through the GTS, Wonder Trade or a link trade between two gym leaders: beat a leader and you may trade once more.
 - **Randomizer**: wild Pokémon (swapped for ones of similar strength; on FireRed/LeafGreen any of the 386), items, gym badges and Oak's starters, with progression logic so every run can be finished. **Trainers**: random teams of the same strength; gym leaders and the Elite Four keep their type. **Wild legendaries**: a small chance per wild encounter.
 - **Shared key items**: key items, HMs and badges belong to the team; whatever one player finds, everyone gets.
 - **Multiworld**: each player gets their own world, and every key item exists in only one of them.
