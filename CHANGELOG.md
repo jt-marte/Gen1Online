@@ -4,6 +4,20 @@
 
 A server of our own, built for playing with friends.
 
+### Fixed
+
+- Server: reconnecting within 30 s of a crash no longer gets "ACCOUNT
+  ALREADY ACTIVE" on every try (the login sync, which carries no session,
+  used to refresh the dead session's lock). Changing a mode or the seed in
+  `server_config.txt` now starts a new run at the next server start (host
+  and port don't count; a data file from before keeps its run). A failed
+  write of the data file (Defender, OneDrive, a full disk) no longer turns
+  an already-made trade into a `SERVER_ERROR` that duplicates the sent
+  Pokémon: the write is retried and the action answers. A team wipe ends
+  the run even when the console can't print the player's name. A config
+  file saved with a UTF-8 BOM parses. `--new-run` with the port already
+  taken no longer rewrites the data file.
+
 ### Added
 
 - **Trades limited between gym leaders** in the hardcore Nuzlocke

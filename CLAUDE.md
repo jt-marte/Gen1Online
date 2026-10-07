@@ -539,7 +539,11 @@ Game modes (Gen 1 and FireRed/LeafGreen; `server/server_config.txt`,
   `Modes.precheck`, before the offline save is touched) and answers
   `{world: null, free}`. `players = 1` never refuses.
 - Persisted: `run {id, seed, started, worlds {tid: world}, fingerprint,
-  gameName}` (a new run keeps the worlds) and `team {items, rev}`. The client
+  gameName, signature}` (a new run keeps the worlds; `signature` is the
+  rules view plus the configured seed the run started under: a server
+  start whose config differs begins the next run with the configured seed,
+  a key the stored signature lacks counts as its default, and a data file
+  without one adopts the current rules) and `team {items, rev}`. The client
   stamps its online save with `g1oModes.run`; a save from another run is
   archived (`gen1online_online_save_<game>_run<N>_backup.lua`) and replaced by
   a new game in the bedroom with the same `onlineAccount`.

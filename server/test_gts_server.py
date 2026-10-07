@@ -17,6 +17,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from urllib.parse import quote
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -468,6 +469,18 @@ class PresenceTests(ServerTest):
         self.assertTrue(self.sync("100001", session="second")["success"], "crashed client reconnects")
         self.assertError(self.sync("100001", session="first"), "ALREADY_LOGGED_IN")
 
+    def test_a_sessionless_sync_never_revives_a_dead_session(self):
+        # the client crashed at t=0; it logs in again at t=15 (its first sync
+        # carries no sessionId), then syncs with its new session
+        self.sync("100001", session="crashed")
+        self.clock.advance(15)
+        self.assertTrue(self.post("sync_pos", trainerId="100001", map="X")["success"])
+        self.clock.advance(0.5)
+        self.assertTrue(self.sync("100001", session="new")["success"],
+                        "the login sync must not restart the dead session's lock")
+        # the new session is the live one now
+        self.assertError(self.sync("100001", session="crashed"), "ALREADY_LOGGED_IN")
+
     def test_players_drop_after_30s_and_on_logout(self):
         self.sync("100001", session="a")
         self.sync("100002", session="b")
@@ -835,6 +848,45 @@ class PersistenceTests(ServerTest):
         self.assertEqual(len(data["accounts"]), 1)
         self.assertEqual([n for n in os.listdir(self.dir) if n != "data.json"], [])
 
+    def test_a_failed_save_never_fails_the_action(self):
+        seller, buyer = self.register("SELLER"), self.register("BUYER")
+        listing = self.post("deposit", trainerId=seller["trainerId"], trainerName="SELLER",
+                            offeredMon=mon("ABRA"), wanted=[])["listing"]
+        real_replace = os.replace
+        calls = []
+
+        def locked_once(src, dst):      # Defender or OneDrive holding the file a moment
+            calls.append(dst)
+            if len(calls) == 1:
+                raise PermissionError(13, "Access is denied")
+            return real_replace(src, dst)
+
+        with mock.patch.object(gts_server.os, "replace", side_effect=locked_once):
+            res = self.post("trade", listingId=listing["id"], buyerId=buyer["trainerId"],
+                            buyerName="BUYER", sentMon=mon("ZUBAT"))
+        self.assertTrue(res["success"], res)
+        self.assertEqual(len(calls), 2, "the rename is tried again")
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["listings"], {})
+
+        # a file that stays locked: the action still answers success, the
+        # server logs it, and the next save writes everything
+        listing = self.post("deposit", trainerId=seller["trainerId"], trainerName="SELLER",
+                            offeredMon=mon("GASTLY"), wanted=[])["listing"]
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), \
+                mock.patch.object(gts_server.os, "replace", side_effect=PermissionError(13, "denied")):
+            res = self.post("trade", listingId=listing["id"], buyerId=buyer["trainerId"],
+                            buyerName="BUYER", sentMon=mon("ZUBAT"))
+        self.assertTrue(res["success"], res)
+        self.assertIn("could not save", err.getvalue())
+        with open(self.path, encoding="utf-8") as f:
+            self.assertIn(listing["id"], json.load(f)["listings"], "not written yet")
+        self.post("send_chat", trainerId=buyer["trainerId"], name="BUYER", text="hi", scope="global")
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["listings"], {})
+        self.assertEqual([n for n in os.listdir(self.dir) if n != "data.json"], [], "no tmp files left")
+
     def test_a_corrupt_file_is_moved_aside(self):
         self.stop()
         with open(self.path, "w") as f:
@@ -1006,6 +1058,18 @@ class RulesFileTests(unittest.TestCase):
         self.assertEqual(gts_server.load_rules(os.path.join(tempfile.mkdtemp(), "none.txt")),
                          gts_server.RULE_DEFAULTS)
 
+    def test_a_file_saved_with_a_bom_parses(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_config.txt")
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        bom = os.path.join(tempfile.mkdtemp(), "bom.txt")
+        with open(bom, "w", encoding="utf-8-sig") as f:     # Notepad's "UTF-8 with BOM"
+            f.write(text)
+        self.assertEqual(gts_server.load_rules(bom), gts_server.RULE_DEFAULTS)
+        with open(bom, "w", encoding="utf-8-sig") as f:
+            f.write("nuzlocke = hardcore\n")
+        self.assertEqual(gts_server.load_rules(bom)["nuzlocke"], "hardcore")
+
     def test_a_full_file(self):
         rules = gts_server.parse_rules(
             "# comment\nnuzlocke = Hardcore\nrandomizer=on  # inline\n"
@@ -1172,6 +1236,30 @@ class GameModeTests(ServerTest):
         self.assertEqual(self.get("/server/info")["rules"]["runId"], 2)
         self.assertEqual(self.get("/server/info")["rules"]["seed"], run2["seed"])
 
+    def test_a_console_that_cannot_print_the_name_never_stalls_a_wipe(self):
+        red = self.register("RED")
+
+        def cp1252_console(text):
+            raise UnicodeEncodeError("charmap", text, 0, 1, "character maps to <undefined>")
+
+        self.store.announce = cp1252_console
+        res = self.post("run_wipe", trainerId=red["trainerId"], token=red["token"], runId=1)
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["run"]["runId"], 2)
+        again = self.post("run_wipe", trainerId=red["trainerId"], token=red["token"], runId=1)
+        self.assertEqual(again["run"]["runId"], 2)
+        wiped = [h for h in self.get("/gts/browse")["history"] if "WIPED OUT" in h["text"]]
+        self.assertEqual(len(wiped), 1, "one history line per run")
+
+    def test_the_default_announce_survives_any_console(self):
+        for encoding in ("cp1252", "ascii", "utf-8"):
+            raw = io.BytesIO()
+            console = io.TextIOWrapper(raw, encoding=encoding, errors="strict")
+            with contextlib.redirect_stdout(console):
+                gts_server.announce_line("Run 1 ended: NIDORAN\u2642's party \udcff wiped out.")
+            console.flush()
+            self.assertIn(b"Run 1 ended: NIDORAN", raw.getvalue())
+
     def test_a_fixed_seed_gives_every_run_its_own_repeatable_world(self):
         seeds = [self.store._run_seed(n) for n in (1, 2, 3)]
         self.assertEqual(seeds[0], 12345)
@@ -1280,11 +1368,13 @@ class ModesCommandLineTests(unittest.TestCase):
         self.assertIn("hardcore Nuzlocke; run 1, seed 7", gts_server.banner("127.0.0.1", 7779, store))
         with open(config, "w", encoding="utf-8") as f:
             f.write("nuzlocke = hardcore\nnuzlocke_trades = 1\nseed = 7\n")
-        limited = gts_server.GtsStore(data, rules=gts_server.load_rules(config))
+        # (its own data file: a changed config starts a new run, see RunSignatureTests)
+        limited = gts_server.GtsStore(os.path.join(folder, "d2.json"),
+                                      rules=gts_server.load_rules(config))
         self.assertIn("hardcore Nuzlocke, 1 trade between gym leaders; run 1, seed 7",
                       gts_server.banner("127.0.0.1", 7779, limited))
         store.new_run()
-        self.assertEqual(gts_server.GtsStore(data).data["run"]["id"], 2)
+        self.assertEqual(gts_server.GtsStore(data, rules=store.rules).data["run"]["id"], 2)
         with open(config, "w", encoding="utf-8") as f:
             f.write("nuzlocke = sometimes\n")
         err = io.StringIO()
@@ -1292,6 +1382,85 @@ class ModesCommandLineTests(unittest.TestCase):
             self.assertEqual(gts_server.main(["--data", data, "--config", config, "--port", "0"]), 1)
         self.assertIn("line 1", err.getvalue())
 
+
+    def test_new_run_waits_for_the_port(self):
+        folder = tempfile.mkdtemp()
+        data = os.path.join(folder, "d.json")
+        gts_server.GtsStore(data)
+        busy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            busy.bind(("127.0.0.1", 0))
+            busy.listen(1)
+            port = busy.getsockname()[1]
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                self.assertEqual(gts_server.main(
+                    ["--new-run", "--data", data, "--host", "127.0.0.1", "--port", str(port),
+                     "--config", os.path.join(folder, "none.txt")]), 1)
+        finally:
+            busy.close()
+        self.assertIn("already running", err.getvalue())
+        with open(data, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["run"]["id"], 1, "the running server's run is untouched")
+
+
+class RunSignatureTests(unittest.TestCase):
+    """Editing server_config.txt's modes or seed starts a new run."""
+
+    def setUp(self):
+        self.folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.folder, True)
+        self.path = os.path.join(self.folder, "d.json")
+
+    def run_of(self, rules=None):
+        return gts_server.GtsStore(self.path, clock=FakeClock(), rules=rules).data["run"]
+
+    def test_a_changed_config_starts_a_new_run(self):
+        first = self.run_of()
+        self.assertEqual(first["id"], 1)
+        modes = {"randomizer": True, "seed": 4242}
+        run = self.run_of(modes)
+        self.assertEqual((run["id"], run["seed"]), (2, 4242), "the configured seed, as set")
+        run = self.run_of(dict(modes))
+        self.assertEqual((run["id"], run["seed"]), (2, 4242), "the same rules keep the run")
+        run = self.run_of(dict(modes, host="127.0.0.1", port=8000))
+        self.assertEqual(run["id"], 2, "where it listens is not a rule")
+        store = gts_server.GtsStore(self.path, clock=FakeClock(), rules=modes)
+        store.new_run()
+        self.assertEqual(store.data["run"]["id"], 3)
+        self.assertNotIn(store.data["run"]["seed"], (4242, None), "later runs derive their seed")
+        self.assertEqual(self.run_of(modes)["id"], 3, "a wipe is not a config change")
+        run = self.run_of(dict(modes, seed=None))
+        self.assertEqual(run["id"], 4)
+        self.assertTrue(1 <= run["seed"] <= gts_server.SEED_MAX, "a random seed")
+
+    def test_a_data_file_from_before_keeps_its_run(self):
+        self.run_of({"nuzlocke": "hardcore"})
+        with open(self.path, encoding="utf-8") as f:
+            data = json.load(f)
+        data["run"].update(id=5, seed=777)
+        del data["run"]["signature"]
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        run = self.run_of({"nuzlocke": "hardcore", "randomizer": True})
+        self.assertEqual((run["id"], run["seed"]), (5, 777))
+        self.assertIn("signature", run, "the current rules are adopted")
+        with open(self.path, encoding="utf-8") as f:
+            self.assertIn("signature", json.load(f)["run"])
+        self.assertEqual(self.run_of({"nuzlocke": "hardcore", "randomizer": True})["id"], 5)
+        self.assertEqual(self.run_of({"nuzlocke": "hardcore"})["id"], 6)
+
+    def test_a_rule_a_newer_server_adds_never_starts_a_run(self):
+        # an upgrade adds a key to the rules view: at its default it is no
+        # change; set to something else it is
+        run = self.run_of({"nuzlocke": "hardcore"})
+        with open(self.path, encoding="utf-8") as f:
+            data = json.load(f)
+        del data["run"]["signature"]["tradesPerGym"]
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        self.assertEqual(self.run_of({"nuzlocke": "hardcore"})["id"], run["id"])
+        self.assertEqual(self.run_of({"nuzlocke": "hardcore", "nuzlocke_trades": 1})["id"], run["id"] + 1)
 
 if __name__ == "__main__":
     unittest.main()

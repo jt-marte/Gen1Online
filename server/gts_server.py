@@ -151,6 +151,7 @@ TRAINER_MODES = ("off", "gyms", "on")   # gyms: gym leaders, their gyms, Elite F
 MODES_VERSION = 5
 MODES_GENERATIONS = (1, 3)
 MAX_WORLDS = 8
+SAVE_ATTEMPTS = 5               # os.replace tries (Windows: Defender/OneDrive hold the file briefly)
 SEED_MAX = 2147483646           # the client's Park-Miller generator takes 1..2^31-2
 TEAM_ITEM_MAX = 64              # distinct shared items the team can hold
 LOCATION_MAX_LEN = 64
@@ -356,7 +357,8 @@ def load_rules(path):
     """The rules in `path`, or the defaults (everything off) when it is missing."""
     if not path or not os.path.exists(path):
         return dict(RULE_DEFAULTS)
-    with open(path, "r", encoding="utf-8") as f:
+    # utf-8-sig: Notepad's "UTF-8 with BOM" and PowerShell's Out-File start with one
+    with open(path, "r", encoding="utf-8-sig") as f:
         return parse_rules(f.read())
 
 
@@ -391,6 +393,22 @@ def rules_view(rules):
     view["active"] = (view["nuzlocke"] != "off" or view["randomizer"]
                       or view["sharedKeyItems"])
     return view
+
+
+def announce_line(text):
+    """Print a line for the host.  A console that cannot show a character (a
+    cp1252 Windows console and a name with ♂/♀, or surrogate-escaped bytes)
+    gets a ? instead of an exception in the middle of an action."""
+    try:
+        print(text, flush=True)
+    except UnicodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        try:
+            print(text.encode(encoding, "replace").decode(encoding, "replace"), flush=True)
+        except (UnicodeError, LookupError, OSError, ValueError):
+            pass
+    except (OSError, ValueError):
+        pass    # no console at all (pythonw) or a closed one
 
 
 def generation_of(explicit, game_version):
@@ -437,12 +455,21 @@ class GtsStore:
         self.clock = clock
         self.rng = rng or random.SystemRandom()
         self.lock = threading.RLock()
-        self.announce = lambda text: print(text, flush=True)
+        self.announce = announce_line
         self.rules = dict(RULE_DEFAULTS)
         self.rules.update(rules or {})
         self.data = self._load()
-        if not self.data["run"].get("id"):
+        run = self.data["run"]
+        if not run.get("id"):
             self._begin_run(1)
+        elif "signature" not in run:
+            # a data file from before runs remembered their rules: adopt them
+            run["signature"] = self._run_signature()
+            self.save()
+        elif self._rules_changed(run["signature"]):
+            # server_config.txt's modes or seed changed: a new run, so every
+            # client restarts its online save under the new rules
+            self._begin_run(run["id"] + 1, seed=self.rules.get("seed") or None)
         if generation is not None:
             if generation not in GENERATION_NAMES:
                 raise ValueError("generation must be 1, 2 or 3")
@@ -496,23 +523,39 @@ class GtsStore:
         return data
 
     def save(self):
+        """Write the data file atomically (tmp + rename).  A failed write is
+        logged, never raised: the action already happened in memory, which is
+        the truth, and answering SERVER_ERROR would make a client undo it (a
+        bought listing restored = a duplicate).  The next save writes it."""
         with self.lock:
             text = json.dumps(self.data, indent=1, sort_keys=True)
-            folder = os.path.dirname(os.path.abspath(self.path))
-            os.makedirs(folder, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(prefix=".gts_data.", suffix=".tmp", dir=folder)
+            tmp = None
             try:
+                folder = os.path.dirname(os.path.abspath(self.path))
+                os.makedirs(folder, exist_ok=True)
+                fd, tmp = tempfile.mkstemp(prefix=".gts_data.", suffix=".tmp", dir=folder)
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     f.write(text)
                     f.flush()
                     os.fsync(f.fileno())
-                os.replace(tmp, self.path)
-            except BaseException:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-                raise
+                # Windows: Defender, OneDrive or an editor can hold the file briefly
+                for attempt in range(SAVE_ATTEMPTS):
+                    try:
+                        os.replace(tmp, self.path)
+                        return
+                    except OSError:
+                        if attempt == SAVE_ATTEMPTS - 1:
+                            raise
+                        time.sleep(0.05 * (attempt + 1))
+            except OSError as err:
+                print("WARNING: could not save %s (%s); the next change tries again."
+                      % (self.path, err), file=sys.stderr, flush=True)
+            finally:
+                if tmp is not None and os.path.exists(tmp):
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
 
     # ---- requests -----------------------------------------------------------
 
@@ -878,10 +921,13 @@ class GtsStore:
         session = str(req.get("sessionId") or "")
         current = self.presence.get(tid)
         if (current and session and current["session"] and current["session"] != session
-                and now - current["seen"] < SESSION_LOCK):
+                and now - current["lock_seen"] < SESSION_LOCK):
             raise ApiError("ALREADY_LOGGED_IN")
         if current is None:
-            current = {"entry": {}, "session": "", "seen": now}
+            # seen: the 30 s presence; lock_seen: the 10 s session lock, kept
+            # alive only by syncs that carry a sessionId (the client's first
+            # sync after logging in has none, and must not revive a dead session)
+            current = {"entry": {}, "session": "", "seen": now, "lock_seen": now}
             self.presence[tid] = current
         entry = current["entry"]
         for key in PRESENCE_FIELDS:
@@ -891,6 +937,7 @@ class GtsStore:
         entry["timestamp"] = int(now)
         if session:
             current["session"] = session
+            current["lock_seen"] = now
         current["seen"] = now
         self.last_seen[tid] = now
 
@@ -1287,9 +1334,35 @@ class GtsStore:
         # a fixed seed replays run 1 exactly; later runs get their own world
         return seed if run_id == 1 else (seed * 1000003 + run_id) % SEED_MAX + 1
 
-    def _begin_run(self, run_id):
+    def _run_signature(self):
+        """What a run was started under: the rules clients see, and the seed
+        setting.  A change to either in server_config.txt starts a new run
+        (host and port are not in it)."""
+        signature = rules_view(self.rules)
+        signature["seed"] = self.rules.get("seed")
+        return signature
+
+    def _rules_changed(self, stored):
+        """Whether the rules differ from the signature a run was started
+        under.  A key the stored signature doesn't have (a rule added by a
+        newer server) counts as its default, so an upgrade alone never
+        starts a new run."""
+        if not isinstance(stored, dict):
+            return True
+        defaults = rules_view(RULE_DEFAULTS)
+        defaults["seed"] = None
+        for key, value in self._run_signature().items():
+            if key in stored:
+                if stored[key] != value:
+                    return True
+            elif value != defaults.get(key):
+                return True
+        return False
+
+    def _begin_run(self, run_id, seed=None):
         old = self.data.get("run") or {}
-        self.data["run"] = {"id": run_id, "seed": self._run_seed(run_id),
+        self.data["run"] = {"id": run_id, "seed": seed or self._run_seed(run_id),
+                            "signature": self._run_signature(),
                             "started": self._now(),
                             # a multiworld team keeps its worlds from run to run
                             "worlds": old.get("worlds") or {},
@@ -1350,9 +1423,12 @@ class GtsStore:
         if to_int(req.get("runId"), 0) == run.get("id"):
             ended = run.get("id", 1)
             self._history("%s'S PARTY WIPED OUT! RUN %d IS OVER." % (account["name"], ended))
-            self.announce("Run %d ended: %s's party wiped out. Run %d begins."
-                          % (ended, account["name"], ended + 1))
             self._begin_run(ended + 1)
+            try:
+                self.announce("Run %d ended: %s's party wiped out. Run %d begins."
+                              % (ended, account["name"], ended + 1))
+            except (UnicodeError, OSError, ValueError):
+                pass    # the run has begun; a console that can't print the name changes nothing
         return {"success": True, "run": self._run_view(), "team": self._team_view()}
 
     def act_run_join(self, req):
@@ -1639,8 +1715,6 @@ def main(argv=None):
     except ValueError as err:
         print(err, file=sys.stderr)
         return 1
-    if args.new_run:
-        store.new_run()
     try:
         httpd = GtsHTTPServer((host, port), store)
     except OSError as err:
@@ -1648,6 +1722,10 @@ def main(argv=None):
         print("Is the server already running? Pick another port in %s (port = ...) or with --port."
               % os.path.basename(args.config), file=sys.stderr)
         return 1
+    if args.new_run:
+        # only once the port is ours: a server already running would keep its
+        # run in memory and overwrite this one on its next save
+        store.new_run()
     print(banner(host, port, store), flush=True)
     try:
         httpd.serve_forever()
