@@ -4,16 +4,71 @@
 
 A server of our own, built for playing with friends.
 
+### Fixed
+
+- Networking: the async engine connects to a server on another machine
+  (mid-handshake it mistook "not connected yet" for a failure, so over a
+  LAN or Tailscale presence fell back to the 8 s blocking path and native
+  PVP never exchanged a message; it now waits for the socket to become
+  writable and reports a real refusal). An incoming PVP or TRADE offer
+  shows one prompt, never during a battle or over a menu (it used to stack
+  a new one on every sync); B declines it. An ACCEPT or DECLINE is acted on
+  only from the trainer this player is waiting on, on the offered room, so
+  a late or duplicate answer can't start a second battle or trade; the
+  challenger keeps syncing while "WAITING FOR..." is open, so the answer
+  arrives in time. A request the async engine drops (a stall, the queue
+  cap, the blocking fallback) now answers its caller with nil instead of
+  leaving a FireRed or Crystal link waiting forever, and a battle message
+  is never dropped from the queue. QUIT on Gen 1 no longer logs out before
+  the "RETURN TO MAIN MENU?" question (NO used to leave the player logged
+  out and out of their party). A party invite closed with B or START
+  declines it instead of blocking every later invite. Sync answers
+  arriving after DISCONNECT are dropped (ghost players no longer appear
+  offline). Accepting a link trade with too few Pokémon declines instead
+  of stranding the challenger; on Crystal the accept declines too. Sending
+  a chat message no longer marks friends' unread messages as read.
+- FireRed/LeafGreen: the GTS row shows on the real Pokémon Center PC (the
+  game opens its PC in select mode, where the row was always left out; it
+  no longer shifts LOG OFF's answer to the script either). A link that
+  loses an answer, a peer that vanishes, or a link closed during battle
+  setup no longer freezes the trade or battle for good: a poll stalled 5 s
+  is sent again, both sides send a keep-alive (`g1o_alive`) every 5 s and a
+  link quiet for 60 s is dropped (both players need this version). A link
+  can't start during a battle (the challenger is told "busy"), where its
+  waiting screen could never be closed.
+- Game modes: on FireRed/LeafGreen the TEA is shared with the team (it
+  opens Saffron, and a multiworld keeps one copy for the whole team, so
+  every other player was shut out of their own Saffron on a third of the
+  seeds); Oak's question names the right starter on every seed (two balls'
+  texts could swap when a shuffled starter was another vanilla one); the
+  hardcore level cap can't be jumped by one battle's EXP (the gain stops
+  just short of the next level); on Gen 1 only Oak's lab rival skips the
+  burial, not the Route 22 and Cerulean ones.
+- Server: reconnecting within 30 s of a crash no longer gets "ACCOUNT
+  ALREADY ACTIVE" on every try (the login sync, which carries no session,
+  used to refresh the dead session's lock). Changing a mode or the seed in
+  `server_config.txt` now starts a new run at the next server start (host
+  and port don't count; a data file from before keeps its run; the run
+  says why it began, so the clients tell "the server started a new run"
+  from "a teammate's party wiped out"). A failed
+  write of the data file (Defender, OneDrive, a full disk) no longer turns
+  an already-made trade into a `SERVER_ERROR` that duplicates the sent
+  Pokémon: the write is retried and the action answers. A team wipe ends
+  the run even when the console can't print the player's name. A config
+  file saved with a UTF-8 BOM parses. `--new-run` with the port already
+  taken no longer rewrites the data file.
+
 ### Added
 
 - **Trades limited between gym leaders** in the hardcore Nuzlocke
-  (`nuzlocke_trades = off | 1 | 2 ...`, off by default): each player may
-  receive that many Pokémon through the GTS, Wonder Trade or a link trade
-  between two gym leaders they beat; beating a leader opens the next
-  allowance. A GTS or Wonder Trade deposit is refused while the trades are
-  used up, a claim waits in the box until the next leader, a link trade is
-  refused on the offer and ends after the last allowed trade. RUN INFO shows
-  the trades left. The rules version goes to 5.
+  (`nuzlocke_trades = off | 1 | 2 ...`, off by default): each player gets
+  that many trades between two gym leaders they beat, and beating a leader
+  opens the next allowance. A GTS buy, a GTS or Wonder Trade deposit and a
+  link trade each use one (a deposit taken back gives it back; whatever
+  comes back for a deposit is always the player's to claim); a link trade is
+  refused on the offer and ends after the last allowed trade, Gen 1's own
+  Cable Club included. RUN INFO shows the trades left. The rules version
+  goes to 5.
 - `server/server_config.txt` also sets where the server listens: `host`
   and `port` (command-line flags win, then `$PORT`). The README is
   shorter.

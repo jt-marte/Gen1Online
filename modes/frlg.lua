@@ -92,9 +92,13 @@ return function(ctx)
   local LEADER = { "BROCK", "MISTY", "LT. SURGE", "ERIKA", "KOGA", "SABRINA", "BLAINE", "GIOVANNI" }
 
   -- shared: badges, key items and HMs, but not the quest items one player's
-  -- script consumes (Oak's Parcel, the fossils, the Bike Voucher...)
+  -- script consumes (Oak's Parcel, the fossils, the Bike Voucher...).  The
+  -- TEA is shared: it is progression (L.PROGRESSION, the SAFFRON macro), and a
+  -- multiworld keeps one copy for the whole team, so every player's own gate
+  -- guards need the team's copy (st.got stops it arriving twice).
+  -- dev/harness/modes_test.lua mirrors this list (FRLG_NOT_SHARED).
   local NOT_SHARED = { OAKS_PARCEL = true, BIKE_VOUCHER = true, DOME_FOSSIL = true,
-    HELIX_FOSSIL = true, OLD_AMBER = true, GOLD_TEETH = true, TEA = true, RUBY = true,
+    HELIX_FOSSIL = true, OLD_AMBER = true, GOLD_TEETH = true, RUBY = true,
     SAPPHIRE = true, METEORITE = true, FAME_CHECKER = true, TEACHY_TV = true }
   function M.isShared(key)
     if type(key) ~= "string" or NOT_SHARED[key] then return false end
@@ -315,7 +319,9 @@ return function(ctx)
     if not at then return s end
     return s:sub(1, at - 1) .. new .. replacePlain(s:sub(at + #old), old, new)
   end
-  -- the text key of the question for a vanilla starter ("... X is your choice.")
+  -- the text key of the question for a vanilla starter ("... X is your choice.").
+  -- Only unambiguous on the vanilla texts: apply() looks up all three before
+  -- rewriting any (a rewritten question may name another ball's species).
   function M.starterQuestion(vanilla)
     local text = (bundle() or {}).text or {}
     local mark = " " .. G3.speciesName(vanilla) .. " is your choice."
@@ -350,16 +356,24 @@ return function(ctx)
       t[k] = v
     end
     if p.starters then
+      -- Every ball's question is looked up (by its vanilla name) BEFORE any
+      -- is rewritten: the pool holds the vanilla three, so once one question
+      -- names another ball's vanilla species, a lookup would find two texts
+      -- and pairs() order would pick which one to rewrite.
+      local text = (bundle() or {}).text
+      local todo = {}
       for _, row in ipairs(M.starterRows()) do
-        local to = p.starters[row[2]]
+        local from = row[2]
+        local to = p.starters[from]
         if to then
-          local from = row[2]
-          set(row, 2, to)
-          if row.value ~= nil then set(row, "value", to) end
-          local text = (bundle() or {}).text
           local key, ir = M.starterQuestion(from)
-          if text and key then set(text, key, starterQuestionFor(ir, from, to)) end
+          todo[#todo + 1] = { row = row, from = from, to = to, key = key, ir = ir }
         end
+      end
+      for _, t in ipairs(todo) do
+        set(t.row, 2, t.to)
+        if t.row.value ~= nil then set(t.row, "value", t.to) end
+        if text and t.key then set(text, t.key, starterQuestionFor(t.ir, t.from, t.to)) end
       end
     end
     for _, loc in ipairs(p.locations or {}) do
@@ -795,15 +809,51 @@ return function(ctx)
       :format(limit > 1 and ("YOU ALREADY MADE YOUR %d TRADES"):format(limit) or "YOU ALREADY TRADED")
   end
 
-  -- a Pokémon received: counted in this stretch.  Returns the trades left.
-  function M.tradeDone()
+  local function leftText(left)
+    return (M.gymsBeaten() >= #LEADERS and "%d LEFT." or "%d LEFT UNTIL THE NEXT GYM LEADER."):format(left)
+  end
+
+  -- A trade made: counted in this stretch.  Returns the trades left.  `what`
+  -- names it for the note (a GTS buy, a link trade...).  The first argument
+  -- is Gen 1's save (one interface); the state here is the session's.
+  function M.tradeDone(_, what)
     if M.tradeLimit() <= 0 or not session() then return nil end
     local st, key = state(), tostring(M.gymsBeaten())
     st.trades[key] = (tonumber(st.trades[key]) or 0) + 1
     ctx.writeOnlineSave()
     local left = M.tradesLeft()
-    note((M.gymsBeaten() >= #LEADERS and "TRADE USED: %d LEFT."
-          or "TRADE USED: %d LEFT UNTIL THE NEXT GYM LEADER."):format(left))
+    note(("%s USED A TRADE: %s"):format(what or "THAT", leftText(left)))
+    return left
+  end
+
+  -- A GTS or Wonder Trade deposit is the trade: it uses the allowance when it
+  -- goes in, so whatever comes back for it is always the player's to claim
+  -- (nothing is ever stuck in a claim box or the pool).  Taking the deposit
+  -- back in the same stretch gives the trade back.
+  function M.tradeReserve(_, id, what)
+    local left = M.tradeDone(nil, what)
+    if left == nil then return nil end
+    local st, key = state(), tostring(M.gymsBeaten())
+    -- only this stretch's deposits can be taken back for a refund: older
+    -- entries are spent, so they go (the save doesn't grow with every deposit)
+    local reserved = {}
+    for k, v in pairs(st.reserved or {}) do if v == key then reserved[k] = v end end
+    reserved[tostring(id)] = key
+    st.reserved = reserved
+    ctx.writeOnlineSave()
+    return left
+  end
+
+  function M.tradeRelease(_, id)
+    if M.tradeLimit() <= 0 or not session() then return nil end
+    local st, key = state(), tostring(M.gymsBeaten())
+    local stretch = st.reserved and st.reserved[tostring(id)]
+    if st.reserved then st.reserved[tostring(id)] = nil end
+    if stretch ~= key then return M.tradesLeft() end   -- an older stretch's trade: spent
+    st.trades[key] = math.max(0, (tonumber(st.trades[key]) or 0) - 1)
+    ctx.writeOnlineSave()
+    local left = M.tradesLeft()
+    note("TRADE TAKEN BACK: " .. leftText(left))
     return left
   end
 
@@ -844,10 +894,26 @@ return function(ctx)
     return origStyle(...)
   end
 
+  -- No EXP at the cap, and none past it below: one battle's EXP stops just
+  -- short of cap + 1, so a Pokémon a level under the cap can't jump over it.
+  -- src.core.game3.battle.experience: apply() first resets an exp outside
+  -- the level's span to the level's threshold (syncExpToLevel), then adds
+  -- the gain on the mon's growth curve (expForLevel); the clamp does alike.
+  local okX, Exp3 = pcall(require, "src.core.game3.battle.experience")
+  if not (okX and type(Exp3) == "table" and Exp3.expForLevel) then Exp3 = nil end
   mod.hooks:wrap("exp.gain", function(nextFn, c)
     local gained = nextFn(c)
-    if M.hardcore() and type(c) == "table" and c.mon and (tonumber(c.mon.level) or 0) >= M.levelCap() then
-      return 0
+    if M.hardcore() and type(c) == "table" and type(c.mon) == "table" then
+      local mon, cap = c.mon, M.levelCap()
+      local level = tonumber(mon.level) or 0
+      if level >= cap then return 0 end
+      if Exp3 and level >= 1 and cap < (Exp3.MAX_LEVEL or 100) and tonumber(gained) then
+        local at, nxt = Exp3.expForLevel(mon, level), Exp3.expForLevel(mon, level + 1)
+        local exp = tonumber(mon.exp)
+        if not exp or exp < at or exp >= nxt then exp = at end
+        local limit = Exp3.expForLevel(mon, cap + 1) - 1
+        gained = math.max(0, math.min(math.floor(tonumber(gained)), limit - exp))
+      end
     end
     return gained
   end)
@@ -1170,7 +1236,15 @@ return function(ctx)
     local st = state()
     if st.run ~= M.rules.runId and not pendingRestart and not wipeQueued then
       if st.run ~= nil then
-        note(("RUN %d IS OVER! A TEAMMATE'S PARTY WIPED OUT.\fEVERYONE STARTS OVER."):format(st.run))
+        -- why the server began a run: a team wipe, the host's changed settings
+        -- (config), or --new-run (manual)
+        local why = M.rules.runReason
+        if why == "config" or why == "manual" then
+          note(("RUN %d IS OVER! THE SERVER STARTED A NEW RUN%s.\fEVERYONE STARTS OVER."):format(
+            st.run, why == "config" and " WITH NEW SETTINGS" or ""))
+        else
+          note(("RUN %d IS OVER! A TEAMMATE'S PARTY WIPED OUT.\fEVERYONE STARTS OVER."):format(st.run))
+        end
       end
       pendingRestart = true
     end

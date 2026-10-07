@@ -663,30 +663,60 @@ return function(env)
 
   -- ------------------------------------------------- the Pokémon Center PC
 
-  -- GTS joins the PC's first menu (above LOG OFF), as on Gen 1 and Crystal
+  -- GTS joins the PC's first menu (above LOG OFF), as on Gen 1 and Crystal.
+  -- The Pokémon Center's PC is a select-mode PcMenu (pc.inc's special
+  -- CreatePCMenu): A on a row closes it with the row's index for the
+  -- script's switch.  GTS opens the mod's screens over the PC instead and
+  -- the PC stays open; every other row goes to the engine with its index
+  -- in the engine's own list, as if GTS weren't there.  The engine's cached
+  -- list (PcMenu._rootRows) is never changed: the menu sees a copy.
   function G3.installPc(openGts)
     local ok, PcMenu = pcall(require, "src.ui.game3.pc_menu")
     if not (ok and type(PcMenu) == "table" and PcMenu._rootEntries) then return end
+    G3.openGtsFromPc = openGts
+    if PcMenu._g1oGts then return end
+    PcMenu._g1oGts = true
     local origRoot = PcMenu._rootEntries
+    local GTS = { id = "gts", label = "GTS" }
+    local plain, seen, withGts = false, nil, nil
     PcMenu._rootEntries = function(...)
       local rows = origRoot(...)
-      if PcMenu._select or type(rows) ~= "table" then return rows end
-      for _, row in ipairs(rows) do if row.id == "gts" then return rows end end
-      table.insert(rows, math.max(1, #rows), { id = "gts", label = "GTS" })
-      return rows
+      if plain or type(rows) ~= "table" then return rows end
+      if rows ~= seen or #withGts ~= #rows + 1 then
+        seen, withGts = rows, {}
+        for i, row in ipairs(rows) do withGts[i] = row end
+        table.insert(withGts, math.max(1, #withGts), GTS)
+      end
+      return withGts
     end
     local origInput = PcMenu.handleInput
     PcMenu.handleInput = function(input, ...)
-      if PcMenu.open and PcMenu.mode == "root" and not PcMenu._select
-          and input and input:wasPressed("a") then
-        local row = PcMenu._rootEntries()[PcMenu.cursor]
-        if row and row.id == "gts" then
-          UI.se("SE_SELECT")
-          openGts()
-          return
-        end
+      if not (PcMenu.open and PcMenu.mode == "root" and input and input:wasPressed("a"))
+          or input:wasPressed("up") or input:wasPressed("down") then
+        return origInput(input, ...)
       end
-      return origInput(input, ...)
+      local cursor = PcMenu.cursor
+      local row = PcMenu._rootEntries()[cursor]
+      if row == GTS then
+        UI.se("SE_SELECT")
+        G3.openGtsFromPc()
+        return
+      end
+      plain = true
+      local okR, rows = pcall(origRoot)
+      local j
+      for i, r in ipairs(okR and type(rows) == "table" and rows or {}) do
+        if r == row then j = i break end
+      end
+      if j then PcMenu.cursor = j end
+      local okI, res = pcall(origInput, input, ...)
+      plain = false
+      -- (still on the same menu: put the cursor back on the copy's row)
+      if j and j ~= cursor and PcMenu.open and PcMenu.mode == "root" and PcMenu.cursor == j then
+        PcMenu.cursor = cursor
+      end
+      if not okI then error(res, 0) end
+      return res
     end
   end
 

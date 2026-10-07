@@ -1,11 +1,12 @@
 -- The hardcore Nuzlocke's trade limit on Gen 1 (G1O_GAME=yellow) against a
 -- Gen 1 server with `nuzlocke = hardcore` and `nuzlocke_trades = 1`
--- (dev/server.sh with GTS_CONFIG): one Pokémon received by trade per stretch
--- of gym leaders beaten.  A deposit is free; a GTS buy uses the trade; then
--- every other way in is refused (a second buy, a GTS deposit, a Wonder Trade
--- deposit, a LINK TRADE offer, an accepted TRADE challenge, a GTS claim).
--- Beating Brock opens a new allowance, which survives DISCONNECT and JOIN,
--- and with no limit in the rules nothing counts.  BUDDY is raw HTTP.
+-- (dev/server.sh with GTS_CONFIG): one trade per stretch of gym leaders
+-- beaten.  A GTS or Wonder Trade deposit is the trade (taken back in the same
+-- stretch, it is given back; from an earlier stretch, it stays spent), a GTS
+-- buy is a trade, and claims never count.  With no trades left, a buy, a
+-- deposit, a Wonder Trade deposit, a LINK TRADE offer and an accepted TRADE
+-- challenge are refused.  The counts survive DISCONNECT and JOIN, and with
+-- no limit in the rules nothing counts.  BUDDY and the others are raw HTTP.
 local Rig = dofile(os.getenv("G1O_DEV") .. "/harness/rig.lua")
 assert(Rig.generation == 1, "run with G1O_GAME=yellow")
 local PORT = os.getenv("GTS_PORT") or "17781"
@@ -187,6 +188,10 @@ local function partySpecies()
   for _, m in ipairs(game.save.party or {}) do out[#out + 1] = m.species end
   return table.concat(out, ",")
 end
+local function hasSpecies(species)
+  for _, m in ipairs(game.save.party or {}) do if m.species == species then return true end end
+  return false
+end
 local function finishTradeAnim()
   if not tradeAnim then return false end
   local anim = tradeAnim
@@ -273,7 +278,7 @@ local ri = runInfo() or ""
 check(ri:find("TRADES: 1 OF 1", 1, true) ~= nil, "RUN INFO: " .. ri)
 dump("connect")
 
--- ---- 2. a GTS deposit is free -----------------------------------------------------------
+-- ---- 2. a GTS deposit is the trade ---------------------------------------------------------
 openGts("DEPOSIT MON")
 pick("FROM PARTY")
 pick("RATTATA")
@@ -282,55 +287,40 @@ pick("J %- L")
 pick("KADABRA")
 pick("CONFIRM")
 closeTexts()
-check(said("RATTATA WAS DEPOSITED") ~= nil, "deposit allowed: " .. table.concat(messages, " / "))
-local myListing = listingOf(myId, "RATTATA")
-check(myListing ~= nil, "the server holds the RATTATA listing")
+check(said("RATTATA WAS DEPOSITED") ~= nil, "the deposit goes in: " .. table.concat(messages, " / "))
+check(listingOf(myId, "RATTATA") ~= nil, "the server holds the RATTATA listing")
 check(partySpecies() == "PIKACHU,PIDGEY,SPEAROW", "RATTATA left the party (" .. partySpecies() .. ")")
-check(Modes.tradesLeft(game.save) == 1, "a deposit uses no trade")
-popTo(world)
+check(Modes.tradesLeft(game.save) == 0, "the deposit used the trade: 0 left (" .. tostring(Modes.tradesLeft(game.save)) .. ")")
+messages = {}
+notes()
+check(said("YOUR GTS DEPOSIT USED A TRADE: 0 LEFT") ~= nil, "the note says so: " .. table.concat(messages, " / "))
+ri = runInfo() or ""
+check(ri:find("TRADES: 0 OF 1", 1, true) ~= nil, "RUN INFO: " .. ri)
+dump("deposit")
 
--- ---- 3. a GTS buy uses the trade ----------------------------------------------------------
-local dep = post({ action = "deposit", trainerId = "777777", trainerName = "BUDDY",
+-- ---- 3. with no trade left, every other way in is refused -----------------------------------
+-- a buy
+local abra = post({ action = "deposit", trainerId = "777777", trainerName = "BUDDY",
   offeredMon = mon("ABRA", 12), wanted = { "PIDGEY" } })
-check(dep and dep.success, "BUDDY lists an ABRA for a PIDGEY (" .. tostring(dep and dep.error) .. ")")
+check(abra and abra.success, "BUDDY lists an ABRA for a PIDGEY (" .. tostring(abra and abra.error) .. ")")
 openGts("BROWSE TRADES")
 pick("ALL ACTIVE")
 pick("ABRA")
 game.input:press("a")
 top():update(1 / 60)
 pick("GIVE PIDGEY")
-check(tradeAnim ~= nil and tradeAnim.opts.sent and tradeAnim.opts.sent.species == "PIDGEY", "PIDGEY is the one leaving")
-check(finishTradeAnim() and said("GTS TRADE COMPLETE") ~= nil, "the GTS trade completes")
-check(partySpecies() == "PIKACHU,SPEAROW,ABRA", "ABRA arrived, PIDGEY left (" .. partySpecies() .. ")")
-check(Modes.tradesLeft(game.save) == 0, "the trade is used: 0 left (" .. tostring(Modes.tradesLeft(game.save)) .. ")")
-messages = {}
-notes()
-check(said("TRADE USED: 0 LEFT") ~= nil, "the note says so: " .. table.concat(messages, " / "))
-dump("buy")
-
--- ---- 4. every other way in is refused -----------------------------------------------------
--- a second buy
-local second = post({ action = "deposit", trainerId = "777777", trainerName = "BUDDY",
-  offeredMon = mon("EKANS", 9), wanted = { "SPEAROW" } })
-check(second and second.success, "BUDDY lists an EKANS for a SPEAROW")
-openGts("BROWSE TRADES")
-pick("ALL ACTIVE")
-pick("EKANS")
-game.input:press("a")
-top():update(1 / 60)
-pick("GIVE SPEAROW")
 closeTexts()
-check(said(REFUSED) ~= nil and tradeAnim == nil, "a second buy is refused: " .. table.concat(messages, " / "))
-check(partySpecies() == "PIKACHU,SPEAROW,ABRA", "the party is unchanged (" .. partySpecies() .. ")")
-check(listingOf("777777", "EKANS") ~= nil, "the EKANS listing is still on the server")
--- a GTS deposit
+check(said(REFUSED) ~= nil and tradeAnim == nil, "a buy is refused: " .. table.concat(messages, " / "))
+check(partySpecies() == "PIKACHU,PIDGEY,SPEAROW", "the party is unchanged (" .. partySpecies() .. ")")
+check(listingOf("777777", "ABRA") ~= nil, "the ABRA listing is still on the server")
+-- a second GTS deposit
 openGts("DEPOSIT MON")
 pick("FROM PARTY")
 pick("SPEAROW")
 closeTexts()
-check(said(REFUSED) ~= nil, "a GTS deposit is refused: " .. table.concat(messages, " / "))
+check(said(REFUSED) ~= nil, "a second GTS deposit is refused: " .. table.concat(messages, " / "))
 popTo(world)
-check(partySpecies() == "PIKACHU,SPEAROW,ABRA" and listingOf(myId, "SPEAROW") == nil,
+check(partySpecies() == "PIKACHU,PIDGEY,SPEAROW" and listingOf(myId, "SPEAROW") == nil,
   "the SPEAROW stays in the party (" .. partySpecies() .. ")")
 -- a Wonder Trade deposit
 openGts("WONDER TRADE")
@@ -340,7 +330,7 @@ closeTexts()
 check(said(REFUSED) ~= nil, "a Wonder Trade deposit is refused: " .. table.concat(messages, " / "))
 popTo(world)
 local wt = post({ action = "wonder_trade_status", trainerId = myId }) or {}
-check(partySpecies() == "PIKACHU,SPEAROW,ABRA" and wt.success and wt.mine == nil and wt.poolCount == 0,
+check(partySpecies() == "PIKACHU,PIDGEY,SPEAROW" and wt.success and wt.mine == nil and wt.poolCount == 0,
   "nothing went into the pool (" .. tostring(wt.poolCount) .. ")")
 -- a LINK TRADE offer to BUDDY on the map
 waitUntil(function() buddySync(); return exports.netNpcs["777777"] ~= nil end, 10)
@@ -380,39 +370,154 @@ post({ action = "clear_challenge", trainerId = "777777" })
 popTo(world)
 frames(20)
 popTo(world)
-check(Modes.tradesLeft(game.save) == 0 and partySpecies() == "PIKACHU,SPEAROW,ABRA", "still 0 trades left")
+check(Modes.tradesLeft(game.save) == 0 and partySpecies() == "PIKACHU,PIDGEY,SPEAROW", "still 0 trades left")
 dump("refusals")
 
--- ---- 5. a GTS claim is refused too ----------------------------------------------------------
+-- ---- 4. taking the deposit back gives the trade back ------------------------------------------
+openGts("MY LISTINGS")
+pick("TAKE RATTATA")
+closeTexts()
+check(said("WITHDREW RATTATA") ~= nil, "the RATTATA is taken back: " .. table.concat(messages, " / "))
+check(partySpecies() == "PIKACHU,PIDGEY,SPEAROW,RATTATA" and listingOf(myId, "RATTATA") == nil,
+  "back in the party, gone from the server (" .. partySpecies() .. ")")
+check(Modes.tradesLeft(game.save) == 1, "the trade is given back: 1 left (" .. tostring(Modes.tradesLeft(game.save)) .. ")")
+messages = {}
+notes()
+check(said("TRADE TAKEN BACK: 1 LEFT") ~= nil, "the note says so: " .. table.concat(messages, " / "))
+dump("withdraw")
+
+-- ---- 5. deposited again and bought: the claim is free ----------------------------------------
+openGts("DEPOSIT MON")
+pick("FROM PARTY")
+pick("RATTATA")
+pick("ADD")
+pick("J %- L")
+pick("KADABRA")
+pick("CONFIRM")
+closeTexts()
+local myListing = listingOf(myId, "RATTATA")
+check(said("RATTATA WAS DEPOSITED") ~= nil and myListing ~= nil, "deposited again: " .. table.concat(messages, " / "))
+check(Modes.tradesLeft(game.save) == 0, "0 trades left again")
+notes()
 local bought = post({ action = "trade", listingId = myListing, buyerId = "777777", buyerName = "BUDDY",
   sentMon = mon("KADABRA", 20) })
 check(bought and bought.success, "BUDDY buys the RATTATA with a KADABRA (" .. tostring(bought and bought.error) .. ")")
 openGts("MY LISTINGS")
 pick("GET KADABRA")
-closeTexts()
-check(said(REFUSED) ~= nil and tradeAnim == nil, "the claim is refused: " .. table.concat(messages, " / "))
-check(#(((get("/gts/claims?trainerId=" .. myId) or {}).claims) or {}) == 1, "the KADABRA waits on the server")
-check(partySpecies() == "PIKACHU,SPEAROW,ABRA", "the party is unchanged")
-popTo(world)
+check(finishTradeAnim(), "the claim goes through with no trade left")
+check(partySpecies() == "PIKACHU,PIDGEY,SPEAROW,KADABRA", "KADABRA joined the party (" .. partySpecies() .. ")")
+check(#(((get("/gts/claims?trainerId=" .. myId) or {}).claims) or {}) == 0, "the claim box is empty")
+check(Modes.tradesLeft(game.save) == 0, "the claim counts nothing: still 0 left")
+messages = {}
+notes()
+check(said("USED A TRADE") == nil, "and no trade note: " .. table.concat(messages, " / "))
+dump("claim")
 
--- ---- 6. beating Brock opens a new allowance -------------------------------------------------
+-- ---- 6. Brock beaten: a GTS buy is the trade --------------------------------------------------
 game.save.flags.EVENT_BEAT_BROCK = true
 check(Modes.gymsBeaten(game.save) == 1, "Brock beaten")
 check(Modes.tradesLeft(game.save) == 1 and not Modes.tradeRefusal(game.save), "1 trade left again")
 ri = runInfo() or ""
 check(ri:find("TRADES: 1 OF 1", 1, true) ~= nil, "RUN INFO: " .. ri)
-openGts("MY LISTINGS")
-pick("GET KADABRA")
-check(finishTradeAnim(), "the claim goes through now")
-check(partySpecies() == "PIKACHU,SPEAROW,ABRA,KADABRA", "KADABRA joined the party (" .. partySpecies() .. ")")
-check(#(((get("/gts/claims?trainerId=" .. myId) or {}).claims) or {}) == 0, "the claim box is empty")
-check(Modes.tradesLeft(game.save) == 0, "and that trade is used")
+openGts("BROWSE TRADES")
+pick("ALL ACTIVE")
+pick("ABRA")
+game.input:press("a")
+top():update(1 / 60)
+pick("GIVE PIDGEY")
+check(tradeAnim ~= nil and tradeAnim.opts.sent and tradeAnim.opts.sent.species == "PIDGEY", "PIDGEY is the one leaving")
+check(finishTradeAnim() and said("GTS TRADE COMPLETE") ~= nil, "the GTS trade completes")
+check(partySpecies() == "PIKACHU,SPEAROW,KADABRA,ABRA", "ABRA arrived, PIDGEY left (" .. partySpecies() .. ")")
+check(Modes.tradesLeft(game.save) == 0, "the buy used the trade: 0 left")
 messages = {}
 notes()
-check(said("TRADE USED: 0 LEFT") ~= nil, "the note says so: " .. table.concat(messages, " / "))
-dump("brock")
+check(said("THE GTS TRADE USED A TRADE: 0 LEFT") ~= nil, "the note says so: " .. table.concat(messages, " / "))
+dump("buy")
 
--- ---- 7. the count survives DISCONNECT and JOIN ------------------------------------------------
+-- ---- 7. Misty beaten: a Wonder Trade deposit is the trade, its withdraw gives it back ---------
+game.save.flags.EVENT_BEAT_MISTY = true
+check(Modes.gymsBeaten(game.save) == 2 and Modes.tradesLeft(game.save) == 1, "Misty beaten: 1 trade left")
+openGts("WONDER TRADE")
+pick("DEPOSIT")
+pick("SPEAROW")
+closeTexts()
+check(said("SPEAROW DEPOSITED INTO WONDER TRADE") ~= nil, "SPEAROW goes into the pool: " .. table.concat(messages, " / "))
+check(Modes.tradesLeft(game.save) == 0, "the Wonder Trade deposit used the trade")
+messages = {}
+notes()
+check(said("YOUR WONDER TRADE USED A TRADE: 0 LEFT") ~= nil, "the note says so: " .. table.concat(messages, " / "))
+openGts("WONDER TRADE")
+pick("WITHDRAW")
+closeTexts()
+check(said("WITHDREW SPEAROW") ~= nil and hasSpecies("SPEAROW"),
+  "the SPEAROW is withdrawn: " .. table.concat(messages, " / "))
+check(Modes.tradesLeft(game.save) == 1, "the trade is given back: 1 left")
+messages = {}
+notes()
+check(said("TRADE TAKEN BACK: 1 LEFT") ~= nil, "the note says so: " .. table.concat(messages, " / "))
+openGts("WONDER TRADE")
+pick("DEPOSIT")
+pick("SPEAROW")
+closeTexts()
+check(said("SPEAROW DEPOSITED INTO WONDER TRADE") ~= nil and Modes.tradesLeft(game.save) == 0,
+  "deposited again: 0 left")
+notes()
+local rawMon = { ["400001"] = "ZUBAT", ["400002"] = "EKANS", ["400003"] = "MEOWTH", ["400004"] = "BULBASAUR" }
+for _, tid in ipairs({ "400001", "400002", "400003", "400004" }) do
+  post({ action = "wonder_trade_deposit", trainerId = tid, trainerName = "T" .. tid:sub(-1), offeredMon = mon(rawMon[tid]) })
+end
+local myClaim = (post({ action = "wonder_trade_status", trainerId = myId }) or {}).claim
+check(myClaim and myClaim.mon and tostring(myClaim.fromId) ~= myId, "matched: a claim from someone else")
+openGts("WONDER TRADE")
+pick("CLAIM ")
+check(finishTradeAnim() and said("WONDER TRADE COMPLETE") ~= nil, "the Wonder Trade claim goes through with no trade left")
+check(myClaim and hasSpecies(myClaim.mon.species),
+  "the " .. tostring(myClaim and myClaim.mon.species) .. " joined the party (" .. partySpecies() .. ")")
+check(Modes.tradesLeft(game.save) == 0, "the claim counts nothing: still 0 left")
+messages = {}
+notes()
+check(said("USED A TRADE") == nil, "and no trade note: " .. table.concat(messages, " / "))
+dump("wonder")
+
+-- ---- 8. a deposit from an earlier stretch stays spent ------------------------------------------
+game.save.flags.EVENT_BEAT_LT_SURGE = true
+check(Modes.gymsBeaten(game.save) == 3 and Modes.tradesLeft(game.save) == 1, "Lt. Surge beaten: 1 trade left")
+openGts("DEPOSIT MON")
+pick("FROM PARTY")
+pick("^ABRA")
+pick("ADD")
+pick("J %- L")
+pick("KADABRA")
+pick("CONFIRM")
+closeTexts()
+check(said("^ABRA WAS DEPOSITED") ~= nil and Modes.tradesLeft(game.save) == 0 and not hasSpecies("ABRA"),
+  "ABRA deposited: 0 left (" .. partySpecies() .. ")")
+notes()
+game.save.flags.EVENT_BEAT_ERIKA = true
+check(Modes.gymsBeaten(game.save) == 4 and Modes.tradesLeft(game.save) == 1, "Erika beaten: 1 trade left")
+openGts("MY LISTINGS")
+pick("TAKE ABRA")
+closeTexts()
+check(said("WITHDREW ABRA") ~= nil and hasSpecies("ABRA"),
+  "the ABRA is taken back: " .. table.concat(messages, " / "))
+check(Modes.tradesLeft(game.save) == 1, "the old stretch's trade stays spent: still 1 left, not 2")
+messages = {}
+notes()
+check(said("TAKEN BACK") == nil, "and no note: " .. table.concat(messages, " / "))
+dump("old stretch")
+
+-- ---- 9. the counts survive DISCONNECT and JOIN --------------------------------------------------
+-- use this stretch's trade first, so a 0 has to come back from the save
+game.save.flags.EVENT_BEAT_KOGA = true
+openGts("DEPOSIT MON")
+pick("FROM PARTY")
+pick("PIKACHU")
+pick("ADD")
+pick("J %- L")
+pick("KADABRA")
+pick("CONFIRM")
+closeTexts()
+check(Modes.gymsBeaten(game.save) == 5 and Modes.tradesLeft(game.save) == 0, "Koga beaten, PIKACHU deposited: 0 left")
 popTo(world)
 messages = {}
 item(startMenu(), "ONLINE").onSelect()
@@ -429,12 +534,19 @@ closeTexts()
 popTo(world)
 check(game.save.player.name == "ASH", "reconnect restores the online character")
 check(said("1 TRADE PER GYM LEADER") ~= nil, "the CONNECTED text names the limit: " .. table.concat(messages, " / "))
-check(Modes.gymsBeaten(game.save) == 1, "Brock is still beaten (" .. Modes.gymsBeaten(game.save) .. ")")
-check(Modes.tradesLeft(game.save) == 0, "and the trade still used (" .. tostring(Modes.tradesLeft(game.save)) .. ")")
-check(partySpecies():find("KADABRA", 1, true) ~= nil, "the KADABRA was saved (" .. partySpecies() .. ")")
+check(Modes.gymsBeaten(game.save) == 5, "5 leaders still beaten (" .. Modes.gymsBeaten(game.save) .. ")")
+check(Modes.tradesLeft(game.save) == 0, "and this stretch's trade still used (" .. tostring(Modes.tradesLeft(game.save)) .. ")")
+-- the reservation was saved too: taking the PIKACHU back gives the trade back
+openGts("MY LISTINGS")
+pick("TAKE PIKACHU")
+closeTexts()
+check(said("WITHDREW PIKACHU") ~= nil and Modes.tradesLeft(game.save) == 1,
+  "the PIKACHU taken back after JOIN gives the trade back (" .. tostring(Modes.tradesLeft(game.save)) .. ")")
+popTo(world)
+notes()
 dump("reconnect")
 
--- ---- 8. no limit: nothing counts ---------------------------------------------------------------
+-- ---- 10. no limit: nothing counts ---------------------------------------------------------------
 local synced = Modes.synced
 Modes.synced = function(g, res)
   if type(res) == "table" and type(res.run) == "table" then res.run.tradesPerGym = 0 end
@@ -443,20 +555,20 @@ end
 Modes.rules.tradesPerGym = 0
 check(Modes.tradesLeft(game.save) == nil and not Modes.tradeRefusal(game.save), "tradesPerGym = 0: no limit")
 local free = post({ action = "deposit", trainerId = "777777", trainerName = "BUDDY",
-  offeredMon = mon("ZUBAT", 8), wanted = { "SPEAROW" } })
-check(free and free.success, "BUDDY lists a ZUBAT for a SPEAROW")
+  offeredMon = mon("ZUBAT", 8), wanted = { "ABRA" } })
+check(free and free.success, "BUDDY lists a ZUBAT for an ABRA")
+local before = partySpecies()
 openGts("BROWSE TRADES")
 pick("ALL ACTIVE")
 pick("ZUBAT")
 game.input:press("a")
 top():update(1 / 60)
-pick("GIVE SPEAROW")
+pick("GIVE ABRA")
 check(finishTradeAnim() and said("GTS TRADE COMPLETE") ~= nil, "the buy goes through")
-check(partySpecies():find("ZUBAT", 1, true) ~= nil and partySpecies():find("SPEAROW", 1, true) == nil,
-  "ZUBAT arrived, SPEAROW left (" .. partySpecies() .. ")")
+check(not hasSpecies("ABRA") and hasSpecies("ZUBAT"), "ABRA left, ZUBAT arrived (" .. before .. " -> " .. partySpecies() .. ")")
 messages = {}
 notes()
-check(said("TRADE USED") == nil, "no trade note: " .. table.concat(messages, " / "))
+check(said("USED A TRADE") == nil, "no trade note: " .. table.concat(messages, " / "))
 ri = runInfo() or ""
 check(ri ~= "" and ri:find("TRADES:", 1, true) == nil, "RUN INFO has no TRADES line: " .. ri)
 check(Modes.rules and Modes.rules.tradesPerGym == 0, "the next syncs keep the pin")

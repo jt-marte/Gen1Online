@@ -508,6 +508,97 @@ do
     "FireRed's numbered starters draw from its own data")
 end
 
+-- ---- FireRed/LeafGreen multiworld: each player finishes with the team's finds --------
+-- modes/frlg.lua's places, synthetic (balls on every logic map, the gifts, the
+-- fixed gifts, the gym slots), built for 2 worlds and replayed per player: a
+-- player collects only from their own world, and a find reaches the others
+-- only when modes/frlg.lua shares it.  FRLG_NOT_SHARED mirrors NOT_SHARED in
+-- modes/frlg.lua (every other item the logic tracks is a badge, an HM or a
+-- key item there, so shared); keep the two lists alike.  The TEA once sat in
+-- it: the fill keeps one TEA for the team, so the others never reached Saffron.
+do
+  local LF = load("modes/logic_frlg.lua")
+  local FRLG_NOT_SHARED = { OAKS_PARCEL = true, BIKE_VOUCHER = true, DOME_FOSSIL = true,
+    HELIX_FOSSIL = true, OLD_AMBER = true, GOLD_TEETH = true, RUBY = true,
+    SAPPHIRE = true, METEORITE = true, FAME_CHECKER = true, TEACHY_TV = true }
+  local vanillaKey = { FR_SILPH_CO_5F = "CARD_KEY", FR_POKEMON_MANSION_B1F = "SECRET_KEY",
+                       FR_SAFARI_ZONE_WEST = "GOLD_TEETH" }
+  local function sorted(t)
+    local keys = {}
+    for k in pairs(t) do keys[#keys + 1] = k end
+    table.sort(keys)
+    return keys
+  end
+  local places, never = {}, LF.expand(LF.MACROS.NEVER)
+  local function add(loc, req, shuffled)
+    loc.reqSet = req and LF.expand(req) or never
+    loc.shuffled = shuffled
+    places[#places + 1] = loc
+  end
+  local mapIds = sorted(LF.MAPS)
+  mapIds[#mapIds + 1] = "FR_CERULEAN_CAVE_1F"                    -- post-game: NEVER
+  for _, mapId in ipairs(mapIds) do
+    local first = vanillaKey[mapId] or "POTION"
+    local spot = LF.SPOTS[mapId] and LF.SPOTS[mapId][first]
+    add({ key = mapId .. "#1", kind = "ball", map = mapId, vanilla = { item = first, count = 1 } },
+      spot or LF.MAPS[mapId], true)
+    add({ key = mapId .. "#2", kind = "ball", map = mapId, vanilla = { item = "RARE_CANDY", count = 1 } },
+      LF.MAPS[mapId], true)
+  end
+  for _, key in ipairs(sorted(LF.GIFTS)) do
+    add({ key = "gift:" .. key, kind = "gift", gift = key, vanilla = { item = key, count = 1 } }, LF.GIFTS[key], true)
+  end
+  for _, key in ipairs(sorted(LF.FIXED)) do
+    add({ key = "fixed:" .. key, kind = "fixed", vanilla = { item = key, count = 1 } }, LF.FIXED[key], false)
+  end
+  for _, key in ipairs(sorted(LF.GYMS)) do
+    add({ key = "gym:" .. key, kind = "gym", victoryKey = key, vanilla = { item = key, count = 1 } },
+      LF.GYMS[key], true)
+  end
+  local function everyoneFinishes(plans, private)
+    local have, got = {}, {}
+    for p = 1, #plans do have[p], got[p] = {}, {} end
+    local changed = true
+    while changed do
+      changed = false
+      for p, plan in ipairs(plans) do
+        for _, loc in ipairs(plan.locations) do
+          local c = plan.content[loc.key] or (not loc.shuffled and loc.vanilla)
+          if c and not got[p][loc.key] and LF.satisfied(loc.reqSet, have[p]) then
+            got[p][loc.key], have[p][c.item], changed = true, true, true
+            if not private[c.item] then
+              for q = 1, #plans do have[q][c.item] = true end
+            end
+          end
+        end
+      end
+    end
+    for p = 1, #plans do
+      if not LF.satisfied(LF.expand(LF.GOAL), have[p]) then return false end
+    end
+    return true
+  end
+  local teaPrivate = {}
+  for k in pairs(FRLG_NOT_SHARED) do teaPrivate[k] = true end
+  teaPrivate.TEA = true
+  local built, finished, wouldFail = true, 0, 0
+  for seed = 1, 100 do
+    local plans = {}
+    for w = 1, 2 do
+      plans[w] = R.build({ seed = seed, locations = places, logic = LF, Rng = Rng, items = true,
+                           badges = true, worlds = 2, world = w, fallbackItem = "POTION" })
+      if not plans[w].ok then built = false end
+    end
+    if everyoneFinishes(plans, FRLG_NOT_SHARED) then finished = finished + 1 end
+    if not everyoneFinishes(plans, teaPrivate) then wouldFail = wouldFail + 1 end
+  end
+  check(built, "FRLG multiworld: every 2-world plan builds (100 seeds)")
+  check(finished == 100, ("FRLG multiworld: every player finishes with the team's shared finds (%d/100)")
+    :format(finished))
+  check(wouldFail > 0, ("(the replay sees it: with the TEA kept private, %d of 100 seeds shut someone out)")
+    :format(wouldFail))
+end
+
 -- ---- a world the logic does not know --------------------------------------------------
 do
   local strange = { maps = { NOWHERE = { objects = { { index = 1, item = "HM_CUT" } } } },

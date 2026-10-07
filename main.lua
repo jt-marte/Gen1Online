@@ -859,11 +859,11 @@
     for _, m in ipairs(msgs) do
       local id = tonumber(m.id) or 0
       if id > ChatState.lastId then
-        ChatState.unread = (ChatState.unread or 0) + 1
-        -- Only notify for others' messages, not own
+        -- Only count and notify others' messages, not own
         local gSave = (game and game.save) or (currentGame and currentGame.save)
         local myId = gSave and select(1, getTrainerInfo(gSave)) or nil
         if tostring(m.trainerId) ~= tostring(myId) then
+          ChatState.unread = (ChatState.unread or 0) + 1
           pushLiveChatNotification(game or currentGame, m.name, m.text)
         end
       end
@@ -934,12 +934,11 @@
       -- Optimistically update cache: next poll will confirm, but push ourselves without notification
       game.stack:push(TextBox.new(game, wrapText(string.format("SENT:\n%s", clean))))
       -- Refresh history silently
+      -- (through the normal path: friends' messages that came in since the
+      -- last poll are still new; our own is not counted)
       local hist = gtsApiGet("/chat/history", 2.0)
       if hist and hist.success and hist.messages then
-        ChatState.history = hist.messages
-        local maxId = ChatState.lastId
-        for _, m in ipairs(hist.messages) do maxId = math.max(maxId, tonumber(m.id) or 0) end
-        if maxId > ChatState.lastId then ChatState.lastId = maxId end
+        handleNewChatMessages(game, hist.messages)
       end
       return true
     else
@@ -1433,6 +1432,52 @@
   local asyncWrite, asyncRead, asyncBody, asyncBodyLen, asyncInHeaders = "", "", "", -1, true
   local asyncPending, asyncActive = {}, nil
   local asyncConnectTried, asyncConnectStart, asyncReconnectUntil, asyncStallStart, asyncSendTimeout = false, 0, 0, 0, 0
+  -- A request the engine gives up on (a closed connection, the queue cap,
+  -- the blocking fallback) still answers its caller, with nil: the battle
+  -- transports (pvp/net.lua, gen3/link.lua) wait on their callbacks.
+  function GtsUI.asyncDrop(req)
+    if req and type(req.callback) == "function" then pcall(req.callback, nil) end
+  end
+  -- An offer (PVP or TRADE) comes back on every sync answer while it lives
+  -- on the server (15 s): its prompt is shown once, never over a battle or
+  -- another screen (it shows on a later sync while the offer lives), and
+  -- not again for 15 s once answered.
+  function GtsUI.showOffer(game, fromId, cType, roomId, nowT)
+    if inBattle or isPlayerBusy(game) then return false end
+    local key = tostring(fromId) .. "|" .. tostring(cType) .. "|" .. tostring(roomId)
+    local shown = GtsUI.challengePrompt
+    if shown and shown.menu then
+      local stack = game.stack or {}
+      for _, list in ipairs({ stack.states or {}, stack.pending or {} }) do
+        for _, s in ipairs(list) do
+          if s == shown.menu then return false end
+        end
+      end
+    end
+    if shown and shown.key == key and shown.answered and nowT - shown.answered < 15.0 then
+      return false
+    end
+    GtsUI.challengePrompt = { key = key, at = nowT }
+    return true
+  end
+  function GtsUI.offerAnswered()
+    local shown = GtsUI.challengePrompt
+    if not shown then return end
+    shown.menu = nil
+    shown.answered = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
+  end
+  -- The queue cap: the oldest request that isn't a battle message goes
+  -- first.  Dropping one of those would deadlock the lockstep exchange.
+  function GtsUI.asyncTrim()
+    while #asyncPending > 30 do
+      local drop
+      for i, r in ipairs(asyncPending) do
+        if not (r.body and r.body:find('"action"%s*:%s*"send_battle_msg"')) then drop = i break end
+      end
+      if not drop then return end
+      GtsUI.asyncDrop(table.remove(asyncPending, drop))
+    end
+  end
 
   local function asyncParseUrl(url)
     local scheme, host, port = url:match("^(https?)://([^/:]+):?(%d*)")
@@ -1443,6 +1488,7 @@
   end
 
   local function asyncClose(reason)
+    local dropped = asyncActive
     if asyncSock then
       pcall(function() asyncSock:close() end)
     end
@@ -1463,6 +1509,7 @@
       asyncReconnectUntil = asyncReconnectUntil + 0.5
     end
     if reason then netDiagAdd("async", "closed: " .. tostring(reason)) end
+    GtsUI.asyncDrop(dropped)
   end
 
   local function asyncEnsureHost()
@@ -1546,8 +1593,10 @@
   asyncReset = function(reason)
     asyncLastError = tostring(reason or "")
     asyncClose(reason)
+    local dropped = asyncPending
     asyncPending = {}
     asyncActive = nil
+    for _, req in ipairs(dropped) do GtsUI.asyncDrop(req) end
   end
 
   -- Store the server typed in-game (nil: back to gts_config.txt).  The
@@ -1615,7 +1664,32 @@
         asyncClose("connect timed out")
         return
       end
+      -- Mid-handshake getpeername() fails with "Transport endpoint is not
+      -- connected" (a LAN or Tailscale host takes a while; loopback is done
+      -- by the next frame), so that is not a failure: the socket turns
+      -- writable once the handshake is over, and only then does a missing
+      -- peer mean the connect failed (refused).
       local peer = asyncSock:getpeername()
+      if not peer then
+        local okS, socket = pcall(require, "socket")
+        local writable = okS and socket and socket.select
+          and select(2, socket.select(nil, { asyncSock }, 0))
+        if not (writable and writable[1]) then
+          -- Winsock reports a refused non-blocking connect in SO_ERROR and
+          -- never as writable: ask before waiting on
+          local okE0, soErr0 = pcall(asyncSock.getoption, asyncSock, "error")
+          if okE0 and soErr0 and soErr0 ~= 0 then asyncClose("connect failed: " .. tostring(soErr0)) return end
+          return
+        end
+        local err
+        peer, err = asyncSock:getpeername()
+        if not peer then
+          -- the real reason ("connection refused"), where LuaSocket has it
+          local okE, soErr = pcall(asyncSock.getoption, asyncSock, "error")
+          asyncClose("connect failed: " .. tostring(okE and soErr or err))
+          return
+        end
+      end
       if peer then
         if asyncIsHttps then
           local wrapped, werr = asyncDoHandshake(asyncSock)
@@ -1624,13 +1698,6 @@
         end
         asyncConnectTried = false
         asyncState = "send"
-      else
-        local _, err = asyncSock:getpeername()
-        if err and err ~= "timeout" and not asyncWouldBlock(err) then
-          asyncClose("connect failed: " .. tostring(err))
-          return
-        end
-        return
       end
     end
 
@@ -1796,7 +1863,7 @@
       resp = {},
       callback = callback,
     }
-    while #asyncPending > 30 do table.remove(asyncPending, 1) end
+    GtsUI.asyncTrim()
   end
   if GtsUI.G3env then GtsUI.G3env.send, GtsUI.G3env.post = pvpBattleSend, gtsApiPost end
 
@@ -1906,6 +1973,13 @@
   -- NOTE: Battle responses are drained by GtsNetAdapter:update() directly, not here.
   --       This function only handles position-sync and challenge/trade signals.
   processGlobalThreadMessages = function(game)
+    -- Offline, nothing queued or answered belongs to a session any more: a
+    -- late sync answer would bring back other players as ghosts.
+    if not isGtsServerConnected then
+      if netOutChannel then while netOutChannel:pop() do end end
+      if netInChannel then while netInChannel:pop() do end end
+      return
+    end
     local now = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
 
     -- Feed the non-blocking persistent HTTP client (coalescing sync_pos to avoid bufferbloat)
@@ -1958,9 +2032,7 @@
       end
       -- Cap the queue generously: PVP battle messages share this queue, and
       -- dropping them would deadlock the lockstep battle exchange.
-      while #asyncPending > 30 do
-        table.remove(asyncPending, 1)
-      end
+      GtsUI.asyncTrim()
     end
 
     -- Advance the non-blocking engine here AND every frame in core.update.
@@ -1997,8 +2069,14 @@
             end,
             sink = function(chunk) if chunk then table.insert(resp, chunk) end return 1 end
           })
-          if ok and #resp > 0 and netInChannel then
+          if ok and #resp > 0 and type(req.callback) == "function" then
+            local body = table.concat(resp)
+            local okDec, dec = pcall(Json.decode, body)
+            pcall(req.callback, okDec and dec or nil, body)
+          elseif ok and #resp > 0 and netInChannel then
             netInChannel:push(table.concat(resp))
+          else
+            GtsUI.asyncDrop(req)
           end
         end
       end
@@ -2079,7 +2157,9 @@
               }
               local invMsg = string.format("%s INVITED YOU TO A CO-OP PARTY!\nACCEPT INVITE?", inv.fromName or "A TRAINER")
               game.stack:push(TextBox.new(game, wrapText(invMsg), function()
-                game.stack:push(Menu.new(game, pMenu, { tx = 0, ty = 0, tw = 20, maxVisible = 6, startCloses = true }))
+                -- B or START declines, so a later invite can still come
+                game.stack:push(Menu.new(game, pMenu, { tx = 0, ty = 0, tw = 20, maxVisible = 6, startCloses = true,
+                  onCancel = pMenu[2].onSelect }))
               end))
             end
 
@@ -2143,14 +2223,29 @@
               local remotePartyPacked = res.challenge.party or {}
               local sharedSeed = res.challenge.seed or 12345
               local roomId = res.challenge.roomId
+              -- An answer counts only from the trainer this player is waiting
+              -- on, for the room offered (a PVP answer may be on its native
+              -- "K" room): a duplicate still on the wire, a late one, or
+              -- another trainer's would start a second, lone battle or trade.
+              local offer = isWaitingForChallenge and GtsUI.pendingOffer or nil
+              local isAnswer = cType == "ACCEPT_PVP" or cType == "ACCEPT_TRADE" or cType == "DECLINE"
+              local matched = offer ~= nil and tostring(challengerId) == offer.targetId
+                and (cType == "DECLINE"
+                  or (cType == "ACCEPT_TRADE" and offer.type == "TRADE" and roomId == offer.roomId)
+                  or (cType == "ACCEPT_PVP" and offer.type == "PVP"
+                    and (roomId == offer.roomId or roomId == tostring(offer.roomId) .. "K")))
 
-              if cType == "ACCEPT_PVP" then
+              if isAnswer and not matched then
+                local myId = getTrainerInfo(game.save)
+                if myId then gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5) end
+              elseif cType == "ACCEPT_PVP" then
                 -- Guard: never start a second battle if one is already running
                 if inBattle then
                   local myId = getTrainerInfo(game.save)
                   gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                 else
                   isWaitingForChallenge = false
+                  GtsUI.pendingOffer = nil
                   local myId = getTrainerInfo(game.save)
                   gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
 
@@ -2169,6 +2264,7 @@
                 end
               elseif cType == "ACCEPT_TRADE" then
                 isWaitingForChallenge = false
+                GtsUI.pendingOffer = nil
                 local myId = getTrainerInfo(game.save)
                 gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                 if not game.save or not game.save.party or #game.save.party == 0 then
@@ -2179,15 +2275,29 @@
                 end
               elseif cType == "DECLINE" then
                 isWaitingForChallenge = false
+                GtsUI.pendingOffer = nil
                 local myId = getTrainerInfo(game.save)
                 gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                 game.stack:push(TextBox.new(game, wrapText("CHALLENGE DECLINED BY OPPONENT.")))
-              elseif cType == "PVP" or cType == "TRADE" then
+              elseif (cType == "PVP" or cType == "TRADE") and GtsUI.showOffer(game, challengerId, cType, roomId, nowT) then
                 local myId, myName = getTrainerInfo(game.save)
                 local promptItems = {
                   {
                     label = string.format("ACCEPT %s", cType),
                     onSelect = function()
+                      -- the offer lives 15 s on the server and the challenger
+                      -- gives up at 16 s: a late ACCEPT would start this side alone
+                      local shown = GtsUI.challengePrompt
+                      local nowA = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
+                      if shown and shown.at and nowA - shown.at > 13.0 then
+                        GtsUI.offerAnswered()
+                        gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
+                        gtsApiPost({ action = "send_challenge", targetId = challengerId, fromId = myId,
+                          fromName = myName, challengeType = "DECLINE" }, 0.5)
+                        game.stack:push(TextBox.new(game, wrapText("THE OFFER EXPIRED.")))
+                        return
+                      end
+                      GtsUI.offerAnswered()
                       gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                       local myPackedParty = packPartyForGame(game, game.save and game.save.party or {})
                       if cType == "PVP" then
@@ -2213,12 +2323,17 @@
                         }, 1.5)
                         startPvpBattle(game, challengerName, challengerId, remotePartyPacked, false, sharedSeed, battleRoom)
                       elseif cType == "TRADE" then
-                        if not game.save or not game.save.party or #game.save.party == 0 then
-                          game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
-                          return
-                        end
+                        -- a Gen 1 cable trade needs one to offer and one to
+                        -- keep (startLinkTrade); FireRed's Trade Center has
+                        -- its own rule.  Turned down, so the challenger isn't
+                        -- left waiting on a trade that never opens.
+                        local need = GtsUI.G3 and 1 or 2
+                        local refusal = (isGen2 and "LINK TRADES ARE NOT YET SUPPORTED ON CRYSTAL (GEN 2).")
+                          or ((not game.save or not game.save.party or #game.save.party < need)
+                            and string.format("YOU NEED AT LEAST %d POKéMON IN YOUR PARTY TO TRADE!", need))
+                        if refusal then game.stack:push(TextBox.new(game, wrapText(refusal))) end
                         -- the hardcore trade limit: turned down, as DECLINE does
-                        if GtsUI.tradeRefusal(game) then
+                        if refusal or GtsUI.tradeRefusal(game) then
                           gtsApiPost({
                             action = "send_challenge",
                             targetId = challengerId,
@@ -2243,6 +2358,7 @@
                   {
                     label = "DECLINE",
                     onSelect = function()
+                      GtsUI.offerAnswered()
                       gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                       gtsApiPost({
                         action = "send_challenge",
@@ -2254,7 +2370,11 @@
                     end
                   }
                 }
-                game.stack:push(Menu.new(game, promptItems, { tx = 1, ty = 1, tw = 18, th = 6 }))
+                -- B declines too: a closed prompt doesn't come back
+                local prompt = Menu.new(game, promptItems, { tx = 1, ty = 1, tw = 18, th = 6,
+                  onCancel = promptItems[2].onSelect })
+                GtsUI.challengePrompt.menu = prompt
+                game.stack:push(prompt)
               end
             end -- end cooldown else
           end -- end if res.challenge
@@ -2517,6 +2637,31 @@
     writeOnlineSave(game.save)
   end
 
+  -- The trainer id is a number in the save (a new character's is, and the
+  -- engine compares mon.otId ~= player.id strictly: obedience, traded EXP,
+  -- Yellow's Pikachu follower), but the server's account carries a string.
+  -- Saves that got the string, and their Pokémon caught under it, are put
+  -- back to the number.  Not on FireRed: its save is FireRed's own.
+  function GtsUI.repairOtIds(save)
+    if GtsUI.G3 or type(save) ~= "table" or type(save.player) ~= "table" then return end
+    local id = save.player.id
+    if id == nil then return end
+    local key = tostring(id)
+    local function fix(list)
+      if type(list) ~= "table" then return end
+      for _, mon in ipairs(list) do
+        if type(mon) == "table" and mon.otId ~= nil and mon.otId ~= id and tostring(mon.otId) == key then
+          mon.otId = id
+        end
+      end
+    end
+    fix(save.party)
+    fix(save.box)
+    if type(save.boxes) == "table" then
+      for bIdx = 1, 14 do fix(save.boxes[bIdx]) end
+    end
+  end
+
   -- Sync Local Trainer Profile & Online Account to Server
   loadOnlineAccount = function(save)
     -- Online only: offline these touched the OFFLINE save (renaming its
@@ -2530,7 +2675,10 @@
     if acc and type(acc) == "table" then
       if save then save.onlineAccount = acc end
       if acc.name and save and save.player then save.player.name = acc.name end
-      if acc.trainerId and save and save.player then save.player.id = acc.trainerId end
+      if acc.trainerId and save and save.player then
+        save.player.id = (not GtsUI.G3 and tonumber(acc.trainerId)) or acc.trainerId
+        GtsUI.repairOtIds(save)
+      end
       mmoLevel = tonumber(acc.level) or 1
       mmoXp = tonumber(acc.xp) or 0
       mmoToken = acc.token or nil
@@ -2550,6 +2698,7 @@
     if not save then return end
     save.onlineAccount = save.onlineAccount or {}
     save.onlineAccount.trainerId = (save.player and save.player.id) or save.onlineAccount.trainerId or "100001"
+    if not GtsUI.G3 then save.onlineAccount.trainerId = tonumber(save.onlineAccount.trainerId) or save.onlineAccount.trainerId end
     save.onlineAccount.name = (save.player and save.player.name) or save.onlineAccount.name or "CRYSTAL"
     save.onlineAccount.level = mmoLevel or 1
     save.onlineAccount.xp = mmoXp or 0
@@ -3017,6 +3166,7 @@
     roomCode = nil
     activeBattleAdapter = nil
     isWaitingForChallenge = false
+    pendingPartyInvite, GtsUI.pendingOffer, GtsUI.challengePrompt = nil, nil, nil
 
     -- 1. Save online progress to save_online.lua before disconnecting
     if isGtsServerConnected and game and game.save then
@@ -3076,6 +3226,7 @@
     roomCode = nil
     activeBattleAdapter = nil
     isWaitingForChallenge = false
+    pendingPartyInvite, GtsUI.pendingOffer, GtsUI.challengePrompt = nil, nil, nil
     if game and game.save then
       writeOnlineSave(game.save)
     end
@@ -4158,7 +4309,7 @@
     if GtsUI.G3 then
       -- FireRed's in-game trade scene, then a trade evolution
       local ok = GtsUI.G3.receive(game, sentMon, receivedPacked, otName,
-        function() GtsUI.tradeUsed(game) performForcedSave(game) end,
+        function() performForcedSave(game) end,
         function(receivedMon)
           performForcedSave(game)
           if addMmoXp then addMmoXp(game, "gts_trade", 100) end
@@ -4182,8 +4333,6 @@
 
     -- Add to player party / boxes
     local whereTo, slot = GtsUI.addPlayerMon(game, receivedMon)
-    -- one trade used of the hardcore limit, once the Pokémon is here
-    if whereTo then GtsUI.tradeUsed(game) end
 
     -- Update Pokédex seen & caught flags
     if game.save then
@@ -4402,6 +4551,8 @@
                   return
                 end
                 local receivedPacked = res.receivedMon or offered
+                -- a GTS buy uses one of the hardcore limit's trades
+                GtsUI.tradeUsed(game, "THE GTS TRADE")
 
                 -- Update local database
                 gtsDb.claim_boxes[tostring(listing.trainerId)] = gtsDb.claim_boxes[tostring(listing.trainerId)] or {}
@@ -4698,6 +4849,9 @@
           return
         end
         gtsDb.listings[res.listing.id] = res.listing
+        -- the deposit is the trade: it uses the hardcore limit's now, so
+        -- whatever comes back for it is always claimable
+        GtsUI.tradeReserved(game, res.listing.id, "YOUR GTS DEPOSIT")
 
         gtsDb.user_counts[tostring(trainerId)] = (gtsDb.user_counts[tostring(trainerId)] or 0) + 1
         GtsUI.addGtsReceipt(string.format("%s DEPOSITED %s", trainerName, GtsUI.monLabelName(game, depositMon)))
@@ -4825,6 +4979,8 @@
             if returnedMon then GtsUI.addPlayerMon(game, returnedMon) end
 
             gtsDb.listings[id] = nil
+            -- taken back: its trade is given back
+            GtsUI.tradeReleased(game, id)
             gtsDb.user_counts[tostring(trainerId)] = math.max(0, (gtsDb.user_counts[tostring(trainerId)] or 1) - 1)
             GtsUI.addGtsReceipt(string.format("%s WITHDREW DEPOSITED %s", trainerName, offName))
             performForcedSave(game)
@@ -4851,7 +5007,6 @@
             game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
             return
           end
-          if GtsUI.tradeRefusal(game) then return end
           local res = gtsApiPost({ action = "claim", trainerId = trainerId, index = idx - 1, claimId = claim.id }, 2.0)
           if not (res and res.success and res.claimed and res.claimed.mon) then
             game.stack:push(TextBox.new(game, wrapText(res
@@ -4914,7 +5069,6 @@
             game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
             return
           end
-          if GtsUI.tradeRefusal(game) then return end
           local res = gtsApiPost({ action = "wonder_trade_claim", trainerId = trainerId }, 2.0)
           local got = res and res.success and res.claim
           if not (got and got.mon) then
@@ -4967,6 +5121,7 @@
           end
           local returnedMon = GtsUI.unpackMon(game, res.mon)
           if returnedMon then GtsUI.addPlayerMon(game, returnedMon) end
+          GtsUI.tradeReleased(game, "WONDER")
           performForcedSave(game)
           game.stack:push(TextBox.new(game, wrapText(string.format("WITHDREW %s FROM WONDER TRADE POOL!", mName))))
         end
@@ -5013,6 +5168,7 @@
                   return
                 end
 
+                GtsUI.tradeReserved(game, "WONDER", "YOUR WONDER TRADE")
                 performForcedSave(game)
                 local dName = GtsUI.monLabelName(game, depositMon)
                 local msg = res.matched
@@ -5226,13 +5382,13 @@
       {
         label = "CREATE NEW PLAYER",
         onSelect = function()
-          openFreshOnlinePlayerMenu(game)
+          GtsUI.confirmOnlineOverwrite(game, function() openFreshOnlinePlayerMenu(game) end)
         end
       },
       {
         label = "REDEEM RECOVERY TOKEN",
         onSelect = function()
-          openRedeemTokenMenu(game)
+          GtsUI.confirmOnlineOverwrite(game, function() openRedeemTokenMenu(game) end)
         end
       },
       {
@@ -5417,8 +5573,9 @@
           -- Always refresh the account profile on the restored/fresh save.
           newSave.player = newSave.player or {}
           newSave.player.name = acc.name or (isGen2 and "CRYSTAL" or "RED")
-          newSave.player.id = acc.trainerId or getTrainerInfo(game.save)
+          newSave.player.id = tonumber(acc.trainerId) or acc.trainerId or getTrainerInfo(game.save)
           newSave.onlineAccount = acc
+          GtsUI.repairOtIds(newSave)
 
           currentGame = game
           game.save = newSave
@@ -6115,6 +6272,8 @@
             {
               label = "YES, RESET",
               onSelect = function()
+                -- the old character leaves now, not as a frozen ghost for 30 s
+                GtsUI.sendLogout(game)
                 storageRemove("online_save")
                 storageRemove("online_account")
                 openFreshOnlinePlayerMenu(game)
@@ -6366,6 +6525,22 @@
     gtsApiPost({ action = "clear_challenge", trainerId = tid }, 1.5)
   end
 
+  -- ONLINE SETTINGS > CREATE NEW PLAYER / REDEEM RECOVERY TOKEN replace the
+  -- current online character: asked first, as RESET does, and the old
+  -- character logs out before `proceed` runs.
+  function GtsUI.confirmOnlineOverwrite(game, proceed)
+    local confirmMenu = {
+      { label = "YES", onSelect = function()
+          GtsUI.sendLogout(game)
+          proceed()
+        end },
+      { label = "CANCEL", onSelect = function() end },
+    }
+    game.stack:push(TextBox.new(game, wrapText("WARNING: THIS WILL OVERWRITE YOUR ONLINE CHARACTER! LOCAL SAVE IS UNTOUCHED. PROCEED?"), function()
+      game.stack:push(Menu.new(game, confirmMenu, { tx = 0, ty = 0, tw = 20, maxVisible = 6, startCloses = true }))
+    end))
+  end
+
   -- Server game modes on Gen 1 and FireRed/LeafGreen (hardcore Nuzlocke,
   -- the co-op randomizer, shared key items): modes/init.lua and modes/frlg.lua.
   -- The server's server_config.txt picks them; they only ever act while
@@ -6390,12 +6565,62 @@
     end)
     if not okModes then diag("game modes unavailable: %s", tostring(err)) end
     if mod and mod.exports then mod.exports.modes = GtsUI.Modes end
+    -- Gen 1's own Cable Club (the Pokémon Center 2F attendant) is open while
+    -- online, and its trades count too (GtsUI.linkTradeCompleted): past the
+    -- hardcore trade limit it ends before the trade screen.  Only a
+    -- LinkState already on top (exitWith pops the top state): the mod's own
+    -- startLinkTrade starts its mode before the push and asks at the offer.
+    local okLS, LinkState = false, nil
+    if not GtsUI.G3 then okLS, LinkState = pcall(require, "src.link.LinkState") end
+    if okLS and type(LinkState) == "table" and LinkState.startMode
+      and not LinkState._g1oTradeGate then
+      LinkState._g1oTradeGate = true
+      local startMode = LinkState.startMode
+      LinkState.startMode = function(self, mode, isHost, ...)
+        if mode == "trade" and isGtsServerConnected and self.game and self.game.stack
+          and self.game.stack:top() == self and GtsUI.Modes and GtsUI.Modes.tradeRefusal then
+          local okW, why = pcall(GtsUI.Modes.tradeRefusal, self.game.save)
+          if okW and why then return self:exitWith(wrapText(why), "cancel") end
+        end
+        return startMode(self, mode, isHost, ...)
+      end
+      -- The next round of a cable trade (the engine starts one after every
+      -- trade's scene, as the Cable Club does): past the limit, the partner
+      -- is told (bye) and this side leaves.  By now the partner has long
+      -- applied the last trade, so nothing can be cancelled under it.  The
+      -- adapter's own send drops "bye" (meant for battles): over the
+      -- server it is posted to the room directly.
+      local beginRound = LinkState.beginRound
+      LinkState.beginRound = function(self, ...)
+        if isGtsServerConnected and self.game and self.net and GtsUI.Modes and GtsUI.Modes.tradeRefusal then
+          local okW, why = pcall(GtsUI.Modes.tradeRefusal, self.game.save)
+          if okW and why then
+            if self.net.roomId and self.net.targetId then
+              gtsApiPost({ action = "send_battle_msg", roomId = self.net.roomId, targetId = self.net.targetId, msg = { type = "bye" } }, 1.5)
+            elseif self.net.send then
+              pcall(self.net.send, self.net, { type = "bye" })
+            end
+            if self.game.stack and self.game.stack:top() == self then
+              return self:exitWith(wrapText(why), "cancel")
+            end
+            -- not on top (another screen is up): the engine's own broken-link
+            -- exit below, and the reason once the player is on the field
+            if self.net.close then pcall(self.net.close, self.net) end
+            GtsUI.linkTradeNote = why
+          end
+        end
+        return beginRound(self, ...)
+      end
+    end
   end
 
-  -- The hardcore Nuzlocke's trade limit (modes/).  Every way a Pokémon comes
-  -- in by trade asks first, before anything leaves or a request is posted,
-  -- and counts once the Pokémon is here (GtsUI.tradeUsed).  Gifts and the
-  -- in-game trades never count.  TextBox and wrapText are FireRed's there.
+  -- The hardcore Nuzlocke's trade limit (modes/).  Every trade asks first,
+  -- before anything leaves or a request is posted.  A GTS or Wonder Trade
+  -- deposit uses the trade when it goes in (GtsUI.tradeReserved), and taking
+  -- it back gives it back (GtsUI.tradeReleased); whatever comes back for it
+  -- is always claimable.  A GTS buy and each link trade count when made
+  -- (GtsUI.tradeUsed).  Gifts and the in-game trades never count.  TextBox
+  -- and wrapText are FireRed's there.
   function GtsUI.tradeRefusal(game)
     local M = GtsUI.Modes
     if not (M and M.tradeRefusal and game and game.save) then return false end
@@ -6405,27 +6630,36 @@
     game.stack:push(TextBox.new(game, wrapText(why)))
     return true
   end
-  function GtsUI.tradeUsed(game)
+  function GtsUI.tradeUsed(game, what)
     local M = GtsUI.Modes
     if not (M and M.tradeDone and game and game.save) then return end
-    local ok, err = pcall(M.tradeDone, game.save)
+    local ok, err = pcall(M.tradeDone, game.save, what)
     if not ok then diag("trade count failed: %s", tostring(err)) end
   end
-  -- Gen 1 cable trades over the server (startLinkTrade sets linkTradeLive).
-  -- trade.completed fires inside the trade's commit with the LinkState still
-  -- on top: when that was the last trade, its link is closed, so the
-  -- LinkState ends itself after this trade's scene instead of starting
-  -- another round, and the reason shows once the player is on the field.
-  function GtsUI.linkTradeCompleted(game)
-    local ls = GtsUI.linkTradeLive
-    if not ls or GtsUI.G3 or isGen2 or not (game and game.save) then return end
-    GtsUI.tradeUsed(game)
+  function GtsUI.tradeReserved(game, id, what)
     local M = GtsUI.Modes
-    local okL, left = pcall(function() return M and M.tradesLeft and M.tradesLeft(game.save) end)
-    if not (okL and tonumber(left) and tonumber(left) <= 0) then return end
-    if type(ls) == "table" and ls.net and ls.net.close then pcall(ls.net.close, ls.net) end
-    local okW, why = pcall(function() return M.tradeRefusal and M.tradeRefusal(game.save) end)
-    GtsUI.linkTradeNote = okW and why or nil
+    if not (M and M.tradeReserve and game and game.save and id ~= nil) then return end
+    local ok, err = pcall(M.tradeReserve, game.save, id, what)
+    if not ok then diag("trade reserve failed: %s", tostring(err)) end
+  end
+  function GtsUI.tradeReleased(game, id)
+    local M = GtsUI.Modes
+    if not (M and M.tradeRelease and game and game.save and id ~= nil) then return end
+    local ok, err = pcall(M.tradeRelease, game.save, id)
+    if not ok then diag("trade release failed: %s", tostring(err)) end
+  end
+  -- Gen 1 cable trades: over the server (startLinkTrade sets linkTradeLive)
+  -- or the game's own Cable Club while online (its LinkState on top).
+  -- trade.completed fires inside the trade's commit, with the LinkState
+  -- still on top: the trade is counted here and nothing else happens now
+  -- (a "bye" at this moment could reach the partner in the same batch as
+  -- the confirm and cancel a trade this side already applied).  The limit
+  -- is enforced when the next round starts (the LinkState.beginRound wrap).
+  function GtsUI.linkTradeCompleted(game)
+    if GtsUI.G3 or isGen2 or not isGtsServerConnected or not (game and game.save) then return end
+    local ls = GtsUI.linkTradeLive or (game.stack and game.stack.top and game.stack:top())
+    if not (type(ls) == "table" and ls.exitWith and ls.trade) then return end
+    GtsUI.tradeUsed(game, "THE LINK TRADE")
   end
   -- every frame while one is pending: forget the cable trade once its
   -- LinkState is off the stack, then show the note on the field
@@ -6447,7 +6681,7 @@
   -- FireRed/LeafGreen's link trades (gen3/link.lua counts them, and the
   -- Trade Center screen asks before an offer: gen3/init.lua)
   if GtsUI.G3 then
-    GtsUI.G3.onLinkTrade = function() GtsUI.tradeUsed(GtsUI.G3.game) end
+    GtsUI.G3.onLinkTrade = function() GtsUI.tradeUsed(GtsUI.G3.game, "THE LINK TRADE") end
     GtsUI.G3.tradeRefusal = function()
       local M, save = GtsUI.Modes, GtsUI.G3.game.save
       return M and M.tradeRefusal and save and M.tradeRefusal(save) or nil
@@ -6461,23 +6695,9 @@ return function(mod)
   currentMod = mod
   print("[Gen1Online] Initializing Gen1Online Asynchronous Threaded 60FPS MMO Mod...")
 
-  -- Wrap the START-menu QUIT / EXIT item so the player is actively logged out
-  -- of the server before the app closes (never leave a ghost online).
-  local function wrapQuitItems(game, list)
-    if not list then return end
-    for i, item in ipairs(list) do
-      if item and item.label then
-        local lbl = tostring(item.label):upper()
-        if lbl == "QUIT" or lbl:find("EXIT") or lbl:find("SHUTDOWN") then
-          local origSelect = item.onSelect
-          item.onSelect = function(...)
-            if _G.__gtsQuitLogout then pcall(function() _G.__gtsQuitLogout(game) end) end
-            if origSelect then origSelect(...) end
-          end
-        end
-      end
-    end
-  end
+  -- (QUIT logs out through the returnToTitle wrapper, once its "RETURN TO
+  -- MAIN MENU?" is answered YES; a wrapper on the QUIT row logged out before
+  -- the question, so NO left the player connected but gone from the server.)
 
   -- Hook Start Menu (identical method as DebugMenu)
   mod.hooks:wrap("ui.start_menu.items", function(nextFn, game, items)
@@ -6531,7 +6751,6 @@ return function(mod)
     end
 
     table.insert(list, targetIndex, connectItem)
-    if not G3 then wrapQuitItems(game, list) end
     return list
   end)
 
@@ -6652,6 +6871,10 @@ return function(mod)
   onEvent("pokemon.caught", function(payload)
     if Game and Game.save then
       addMmoXp(Game, "catch")
+      if isGtsServerConnected then
+        gtsApiPost({ action = "report_battle_stat", trainerId = (getTrainerInfo(Game.save)), battleType = "wild",
+          species = payload and (payload.species or (payload.mon and payload.mon.species)), caught = true })
+      end
       performForcedSave(Game)
       syncLocalProfile(Game, 0)
     end
@@ -6792,6 +7015,7 @@ return function(mod)
       challengeWaitTimer = (challengeWaitTimer or 0) + dt
       if challengeWaitTimer > 16.0 then
         isWaitingForChallenge = false
+        GtsUI.pendingOffer = nil
         challengeWaitTimer = 0
         Game.stack:push(TextBox.new(Game, "CHALLENGE TIMED OUT\nNO RESPONSE."))
       end
@@ -6951,7 +7175,7 @@ return function(mod)
       fx, fy = p1.cellX + d[1], p1.cellY + d[2]
     end
 
-    for tid, pNpc in pairs(netNpcs) do
+    for tid, pNpc in pairs(isGtsServerConnected and netNpcs or {}) do
       if pNpc.cellX == fx and pNpc.cellY == fy then
         local rawData = netPlayerMap[tid] or {}
         local pName = rawData.name or "TRAINER"
@@ -6982,6 +7206,7 @@ return function(mod)
 
               isWaitingForChallenge = true
               challengeWaitTimer = 0
+              GtsUI.pendingOffer = { targetId = tostring(targetTid), roomId = roomId, type = "PVP" }
 
               gtsApiPost({
                 action = "send_challenge",
@@ -6999,8 +7224,9 @@ return function(mod)
           {
             label = "LINK TRADE",
             onSelect = function()
-              if not Game.save or not Game.save.party or #Game.save.party == 0 then
-                Game.stack:push(TextBox.new(Game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
+              local need = GtsUI.G3 and 1 or 2 -- a cable trade keeps one back
+              if not Game.save or not Game.save.party or #Game.save.party < need then
+                Game.stack:push(TextBox.new(Game, wrapText(string.format("YOU NEED AT LEAST %d POKéMON IN YOUR PARTY TO TRADE!", need))))
                 return
               end
               if GtsUI.tradeRefusal(Game) then return end
@@ -7013,6 +7239,7 @@ return function(mod)
 
               isWaitingForChallenge = true
               challengeWaitTimer = 0
+              GtsUI.pendingOffer = { targetId = tostring(targetTid), roomId = roomId, type = "TRADE" }
 
               gtsApiPost({
                 action = "send_challenge",
@@ -7107,6 +7334,7 @@ return function(mod)
         challengeWaitTimer = (challengeWaitTimer or 0) + dt
         if challengeWaitTimer > 16.0 then
           isWaitingForChallenge = false
+          GtsUI.pendingOffer = nil
           challengeWaitTimer = 0
           if curGame and curGame.stack then
             curGame.stack:push(TextBox.new(curGame, "CHALLENGE TIMED OUT\nNO RESPONSE."))
@@ -7233,7 +7461,7 @@ return function(mod)
       local d = Collision.DELTA[p1.facing] or { 0, 1 }
       local fx, fy = p1.cellX + d[1], p1.cellY + d[2]
 
-      for tid, pNpc in pairs(netNpcs) do
+      for tid, pNpc in pairs(isGtsServerConnected and netNpcs or {}) do
         if pNpc.cellX == fx and pNpc.cellY == fy then
           local rawData = netPlayerMap[tid] or {}
           local pName = rawData.name or "TRAINER"
@@ -7264,6 +7492,7 @@ return function(mod)
 
                 isWaitingForChallenge = true
                 challengeWaitTimer = 0
+                GtsUI.pendingOffer = { targetId = tostring(targetTid), roomId = roomId, type = "PVP" }
 
                 gtsApiPost({
                   action = "send_challenge",
@@ -7281,8 +7510,8 @@ return function(mod)
             {
               label = "LINK TRADE",
               onSelect = function()
-                if not curGame.save or not curGame.save.party or #curGame.save.party == 0 then
-                  curGame.stack:push(TextBox.new(curGame, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
+                if not curGame.save or not curGame.save.party or #curGame.save.party < 2 then
+                  curGame.stack:push(TextBox.new(curGame, wrapText("YOU NEED AT LEAST 2 POKéMON IN YOUR PARTY TO TRADE!")))
                   return
                 end
                 if GtsUI.tradeRefusal(curGame) then return end
@@ -7295,6 +7524,7 @@ return function(mod)
 
                 isWaitingForChallenge = true
                 challengeWaitTimer = 0
+                GtsUI.pendingOffer = { targetId = tostring(targetTid), roomId = roomId, type = "TRADE" }
 
                 gtsApiPost({
                   action = "send_challenge",
@@ -7437,7 +7667,9 @@ return function(mod)
     if not isGtsServerConnected and asyncReset then
       asyncReset("disconnected")
     end
-    if isGtsServerConnected and not isWaitingForChallenge and gWorld
+    -- (also while waiting on an offer: the "WAITING FOR" box stops the
+    -- field's own syncs, and the answer only comes back on a sync)
+    if isGtsServerConnected and gWorld
        and gWorld.player and gWorld.map and netOutChannel then
       local ow = gWorld
       local p = ow.player
@@ -7467,10 +7699,12 @@ return function(mod)
           moving = false,
           species = followerSpecies
         }
+        -- a menu or a battle stops the field, so this is the only sync then:
+        -- it carries the session (the server's ALREADY_LOGGED_IN lock holds
+        -- on syncs that name one) and, on FireRed, the whole presence
+        keepalive.sessionId = clientSessionId
         if GtsUI.G3 then
-          -- a menu stops the field, so this is the only sync then: it
-          -- carries the whole presence, as a step's does
-          keepalive.sessionId, keepalive.spriteId, keepalive.level = clientSessionId, localSelectedSprite, mmoLevel
+          keepalive.spriteId, keepalive.level = localSelectedSprite, mmoLevel
           GtsUI.G3.presence(keepalive)
         end
 
@@ -7481,21 +7715,9 @@ return function(mod)
       end
     end
 
-    -- Hook Catch XP reward & Analytics Stat reporting
-    if Party and Party.add and not Party._mmoHooked then
-      Party._mmoHooked = true
-      local origPartyAdd = Party.add
-      Party.add = function(party, mon)
-        local res = origPartyAdd(party, mon)
-        if res and Game and isGtsServerConnected then
-          addMmoXp(Game, "catch")
-          local tid = getTrainerId and getTrainerId(Game.save) or "100001"
-          local sp = mon and mon.species
-          gtsApiPost({ action = "report_battle_stat", trainerId = tid, battleType = "wild", species = sp, caught = true })
-        end
-        return res
-      end
-    end
+    -- Catch XP and its stat: the pokemon.caught handler.  (A Party.add hook
+    -- here awarded a second "catch" for every catch, and one for each GTS,
+    -- Wonder Trade and gift arrival as well.)
 
     -- Hook Wild / Trainer Battle XP reward & Analytics Stat reporting (Single Authoritative Hook)
     if BattleState and BattleState.finish and not BattleState._mmoHooked then

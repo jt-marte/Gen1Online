@@ -12,10 +12,10 @@ port = 7779
 # The modes play on a Gen 1 world (Red, Blue and Yellow) and on a FireRed /
 # LeafGreen world; a Crystal server ignores them.  Everyone on the server
 # plays the same run with the same rules and, with the randomizer, the same
-# shuffled world.  Turning a mode on
-# (or a new run starting) restarts every player's ONLINE save from their
-# bedroom; their offline saves are never touched, and the old online save is
-# kept as a backup.
+# shuffled world.  Changing a mode or the seed here starts a new run (the
+# next time the server starts; host and port don't count), and a new run
+# restarts every player's ONLINE save from their bedroom; their offline
+# saves are never touched, and the old online save is kept as a backup.
 
 # Hardcore Nuzlocke:
 #   - only the first wild Pokemon you meet in each area can be caught,
@@ -33,12 +33,13 @@ port = 7779
 # nuzlocke = off | hardcore
 nuzlocke = off
 
-# Trades in the hardcore Nuzlocke: how many Pokemon each player may receive
-# through the GTS, Wonder Trade or a link trade between two gym leaders.
-# With 1, you may trade once; beating a gym leader lets you trade once more,
-# until the next leader (your own gym leaders beaten, not the team's).  A
-# GTS or Wonder Trade deposit is refused while your trades are used up; a
-# Pokemon that reaches your claim box then waits for your next gym leader.
+# Trades in the hardcore Nuzlocke: how many trades each player gets between
+# two gym leaders.  With 1, you may trade once; beating a gym leader lets
+# you trade once more, until the next leader (your own gym leaders beaten,
+# not the team's).  A GTS buy, a GTS or Wonder Trade deposit and a link
+# trade each use one; taking a deposit back gives it back, and whatever
+# comes back for a deposit is always yours to claim.  Like every setting
+# here, changing it starts a new run at the next server start.
 # nuzlocke_trades = off (no limit) | 1 | 2 | ...
 nuzlocke_trades = off
 
@@ -102,6 +103,7 @@ shared_key_items = auto
 multiworld = off
 players = 2
 
-# A number from 1 to 2147483646 replays the same world for run 1.  Leave it
-# empty for a new random world every run.
+# A number from 1 to 2147483646 replays the same world for the run it
+# starts (run 1, or the run a changed setting starts); later runs derive
+# their own.  Leave it empty for a new random world every run.
 seed =

@@ -151,13 +151,16 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   - `gts_test.lua`: GTS deposit, buy, withdraw and claim, each losing a race
     to another trainer or device first; the player's Pokémon must stay put.
   - `nuzlocke_trades_test.lua` (Yellow; `nuzlocke = hardcore`,
-    `nuzlocke_trades = 1`): the trade limit. A GTS deposit is free, a GTS
-    buy uses the trade (its note, RUN INFO), then a second buy, a GTS
-    deposit, a Wonder Trade deposit, a LINK TRADE offer, an accepted TRADE
-    challenge (BUDDY gets a DECLINE) and a GTS claim are all refused with
-    nothing moved; Brock's flag opens a new allowance and the claim goes
-    through; the count survives DISCONNECT and JOIN; with `tradesPerGym`
-    pinned to 0 nothing counts. Fails on any swallowed mod error.
+    `nuzlocke_trades = 1`): the trade limit. A GTS deposit uses the trade
+    (its note, RUN INFO); with none left a buy, a second deposit, a Wonder
+    Trade deposit, a LINK TRADE offer and an accepted TRADE challenge
+    (BUDDY gets a DECLINE) are refused with nothing moved; TAKE gives the
+    trade back; the deposit bought, its claim is free at 0 left. Leaders'
+    flags open new stretches: a GTS buy uses one, a Wonder Trade deposit
+    uses one and its withdraw gives it back, a Wonder claim is free, and a
+    deposit from an earlier stretch taken back stays spent. The counts and
+    a reservation survive DISCONNECT and JOIN; with `tradesPerGym` pinned
+    to 0 nothing counts. Fails on any swallowed mod error.
   - Both stub `Gen2TradeAnim` and `Gen2NamingScreen` (no art in the rig) and
     give `game.data.pokemon` minimal defs so `unpackMon2` works.
   - **Gen 1**: `G1O_GAME=red|blue|yellow` makes the rig boot the real Gen 1
@@ -515,7 +518,9 @@ Game modes (Gen 1 and FireRed/LeafGreen; `server/server_config.txt`,
   encounters, items, badges, starters, wildLegendaries, trainers,
   sharedKeyItems, active, runId, seed}` (`wildLegendaries`: a percent, 0 when
   off or without the randomizer; `trainers`: "off" | "gyms" | "on";
-  `tradesPerGym`: `nuzlocke_trades`, 0 = unlimited, 0 unless hardcore) rides `/server/info` as
+  `tradesPerGym`: `nuzlocke_trades`, 0 = unlimited, 0 unless hardcore;
+  `runReason`: why the run began, "start" | "wipe" | "config" | "manual",
+  which words the clients' "RUN N IS OVER" note) rides `/server/info` as
   `rules` and every `sync_pos` answer as `run`, next to `team: {rev, items:
   [ITEM]}`. Sub-flags read false when the randomizer is off;
   `shared_key_items = auto` follows the randomizer.
@@ -539,7 +544,11 @@ Game modes (Gen 1 and FireRed/LeafGreen; `server/server_config.txt`,
   `Modes.precheck`, before the offline save is touched) and answers
   `{world: null, free}`. `players = 1` never refuses.
 - Persisted: `run {id, seed, started, worlds {tid: world}, fingerprint,
-  gameName}` (a new run keeps the worlds) and `team {items, rev}`. The client
+  gameName, signature}` (a new run keeps the worlds; `signature` is the
+  rules view plus the configured seed the run started under: a server
+  start whose config differs begins the next run with the configured seed,
+  a key the stored signature lacks counts as its default, and a data file
+  without one adopts the current rules) and `team {items, rev}`. The client
   stamps its online save with `g1oModes.run`; a save from another run is
   archived (`gen1online_online_save_<game>_run<N>_backup.lua`) and replaced by
   a new game in the bedroom with the same `onlineAccount`.
@@ -826,14 +835,22 @@ off the open internet.
     (`st.hadBalls`, sticky; a save with any area used counts as having had
     them); after that an empty bag still uses an area up. Pokémon from the
     GTS, Wonder Trade and link trades skip the catch rules (a design call).
-    With `nuzlocke_trades = N` a player may receive N Pokémon through them
-    per stretch between gym leaders beaten (`M.gymsBeaten`, the leader flags,
-    not badges); `st.trades[beaten] = used` in the mode state. The clients
-    gate GTS buy/claim, Wonder claim and link trades (`Modes.tradeRefusal`),
-    refuse deposits while used up, and count in
-    `performTradeWithAnimationAndEvolution` (`Modes.tradeDone`), on
-    `trade.completed` while a Gen 1 cable trade is live (then `exitWith` at
-    0 left), and per `LT.completed` step in `gen3/link.lua`.
+    With `nuzlocke_trades = N` a player gets N trades per stretch between
+    gym leaders beaten (`M.gymsBeaten`, the leader flags, not badges);
+    `st.trades[beaten] = used` and `st.reserved[id] = stretch` in the mode
+    state. A GTS buy and each link trade count when done
+    (`Modes.tradeDone`); a GTS or Wonder Trade deposit counts when it goes in
+    (`Modes.tradeReserve`, refused at 0 left) and a withdraw in the same
+    stretch gives it back (`Modes.tradeRelease`); claims never count and are
+    never refused, so nothing gets stuck in a claim box or the pool. Link
+    trades: refused on the offer and the accept (`Modes.tradeRefusal`); a
+    Gen 1 cable trade counts on `trade.completed` (the mod's room or the
+    game's own Cable Club); at 0 left the next round is refused in the
+    `LinkState.beginRound` wrap (a `bye` to the partner, then `exitWith`),
+    never inside `trade.completed`, where a `bye` could reach the partner
+    in the same batch as the confirm and cancel a trade this side applied;
+    FireRed counts per `LT.completed` step in `gen3/link.lua` and refuses in
+    `canTradeSelectedMon`.
   - The hardcore rules hook `item.use` (the bag), `ItemEffects.needsTarget`
     (a refused item gets no target picker), `BattleState.safariAction` (the
     Safari Zone's own BALL), `battle.style`, `exp.gain`, and the
