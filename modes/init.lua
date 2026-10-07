@@ -186,9 +186,15 @@ return function(ctx)
   function M.tradeReserve(save, id, what)
     local left = M.tradeDone(save, what)
     if left == nil then return nil end
-    local st = state(save or Game.save)
-    st.reserved = st.reserved or {}
-    st.reserved[tostring(id)] = tostring(M.gymsBeaten(save))
+    save = save or Game.save
+    local st, key = state(save), tostring(M.gymsBeaten(save))
+    -- only this stretch's deposits can be taken back for a refund: older
+    -- entries are spent, so they go (the save doesn't grow with every deposit)
+    local reserved = {}
+    for k, v in pairs(st.reserved or {}) do if v == key then reserved[k] = v end end
+    reserved[tostring(id)] = key
+    st.reserved = reserved
+    ctx.writeOnlineSave(save)
     return left
   end
 

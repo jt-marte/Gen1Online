@@ -151,13 +151,16 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   - `gts_test.lua`: GTS deposit, buy, withdraw and claim, each losing a race
     to another trainer or device first; the player's Pokémon must stay put.
   - `nuzlocke_trades_test.lua` (Yellow; `nuzlocke = hardcore`,
-    `nuzlocke_trades = 1`): the trade limit. A GTS deposit is free, a GTS
-    buy uses the trade (its note, RUN INFO), then a second buy, a GTS
-    deposit, a Wonder Trade deposit, a LINK TRADE offer, an accepted TRADE
-    challenge (BUDDY gets a DECLINE) and a GTS claim are all refused with
-    nothing moved; Brock's flag opens a new allowance and the claim goes
-    through; the count survives DISCONNECT and JOIN; with `tradesPerGym`
-    pinned to 0 nothing counts. Fails on any swallowed mod error.
+    `nuzlocke_trades = 1`): the trade limit. A GTS deposit uses the trade
+    (its note, RUN INFO); with none left a buy, a second deposit, a Wonder
+    Trade deposit, a LINK TRADE offer and an accepted TRADE challenge
+    (BUDDY gets a DECLINE) are refused with nothing moved; TAKE gives the
+    trade back; the deposit bought, its claim is free at 0 left. Leaders'
+    flags open new stretches: a GTS buy uses one, a Wonder Trade deposit
+    uses one and its withdraw gives it back, a Wonder claim is free, and a
+    deposit from an earlier stretch taken back stays spent. The counts and
+    a reservation survive DISCONNECT and JOIN; with `tradesPerGym` pinned
+    to 0 nothing counts. Fails on any swallowed mod error.
   - Both stub `Gen2TradeAnim` and `Gen2NamingScreen` (no art in the rig) and
     give `game.data.pokemon` minimal defs so `unpackMon2` works.
   - **Gen 1**: `G1O_GAME=red|blue|yellow` makes the rig boot the real Gen 1
