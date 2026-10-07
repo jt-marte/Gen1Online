@@ -859,11 +859,11 @@
     for _, m in ipairs(msgs) do
       local id = tonumber(m.id) or 0
       if id > ChatState.lastId then
-        ChatState.unread = (ChatState.unread or 0) + 1
-        -- Only notify for others' messages, not own
+        -- Only count and notify others' messages, not own
         local gSave = (game and game.save) or (currentGame and currentGame.save)
         local myId = gSave and select(1, getTrainerInfo(gSave)) or nil
         if tostring(m.trainerId) ~= tostring(myId) then
+          ChatState.unread = (ChatState.unread or 0) + 1
           pushLiveChatNotification(game or currentGame, m.name, m.text)
         end
       end
@@ -934,12 +934,11 @@
       -- Optimistically update cache: next poll will confirm, but push ourselves without notification
       game.stack:push(TextBox.new(game, wrapText(string.format("SENT:\n%s", clean))))
       -- Refresh history silently
+      -- (through the normal path: friends' messages that came in since the
+      -- last poll are still new; our own is not counted)
       local hist = gtsApiGet("/chat/history", 2.0)
       if hist and hist.success and hist.messages then
-        ChatState.history = hist.messages
-        local maxId = ChatState.lastId
-        for _, m in ipairs(hist.messages) do maxId = math.max(maxId, tonumber(m.id) or 0) end
-        if maxId > ChatState.lastId then ChatState.lastId = maxId end
+        handleNewChatMessages(game, hist.messages)
       end
       return true
     else
@@ -1433,6 +1432,52 @@
   local asyncWrite, asyncRead, asyncBody, asyncBodyLen, asyncInHeaders = "", "", "", -1, true
   local asyncPending, asyncActive = {}, nil
   local asyncConnectTried, asyncConnectStart, asyncReconnectUntil, asyncStallStart, asyncSendTimeout = false, 0, 0, 0, 0
+  -- A request the engine gives up on (a closed connection, the queue cap,
+  -- the blocking fallback) still answers its caller, with nil: the battle
+  -- transports (pvp/net.lua, gen3/link.lua) wait on their callbacks.
+  function GtsUI.asyncDrop(req)
+    if req and type(req.callback) == "function" then pcall(req.callback, nil) end
+  end
+  -- An offer (PVP or TRADE) comes back on every sync answer while it lives
+  -- on the server (15 s): its prompt is shown once, never over a battle or
+  -- another screen (it shows on a later sync while the offer lives), and
+  -- not again for 15 s once answered.
+  function GtsUI.showOffer(game, fromId, cType, roomId, nowT)
+    if inBattle or isPlayerBusy(game) then return false end
+    local key = tostring(fromId) .. "|" .. tostring(cType) .. "|" .. tostring(roomId)
+    local shown = GtsUI.challengePrompt
+    if shown and shown.menu then
+      local stack = game.stack or {}
+      for _, list in ipairs({ stack.states or {}, stack.pending or {} }) do
+        for _, s in ipairs(list) do
+          if s == shown.menu then return false end
+        end
+      end
+    end
+    if shown and shown.key == key and shown.answered and nowT - shown.answered < 15.0 then
+      return false
+    end
+    GtsUI.challengePrompt = { key = key, at = nowT }
+    return true
+  end
+  function GtsUI.offerAnswered()
+    local shown = GtsUI.challengePrompt
+    if not shown then return end
+    shown.menu = nil
+    shown.answered = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
+  end
+  -- The queue cap: the oldest request that isn't a battle message goes
+  -- first.  Dropping one of those would deadlock the lockstep exchange.
+  function GtsUI.asyncTrim()
+    while #asyncPending > 30 do
+      local drop
+      for i, r in ipairs(asyncPending) do
+        if not (r.body and r.body:find('"action"%s*:%s*"send_battle_msg"')) then drop = i break end
+      end
+      if not drop then return end
+      GtsUI.asyncDrop(table.remove(asyncPending, drop))
+    end
+  end
 
   local function asyncParseUrl(url)
     local scheme, host, port = url:match("^(https?)://([^/:]+):?(%d*)")
@@ -1443,6 +1488,7 @@
   end
 
   local function asyncClose(reason)
+    local dropped = asyncActive
     if asyncSock then
       pcall(function() asyncSock:close() end)
     end
@@ -1463,6 +1509,7 @@
       asyncReconnectUntil = asyncReconnectUntil + 0.5
     end
     if reason then netDiagAdd("async", "closed: " .. tostring(reason)) end
+    GtsUI.asyncDrop(dropped)
   end
 
   local function asyncEnsureHost()
@@ -1546,8 +1593,10 @@
   asyncReset = function(reason)
     asyncLastError = tostring(reason or "")
     asyncClose(reason)
+    local dropped = asyncPending
     asyncPending = {}
     asyncActive = nil
+    for _, req in ipairs(dropped) do GtsUI.asyncDrop(req) end
   end
 
   -- Store the server typed in-game (nil: back to gts_config.txt).  The
@@ -1615,7 +1664,26 @@
         asyncClose("connect timed out")
         return
       end
+      -- Mid-handshake getpeername() fails with "Transport endpoint is not
+      -- connected" (a LAN or Tailscale host takes a while; loopback is done
+      -- by the next frame), so that is not a failure: the socket turns
+      -- writable once the handshake is over, and only then does a missing
+      -- peer mean the connect failed (refused).
       local peer = asyncSock:getpeername()
+      if not peer then
+        local okS, socket = pcall(require, "socket")
+        local writable = okS and socket and socket.select
+          and select(2, socket.select(nil, { asyncSock }, 0))
+        if not (writable and writable[1]) then return end
+        local err
+        peer, err = asyncSock:getpeername()
+        if not peer then
+          -- the real reason ("connection refused"), where LuaSocket has it
+          local okE, soErr = pcall(asyncSock.getoption, asyncSock, "error")
+          asyncClose("connect failed: " .. tostring(okE and soErr or err))
+          return
+        end
+      end
       if peer then
         if asyncIsHttps then
           local wrapped, werr = asyncDoHandshake(asyncSock)
@@ -1624,13 +1692,6 @@
         end
         asyncConnectTried = false
         asyncState = "send"
-      else
-        local _, err = asyncSock:getpeername()
-        if err and err ~= "timeout" and not asyncWouldBlock(err) then
-          asyncClose("connect failed: " .. tostring(err))
-          return
-        end
-        return
       end
     end
 
@@ -1796,7 +1857,7 @@
       resp = {},
       callback = callback,
     }
-    while #asyncPending > 30 do table.remove(asyncPending, 1) end
+    GtsUI.asyncTrim()
   end
   if GtsUI.G3env then GtsUI.G3env.send, GtsUI.G3env.post = pvpBattleSend, gtsApiPost end
 
@@ -1906,6 +1967,13 @@
   -- NOTE: Battle responses are drained by GtsNetAdapter:update() directly, not here.
   --       This function only handles position-sync and challenge/trade signals.
   processGlobalThreadMessages = function(game)
+    -- Offline, nothing queued or answered belongs to a session any more: a
+    -- late sync answer would bring back other players as ghosts.
+    if not isGtsServerConnected then
+      if netOutChannel then while netOutChannel:pop() do end end
+      if netInChannel then while netInChannel:pop() do end end
+      return
+    end
     local now = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
 
     -- Feed the non-blocking persistent HTTP client (coalescing sync_pos to avoid bufferbloat)
@@ -1958,9 +2026,7 @@
       end
       -- Cap the queue generously: PVP battle messages share this queue, and
       -- dropping them would deadlock the lockstep battle exchange.
-      while #asyncPending > 30 do
-        table.remove(asyncPending, 1)
-      end
+      GtsUI.asyncTrim()
     end
 
     -- Advance the non-blocking engine here AND every frame in core.update.
@@ -1997,8 +2063,14 @@
             end,
             sink = function(chunk) if chunk then table.insert(resp, chunk) end return 1 end
           })
-          if ok and #resp > 0 and netInChannel then
+          if ok and #resp > 0 and type(req.callback) == "function" then
+            local body = table.concat(resp)
+            local okDec, dec = pcall(Json.decode, body)
+            pcall(req.callback, okDec and dec or nil, body)
+          elseif ok and #resp > 0 and netInChannel then
             netInChannel:push(table.concat(resp))
+          else
+            GtsUI.asyncDrop(req)
           end
         end
       end
@@ -2079,7 +2151,9 @@
               }
               local invMsg = string.format("%s INVITED YOU TO A CO-OP PARTY!\nACCEPT INVITE?", inv.fromName or "A TRAINER")
               game.stack:push(TextBox.new(game, wrapText(invMsg), function()
-                game.stack:push(Menu.new(game, pMenu, { tx = 0, ty = 0, tw = 20, maxVisible = 6, startCloses = true }))
+                -- B or START declines, so a later invite can still come
+                game.stack:push(Menu.new(game, pMenu, { tx = 0, ty = 0, tw = 20, maxVisible = 6, startCloses = true,
+                  onCancel = pMenu[2].onSelect }))
               end))
             end
 
@@ -2143,14 +2217,29 @@
               local remotePartyPacked = res.challenge.party or {}
               local sharedSeed = res.challenge.seed or 12345
               local roomId = res.challenge.roomId
+              -- An answer counts only from the trainer this player is waiting
+              -- on, for the room offered (a PVP answer may be on its native
+              -- "K" room): a duplicate still on the wire, a late one, or
+              -- another trainer's would start a second, lone battle or trade.
+              local offer = isWaitingForChallenge and GtsUI.pendingOffer or nil
+              local isAnswer = cType == "ACCEPT_PVP" or cType == "ACCEPT_TRADE" or cType == "DECLINE"
+              local matched = offer ~= nil and tostring(challengerId) == offer.targetId
+                and (cType == "DECLINE"
+                  or (cType == "ACCEPT_TRADE" and offer.type == "TRADE" and roomId == offer.roomId)
+                  or (cType == "ACCEPT_PVP" and offer.type == "PVP"
+                    and (roomId == offer.roomId or roomId == tostring(offer.roomId) .. "K")))
 
-              if cType == "ACCEPT_PVP" then
+              if isAnswer and not matched then
+                local myId = getTrainerInfo(game.save)
+                if myId then gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5) end
+              elseif cType == "ACCEPT_PVP" then
                 -- Guard: never start a second battle if one is already running
                 if inBattle then
                   local myId = getTrainerInfo(game.save)
                   gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                 else
                   isWaitingForChallenge = false
+                  GtsUI.pendingOffer = nil
                   local myId = getTrainerInfo(game.save)
                   gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
 
@@ -2169,6 +2258,7 @@
                 end
               elseif cType == "ACCEPT_TRADE" then
                 isWaitingForChallenge = false
+                GtsUI.pendingOffer = nil
                 local myId = getTrainerInfo(game.save)
                 gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                 if not game.save or not game.save.party or #game.save.party == 0 then
@@ -2179,15 +2269,17 @@
                 end
               elseif cType == "DECLINE" then
                 isWaitingForChallenge = false
+                GtsUI.pendingOffer = nil
                 local myId = getTrainerInfo(game.save)
                 gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                 game.stack:push(TextBox.new(game, wrapText("CHALLENGE DECLINED BY OPPONENT.")))
-              elseif cType == "PVP" or cType == "TRADE" then
+              elseif (cType == "PVP" or cType == "TRADE") and GtsUI.showOffer(game, challengerId, cType, roomId, nowT) then
                 local myId, myName = getTrainerInfo(game.save)
                 local promptItems = {
                   {
                     label = string.format("ACCEPT %s", cType),
                     onSelect = function()
+                      GtsUI.offerAnswered()
                       gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                       local myPackedParty = packPartyForGame(game, game.save and game.save.party or {})
                       if cType == "PVP" then
@@ -2213,12 +2305,17 @@
                         }, 1.5)
                         startPvpBattle(game, challengerName, challengerId, remotePartyPacked, false, sharedSeed, battleRoom)
                       elseif cType == "TRADE" then
-                        if not game.save or not game.save.party or #game.save.party == 0 then
-                          game.stack:push(TextBox.new(game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
-                          return
-                        end
+                        -- a Gen 1 cable trade needs one to offer and one to
+                        -- keep (startLinkTrade); FireRed's Trade Center has
+                        -- its own rule.  Turned down, so the challenger isn't
+                        -- left waiting on a trade that never opens.
+                        local need = GtsUI.G3 and 1 or 2
+                        local refusal = (isGen2 and "LINK TRADES ARE NOT YET SUPPORTED ON CRYSTAL (GEN 2).")
+                          or ((not game.save or not game.save.party or #game.save.party < need)
+                            and string.format("YOU NEED AT LEAST %d POKéMON IN YOUR PARTY TO TRADE!", need))
+                        if refusal then game.stack:push(TextBox.new(game, wrapText(refusal))) end
                         -- the hardcore trade limit: turned down, as DECLINE does
-                        if GtsUI.tradeRefusal(game) then
+                        if refusal or GtsUI.tradeRefusal(game) then
                           gtsApiPost({
                             action = "send_challenge",
                             targetId = challengerId,
@@ -2243,6 +2340,7 @@
                   {
                     label = "DECLINE",
                     onSelect = function()
+                      GtsUI.offerAnswered()
                       gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                       gtsApiPost({
                         action = "send_challenge",
@@ -2254,7 +2352,11 @@
                     end
                   }
                 }
-                game.stack:push(Menu.new(game, promptItems, { tx = 1, ty = 1, tw = 18, th = 6 }))
+                -- B declines too: a closed prompt doesn't come back
+                local prompt = Menu.new(game, promptItems, { tx = 1, ty = 1, tw = 18, th = 6,
+                  onCancel = promptItems[2].onSelect })
+                GtsUI.challengePrompt.menu = prompt
+                game.stack:push(prompt)
               end
             end -- end cooldown else
           end -- end if res.challenge
@@ -3046,6 +3148,7 @@
     roomCode = nil
     activeBattleAdapter = nil
     isWaitingForChallenge = false
+    pendingPartyInvite, GtsUI.pendingOffer, GtsUI.challengePrompt = nil, nil, nil
 
     -- 1. Save online progress to save_online.lua before disconnecting
     if isGtsServerConnected and game and game.save then
@@ -3105,6 +3208,7 @@
     roomCode = nil
     activeBattleAdapter = nil
     isWaitingForChallenge = false
+    pendingPartyInvite, GtsUI.pendingOffer, GtsUI.challengePrompt = nil, nil, nil
     if game and game.save then
       writeOnlineSave(game.save)
     end
@@ -6558,23 +6662,9 @@ return function(mod)
   currentMod = mod
   print("[Gen1Online] Initializing Gen1Online Asynchronous Threaded 60FPS MMO Mod...")
 
-  -- Wrap the START-menu QUIT / EXIT item so the player is actively logged out
-  -- of the server before the app closes (never leave a ghost online).
-  local function wrapQuitItems(game, list)
-    if not list then return end
-    for i, item in ipairs(list) do
-      if item and item.label then
-        local lbl = tostring(item.label):upper()
-        if lbl == "QUIT" or lbl:find("EXIT") or lbl:find("SHUTDOWN") then
-          local origSelect = item.onSelect
-          item.onSelect = function(...)
-            if _G.__gtsQuitLogout then pcall(function() _G.__gtsQuitLogout(game) end) end
-            if origSelect then origSelect(...) end
-          end
-        end
-      end
-    end
-  end
+  -- (QUIT logs out through the returnToTitle wrapper, once its "RETURN TO
+  -- MAIN MENU?" is answered YES; a wrapper on the QUIT row logged out before
+  -- the question, so NO left the player connected but gone from the server.)
 
   -- Hook Start Menu (identical method as DebugMenu)
   mod.hooks:wrap("ui.start_menu.items", function(nextFn, game, items)
@@ -6628,7 +6718,6 @@ return function(mod)
     end
 
     table.insert(list, targetIndex, connectItem)
-    if not G3 then wrapQuitItems(game, list) end
     return list
   end)
 
@@ -6893,6 +6982,7 @@ return function(mod)
       challengeWaitTimer = (challengeWaitTimer or 0) + dt
       if challengeWaitTimer > 16.0 then
         isWaitingForChallenge = false
+        GtsUI.pendingOffer = nil
         challengeWaitTimer = 0
         Game.stack:push(TextBox.new(Game, "CHALLENGE TIMED OUT\nNO RESPONSE."))
       end
@@ -7052,7 +7142,7 @@ return function(mod)
       fx, fy = p1.cellX + d[1], p1.cellY + d[2]
     end
 
-    for tid, pNpc in pairs(netNpcs) do
+    for tid, pNpc in pairs(isGtsServerConnected and netNpcs or {}) do
       if pNpc.cellX == fx and pNpc.cellY == fy then
         local rawData = netPlayerMap[tid] or {}
         local pName = rawData.name or "TRAINER"
@@ -7083,6 +7173,7 @@ return function(mod)
 
               isWaitingForChallenge = true
               challengeWaitTimer = 0
+              GtsUI.pendingOffer = { targetId = tostring(targetTid), roomId = roomId, type = "PVP" }
 
               gtsApiPost({
                 action = "send_challenge",
@@ -7100,8 +7191,9 @@ return function(mod)
           {
             label = "LINK TRADE",
             onSelect = function()
-              if not Game.save or not Game.save.party or #Game.save.party == 0 then
-                Game.stack:push(TextBox.new(Game, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
+              local need = GtsUI.G3 and 1 or 2 -- a cable trade keeps one back
+              if not Game.save or not Game.save.party or #Game.save.party < need then
+                Game.stack:push(TextBox.new(Game, wrapText(string.format("YOU NEED AT LEAST %d POKéMON IN YOUR PARTY TO TRADE!", need))))
                 return
               end
               if GtsUI.tradeRefusal(Game) then return end
@@ -7114,6 +7206,7 @@ return function(mod)
 
               isWaitingForChallenge = true
               challengeWaitTimer = 0
+              GtsUI.pendingOffer = { targetId = tostring(targetTid), roomId = roomId, type = "TRADE" }
 
               gtsApiPost({
                 action = "send_challenge",
@@ -7208,6 +7301,7 @@ return function(mod)
         challengeWaitTimer = (challengeWaitTimer or 0) + dt
         if challengeWaitTimer > 16.0 then
           isWaitingForChallenge = false
+          GtsUI.pendingOffer = nil
           challengeWaitTimer = 0
           if curGame and curGame.stack then
             curGame.stack:push(TextBox.new(curGame, "CHALLENGE TIMED OUT\nNO RESPONSE."))
@@ -7334,7 +7428,7 @@ return function(mod)
       local d = Collision.DELTA[p1.facing] or { 0, 1 }
       local fx, fy = p1.cellX + d[1], p1.cellY + d[2]
 
-      for tid, pNpc in pairs(netNpcs) do
+      for tid, pNpc in pairs(isGtsServerConnected and netNpcs or {}) do
         if pNpc.cellX == fx and pNpc.cellY == fy then
           local rawData = netPlayerMap[tid] or {}
           local pName = rawData.name or "TRAINER"
@@ -7365,6 +7459,7 @@ return function(mod)
 
                 isWaitingForChallenge = true
                 challengeWaitTimer = 0
+                GtsUI.pendingOffer = { targetId = tostring(targetTid), roomId = roomId, type = "PVP" }
 
                 gtsApiPost({
                   action = "send_challenge",
@@ -7382,8 +7477,8 @@ return function(mod)
             {
               label = "LINK TRADE",
               onSelect = function()
-                if not curGame.save or not curGame.save.party or #curGame.save.party == 0 then
-                  curGame.stack:push(TextBox.new(curGame, wrapText("YOU NEED AT LEAST 1 POKéMON IN YOUR PARTY TO TRADE!")))
+                if not curGame.save or not curGame.save.party or #curGame.save.party < 2 then
+                  curGame.stack:push(TextBox.new(curGame, wrapText("YOU NEED AT LEAST 2 POKéMON IN YOUR PARTY TO TRADE!")))
                   return
                 end
                 if GtsUI.tradeRefusal(curGame) then return end
@@ -7396,6 +7491,7 @@ return function(mod)
 
                 isWaitingForChallenge = true
                 challengeWaitTimer = 0
+                GtsUI.pendingOffer = { targetId = tostring(targetTid), roomId = roomId, type = "TRADE" }
 
                 gtsApiPost({
                   action = "send_challenge",
@@ -7538,7 +7634,9 @@ return function(mod)
     if not isGtsServerConnected and asyncReset then
       asyncReset("disconnected")
     end
-    if isGtsServerConnected and not isWaitingForChallenge and gWorld
+    -- (also while waiting on an offer: the "WAITING FOR" box stops the
+    -- field's own syncs, and the answer only comes back on a sync)
+    if isGtsServerConnected and gWorld
        and gWorld.player and gWorld.map and netOutChannel then
       local ow = gWorld
       local p = ow.player
