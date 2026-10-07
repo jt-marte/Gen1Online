@@ -57,7 +57,8 @@ return function(game, label)
     payload.modVersion = payload.modVersion or "0.5.1"
     payload.gameVersion = payload.gameVersion or H.GAME_NAME
     payload.generation = 3
-    payload.modesVersion = payload.modesVersion or 2   -- the game modes' rules (GtsUI.MODES_VERSION)
+    -- the game modes' rules this client plays
+    payload.modesVersion = payload.modesVersion or (H.GtsUI and H.GtsUI.MODES_VERSION)
     local body = Json.encode(payload)
     local res = {}
     http.request({ url = H.BASE .. "/gts", method = "POST", source = ltn12.source.string(body),

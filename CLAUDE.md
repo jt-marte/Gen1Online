@@ -278,7 +278,14 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     JOIN start run 3 (run 2's save kept as a backup), then a new device:
     REDEEM RECOVERY TOKEN joining run 3 in the shuffled world. It prints
     the item places' fingerprint; `run_tests.sh` checks FireRed's and
-    LeafGreen's agree.
+    LeafGreen's agree. Wild legendaries are checked by pinning
+    `Modes.rules.wildLegendaries` to 100 (wrapping `Modes.synced`, since
+    each sync brings the server's rules again): Route 1 gives legendaries
+    at their level, a scripted SNORLAX battle keeps its own. Trainers the
+    same way (`trainers = gyms`): BROCK's real team is all Rock types, the
+    seed's draw for his GEODUDE and ONIX; a route trainer keeps his team,
+    the Champion's changes. `gen1_modes.lua` checks Brock's and, through the
+    real `trainer.party` hook, Lorelei's Ice team at her levels.
   - `gen3_nuzlocke.lua` (FireRed): real battles. A Route 1 encounter before
     any Poké Ball not counting, an old client (`modesVersion = 0`) turned
     away, a Master Ball thrown from
@@ -365,7 +372,7 @@ Transport and framing:
   `modVersion`, `version`, `gameVersion` and `recompVersion`. Accept a client
   when its major.minor matches the server's. Otherwise answer
   `{"success":false,"error":"VERSION_MISMATCH","serverVersion":...}`.
-- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 2: the
+- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 4: the
   game modes' rules the client plays). While a game mode is on, the server
   answers a Gen 1 or FireRed/LeafGreen POST below `MODES_VERSION` (logout
   excepted) with `VERSION_MISMATCH`, `serverVersion` "0.5.1+ (GAME MODES)":
@@ -477,7 +484,9 @@ Quests:
 Game modes (Gen 1 and FireRed/LeafGreen; `server/server_config.txt`,
 `--config`, `GTS_CONFIG`):
 - The rules view `{nuzlocke: "off"|"hardcore", randomizer, encounters, items,
-  badges, starters, sharedKeyItems, active, runId, seed}` rides `/server/info` as
+  badges, starters, wildLegendaries, trainers, sharedKeyItems, active, runId,
+  seed}` (`wildLegendaries`: a percent, 0 when off or without the
+  randomizer; `trainers`: "off" | "gyms" | "on") rides `/server/info` as
   `rules` and every `sync_pos` answer as `run`, next to `team: {rev, items:
   [ITEM]}`. Sub-flags read false when the randomizer is off;
   `shared_key_items = auto` follows the randomizer.
@@ -805,6 +814,25 @@ off the open internet.
     badge flag (every script scanned), so badges are plain progression. The
     logic covers Kanto and One to Three Island before the Elite Four;
     post-game maps (Cerulean Cave, Four to Seven Island) hold filler.
+  - Trainers (`randomize_trainers`, `M.trainerTeam`): the engine's
+    `trainer.party` hook (BattleBridge.start, names in, numbers back). Types
+    by trainer number (`M.TRAINER_TYPE`: Brock 414..Sabrina 420, Giovanni
+    350, the Elite Four 410-413 and 735-738) or by the gym map the battle is
+    in (`M.GYM_TYPE`); the Champion (438-440, 739-741) any type; with "on"
+    everyone else. `Randomizer.trainerTeam` picks among the nearest by
+    base-stat total (6 themed, 10 not; no legendaries, no repeats while it
+    can), from Rng(seed, 30000 + trainer [+ world * 1000]). Moves are
+    cleared so the new Pokémon get their own. Gen 1 does the same in its
+    `trainer.party` hook (class, party index, party): types by gym map
+    (`M.GYM_TYPE`, leaders and their trainers) or class (`M.ELITE_TYPE`),
+    OPP_RIVAL3 any type, salt from "CLASS#party".
+  - Wild legendaries (`M.wildLegendary`): `BattleBridge.startWild` calls
+    with no options (the field's grass, water, fishing, Rock Smash and Sweet
+    Scent) roll `Randomizer.rollLegendary` (love.math.random) against the
+    rules' `wildLegendaries` percent, from all 21 (`speciesData`'s legend
+    set), before the species shuffle. A scripted battle always passes
+    options (its `done` at least) and keeps its Pokémon. Gen 1 rolls in the
+    `encounter.species` / `encounter.fishing` hooks, from `R.LEGENDARY`.
   - Starters: Oak's balls (`FR_OAKS_LAB`) put their species in VAR_TEMP_2
     after their index in VAR_TEMP_1; `M.starterRows` finds those rows by
     place, `apply` sets them and rewrites the question text (found by "X is

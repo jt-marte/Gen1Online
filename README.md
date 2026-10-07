@@ -39,6 +39,8 @@ A server hosts one generation's world: Gen 1 players (Red, Blue and Yellow toget
 ### 💀 7. Hardcore Nuzlocke & Co-Op Randomizer (Red, Blue, Yellow, FireRed, LeafGreen)
 The host turns these on in `server/server_config.txt`; everyone on the server plays the same run.
 - **Co-Op Randomizer**: wild Pokémon (each swapped for one of similar strength), the starters, items and gym badges are shuffled from the run's seed. Oak's starters become basic Pokémon that evolve twice, like the real ones (on Yellow too: Oak hands over something else than PIKACHU, which then doesn't follow you); the rival keeps his usual team. Brock might hand you a POTION while the BOULDERBADGE lies in an item ball in Mt. Moon or comes from an NPC. Placement follows the game's progression, so every run can be finished: nothing you need is left aboard the S.S. Anne (she sails for good), and the early routes always hold wild Pokémon that can learn CUT.
+- **Randomized trainers (optional)**: with `randomize_trainers = gyms`, gym leaders and the trainers in their gyms get random Pokémon of the gym's type (Brock's Rock-types, Misty's Water-types...), the Elite Four of theirs (Ice, Fighting, Ghost, Dragon) and the Champion random ones; `randomize_trainers = on` does every other trainer too, with random Pokémon. Each Pokémon is swapped for one of similar strength at the same level, never a legendary, and every player meets the same teams.
+- **Wild legendaries (optional)**: with `wild_legendaries = on` (or a percent, like `2`), any wild encounter has that small chance of being a legendary instead, at the encounter's level. On FireRed/LeafGreen it can be any of the 21, Lugia to Deoxys; on Red, Blue and Yellow the birds, Mewtwo and Mew. Scripted battles (Snorlax, the legendaries' own spots) stay as they are.
 - **Shared Key Items**: key items, HMs and badges are the team's. Whatever one player finds, every player gets.
 - **Multiworld (optional)**: each player gets their own world, and every badge, HM and key item exists in only one of them. The BOULDERBADGE might be in your friend's Mt. Moon and nowhere in yours; when they pick it up, you both have it. The shuffle still guarantees the team can finish, splits the key items evenly, and gives each world its own wild Pokémon.
 - **Hardcore Nuzlocke**: only the first wild Pokémon you meet in each area can be caught, whatever it is (per player; no dupes clause; encounters before you first have Poké Balls, on Route 1, don't count), fainted Pokémon are gone for good, no items in battle, SET battle style, and a level cap at the next gym leader's ace (with shuffled badges, the weakest gym leader you can reach and haven't beaten, so a fight you need is never above it). If **any** player's whole party faints, the run ends for the whole team and everyone starts over in a new world.
@@ -131,6 +133,8 @@ randomize_encounters = on
 randomize_items = on
 randomize_badges = on
 randomize_starters = on
+wild_legendaries = off   # on (1 in 100 wild encounters) or a percent, like 2
+randomize_trainers = off # gyms (gym leaders, their gyms, Elite Four, Champion) | on (every trainer)
 shared_key_items = auto  # auto = on with the randomizer
 multiworld = off         # on: one world per player, key items split between them
 players = 2              # how many worlds (multiworld only)

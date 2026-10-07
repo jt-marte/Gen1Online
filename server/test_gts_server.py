@@ -996,6 +996,7 @@ class RulesFileTests(unittest.TestCase):
         view = gts_server.rules_view(gts_server.parse_rules(""))
         self.assertEqual(view, {"nuzlocke": "off", "randomizer": False, "encounters": False,
                                 "items": False, "badges": False, "starters": False,
+                                "wildLegendaries": 0.0, "trainers": "off",
                                 "sharedKeyItems": False,
                                 "multiworld": False, "players": 1, "active": False})
 
@@ -1020,6 +1021,32 @@ class RulesFileTests(unittest.TestCase):
         self.assertFalse(view["starters"], "randomize_starters = off keeps the starters")
         self.assertTrue(view["encounters"])
         self.assertTrue(view["active"])
+
+    def test_randomized_trainers(self):
+        def mode(text):
+            return gts_server.rules_view(gts_server.parse_rules("randomizer = on\n" + text))["trainers"]
+        self.assertEqual(mode(""), "off", "off by default")
+        self.assertEqual(mode("randomize_trainers = gyms"), "gyms")
+        self.assertEqual(mode("randomize_trainers = on"), "on")
+        self.assertEqual(mode("randomize_trainers = no"), "off")
+        with self.assertRaises(ValueError):
+            gts_server.parse_rules("randomize_trainers = some")
+        self.assertEqual(gts_server.rules_view(gts_server.parse_rules("randomize_trainers = on"))["trainers"],
+                         "off", "only with the randomizer")
+
+    def test_wild_legendaries(self):
+        def chance(text):
+            return gts_server.rules_view(gts_server.parse_rules("randomizer = on\n" + text))["wildLegendaries"]
+        self.assertEqual(chance(""), 0.0, "off by default")
+        self.assertEqual(chance("wild_legendaries = off"), 0.0)
+        self.assertEqual(chance("wild_legendaries = on"), gts_server.WILD_LEGENDARIES_ON)
+        self.assertEqual(chance("wild_legendaries = 5"), 5.0)
+        self.assertEqual(chance("wild_legendaries = 0.5%"), 0.5)
+        for bad in ("150", "-1", "lots"):
+            with self.assertRaises(ValueError):
+                gts_server.parse_rules("wild_legendaries = " + bad)
+        self.assertEqual(gts_server.rules_view(gts_server.parse_rules("wild_legendaries = 5"))["wildLegendaries"],
+                         0.0, "only with the randomizer")
 
     def test_sub_flags_need_the_randomizer_and_shared_items_stand_alone(self):
         view = gts_server.rules_view(gts_server.parse_rules("shared_key_items = on"))

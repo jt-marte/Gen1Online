@@ -46,6 +46,24 @@ randomize_items = on
 randomize_badges = on
 randomize_starters = on
 
+# Legendary Pokemon in the wild (randomizer only): each wild encounter in
+# grass, water, caves, fishing or Rock Smash has this chance of being a
+# legendary instead, at that encounter's level (FireRed/LeafGreen: any of
+# the 21, Lugia to Deoxys; Gen 1: the birds, MEWTWO and MEW).  Scripted
+# battles (SNORLAX, the legendaries' own spots) stay as they are.
+# wild_legendaries = off | on (1 in 100) | a percent, like 0.5 or 2
+wild_legendaries = off
+
+# Trainers' teams (randomizer only).  Each Pokemon becomes one of similar
+# strength at the same level, never a legendary; every player meets the same
+# teams.
+#   gyms: gym leaders and the trainers in their gyms get the gym's type
+#         (Brock Rock, Misty Water...), the Elite Four theirs (Ice, Fighting,
+#         Ghost, Dragon), the Champion any type
+#   on:   the same, and every other trainer gets random Pokemon too
+# randomize_trainers = off | gyms | on
+randomize_trainers = off
+
 # The team shares key items, HMs and badges: whatever one player finds, every
 # player gets.  auto = on whenever the randomizer is.
 # shared_key_items = auto | on | off

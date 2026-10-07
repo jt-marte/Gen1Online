@@ -6,6 +6,21 @@ A server of our own, built for playing with friends.
 
 ### Added
 
+- **Randomized trainers** (`randomize_trainers = off | gyms | on`, off by
+  default, with the randomizer): `gyms` gives gym leaders and their gyms'
+  trainers random Pokémon of the gym's type, the Elite Four theirs and the
+  Champion random ones; `on` randomizes every other trainer too. Each
+  Pokémon becomes one of the few closest in base-stat total (never a
+  legendary), at the same level with its own moves; teams come from the
+  run's seed and the trainer, so they're the same every time and for every
+  player. Red, Blue, Yellow, FireRed and LeafGreen. The rules version goes
+  to 4.
+- **Wild legendaries** (`wild_legendaries`, off by default; `on` is 1 in
+  100, or any percent): with the randomizer, an ordinary wild encounter
+  (grass, water, caves, fishing, Rock Smash, Sweet Scent) is now and then a
+  legendary at its own level, any of FireRed/LeafGreen's 21 or Gen 1's
+  five. Scripted battles keep their Pokémon. The rules version goes to 3,
+  so everyone on a run plays the same rules.
 - **Randomized starters** (`randomize_starters`, on with the randomizer):
   Oak's starters become basic Pokémon that evolve twice, drawn from the
   run's seed (one draw per multiworld world). Red and Blue's three balls

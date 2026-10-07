@@ -203,6 +203,52 @@ return function(game)
   local grovyle = Pokemon.speciesFromNational(253)
   check(Evolution.nationalAllows(grovyle, s), "a Hoenn Pokémon may evolve before the National Pokédex")
 
+  -- wild_legendaries (off on this server): at 100% every ordinary wild
+  -- Pokémon is a legendary at its own level; a scripted battle keeps its own
+  local legends = {}
+  for sp in pairs(select(2, Modes.speciesData())) do legends[sp] = true end
+  check(not Modes.rules.wildLegendaries or Modes.rules.wildLegendaries == 0, "wild legendaries are off here")
+  -- as if the server said 100: every sync answer brings the rules again
+  local origSynced = Modes.synced
+  Modes.synced = function(...)
+    origSynced(...)
+    if Modes.rules then Modes.rules.wildLegendaries = 100 end
+  end
+  Modes.rules.wildLegendaries = 100
+  local seenLegends, allLegends = {}, true
+  for i = 1, 3 do
+    st = wild(16, 7 + i)
+    local mon = st and st.enemy.mon
+    local sp = mon and tonumber(mon.species)
+    if not (sp and legends[sp] and mon.level == 7 + i) then allLegends = false end
+    if sp then seenLegends[#seenLegends + 1] = Pokemon.name(sp) .. " LV" .. tostring(mon.level) end
+    if i == 1 then U.wait(150); shot("wild_legendary") end
+    Battle.abort("run")
+    for _ = 1, 600 do if not Battle.isActive() then break end U.wait(2) end
+    H.fieldFree()
+  end
+  check(allLegends, "at 100%, Route 1's wild Pokémon are legendaries at their level: " .. table.concat(seenLegends, ", "))
+  local scripted
+  BattleBridge.startWild(nil, game, { species = 143, level = 30 }, { wildScripted = true, done = function() end })
+  for _ = 1, 600 do
+    scripted = Battle.isActive() and Battle.getState and Battle.getState()
+    if scripted and scripted.enemy and scripted.enemy.mon then break end
+    U.wait(2)
+  end
+  local ssp = scripted and scripted.enemy and tonumber(scripted.enemy.mon.species)
+  check(ssp == plan.species[143] and not legends[ssp],
+    "a scripted battle (SNORLAX) keeps its own shuffled Pokémon: " .. tostring(ssp and Pokemon.name(ssp)))
+  Battle.abort("run")
+  for _ = 1, 600 do if not Battle.isActive() then break end U.wait(2) end
+  H.fieldFree()
+  Modes.synced = origSynced
+  Modes.rules.wildLegendaries = 0
+  st = wild(16, 3)
+  check(st and tonumber(st.enemy.mon.species) == plan.species[16], "off again: the shuffled PIDGEY")
+  Battle.abort("run")
+  for _ = 1, 600 do if not Battle.isActive() then break end U.wait(2) end
+  H.fieldFree()
+
   -- ------------------------------------------------------------- starters
   -- Oak's three balls hold basic Pokémon that evolve twice, from all 386
   local starters = plan.starters or {}
@@ -397,6 +443,17 @@ return function(game)
   local slot1 = plan.gyms.BADGE1
   local slotId = not slot1.item:match("^BADGE") and ITEMS["ITEM_" .. slot1.item]
   local before = slotId and Bag.get(s.bag, slotId) or 0
+  -- randomize_trainers = gyms (off on this server; pinned across syncs as
+  -- for the legendaries): BROCK's team is Rock types of his own team's strength
+  local origSyncedT = Modes.synced
+  Modes.synced = function(...)
+    origSyncedT(...)
+    if Modes.rules then Modes.rules.trainers = "gyms" end
+  end
+  Modes.rules.trainers = "gyms"
+  check(Modes.trainerTeam(4321, { 16, 19 }, "FR_ROUTE_3") == nil, "gyms: a route trainer keeps his team")
+  local champ = Modes.trainerTeam(438, { 18, 65, 112, 130, 59, 9 }, "FR_INDIGO_PLATEAU_CHAMPIONS_ROOM")
+  check(champ and #champ == 6, "but the Champion's is randomized")
   check(brock and H.talkTo("FR_PEWTER_CITY_GYM", brock.x, brock.y), "talked to BROCK")
   for _ = 1, 600 do
     if Battle.isActive() then break end
@@ -404,6 +461,33 @@ return function(game)
     U.wait(2)
   end
   check(Battle.isActive(), "BROCK's battle began")
+  local foe = (Battle.getState() or {}).foeParty or {}
+  local foeNames, rocks, foeSpecies, hasMoves = {}, #foe > 0, {}, true
+  for i, m in ipairs(foe) do
+    local sp = tonumber(m.species or m.speciesId)
+    local t = sp and Pokemon.types(sp) or {}
+    if not (t[1] == 5 or t[2] == 5) then rocks = false end
+    if not (type(m.moves) == "table" and (tonumber(m.moves[1]) or (type(m.moves[1]) == "table" and m.moves[1].id))) then
+      hasMoves = false
+    end
+    foeSpecies[i] = sp
+    foeNames[i] = (sp and Pokemon.name(sp) or "?") .. " LV" .. tostring(m.level)
+  end
+  check(rocks, "randomized trainers: BROCK's team is all Rock types: " .. table.concat(foeNames, ", "))
+  check(hasMoves, "with moves of their own")
+  check(table.concat(Modes.trainerTeam(414, { 74, 95 }, "FR_PEWTER_CITY_GYM") or {}, ",")
+    == table.concat(foeSpecies, ","), "the seed's draw for his GEODUDE and ONIX, the same every time")
+  -- his first Pokémon out, at the battle menu
+  local api0 = BattleAPI.new(game)
+  for _ = 1, 600 do
+    local snap = api0:snapshot()
+    if snap and snap.prompt == "menu" then break end
+    if snap and snap.prompt == "advance" then U.tap(game, "a") end
+    U.wait(2)
+  end
+  shot("brock_team")
+  Modes.synced = origSyncedT
+  Modes.rules.trainers = "off"
   check(require("src.core.game3.options").battleStyle(s) == "set", "hardcore: the battle style is SET")
   local zardExp = tonumber(zard.exp) or 0
   local api, intent = BattleAPI.new(game), 0

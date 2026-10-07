@@ -44,7 +44,7 @@ return function(game)
   local http, ltn12 = package.loaded["socket.http"], package.loaded["ltn12"]
   local function post(payload)
     payload.modVersion, payload.gameVersion, payload.generation = "0.5.1", "Pokemon Yellow", 1
-    payload.modesVersion = payload.modesVersion or 2   -- the game modes' rules (GtsUI.MODES_VERSION)
+    payload.modesVersion = payload.modesVersion or (g1o and g1o.ui and g1o.ui.MODES_VERSION)
     local body = Json.encode(payload)
     local res = {}
     http.request({ url = BASE .. "/gts", method = "POST", source = ltn12.source.string(body),
@@ -389,6 +389,70 @@ return function(game)
   end)() } }, "grass")
   check(enc and enc.species == plan.species.PIDGEY and enc.level == 4,
     ("a wild PIDGEY roll comes out as %s (level kept)"):format(tostring(enc and enc.species)))
+  -- wild_legendaries (off on this server): at 100% every roll is a legendary
+  -- at its level (pinned across syncs, which bring the server's rules again)
+  check(not Modes.rules.wildLegendaries or Modes.rules.wildLegendaries == 0, "wild legendaries are off here")
+  local origSynced = Modes.synced
+  Modes.synced = function(...)
+    origSynced(...)
+    if Modes.rules then Modes.rules.wildLegendaries = 100 end
+  end
+  Modes.rules.wildLegendaries = 100
+  local legendRolls = {}
+  local legendOk = true
+  for _ = 1, 5 do
+    local e = ow:rollEncounter({ grass = { rate = 255, slots = (function()
+      local s = {}
+      for i = 1, 10 do s[i] = { level = 4, species = "PIDGEY" } end
+      return s
+    end)() } }, "grass")
+    if not (e and lib.randomizer.LEGENDARY[e.species] and e.level == 4) then legendOk = false end
+    legendRolls[#legendRolls + 1] = tostring(e and e.species)
+  end
+  check(legendOk, "at 100%, Route 1's rolls are legendaries at level 4: " .. table.concat(legendRolls, ", "))
+  -- randomize_trainers (off on this server), pinned the same way
+  local pinnedTrainers = "off"
+  Modes.synced = function(...)
+    origSynced(...)
+    if Modes.rules then Modes.rules.wildLegendaries, Modes.rules.trainers = 0, pinnedTrainers end
+  end
+  Modes.rules.wildLegendaries = 0
+  local function types(list)
+    local out = {}
+    for i, sp in ipairs(list or {}) do out[i] = tostring(sp) .. ":" .. table.concat(game.data.pokemon[sp].types, "/") end
+    return table.concat(out, " ")
+  end
+  local function allOf(list, kind)
+    for _, sp in ipairs(list or { "?" }) do
+      local t = (game.data.pokemon[sp] or {}).types or {}
+      if t[1] ~= kind and t[2] ~= kind then return false end
+    end
+    return list ~= nil
+  end
+  pinnedTrainers = "gyms"
+  Modes.rules.trainers = "gyms"
+  local brockTeam = Modes.trainerTeam("OPP_BROCK", 1, { "GEODUDE", "ONIX" }, "PEWTER_GYM")
+  check(allOf(brockTeam, "ROCK"), "trainers (gyms): Brock's team is Rock types: " .. types(brockTeam))
+  check(table.concat(Modes.trainerTeam("OPP_BROCK", 1, { "GEODUDE", "ONIX" }, "PEWTER_GYM"), ",")
+    == table.concat(brockTeam, ","), "the same every time")
+  local lorelei = ModRuntime.call("trainer.party", function(_, _, party) return party end, "OPP_LORELEI", 1,
+    { { species = "DEWGONG", level = 54 }, { species = "CLOYSTER", level = 53 },
+      { species = "SLOWBRO", level = 54 }, { species = "JYNX", level = 56 }, { species = "LAPRAS", level = 56 } })
+  local loreleiSpecies, levels = {}, true
+  for i, slot in ipairs(lorelei or {}) do
+    loreleiSpecies[i] = slot.species
+    if slot.moves ~= nil or slot.level ~= ({ 54, 53, 54, 56, 56 })[i] then levels = false end
+  end
+  check(allOf(loreleiSpecies, "ICE") and levels,
+    "through the game's trainer.party hook, Lorelei's are Ice types at her levels: " .. types(loreleiSpecies))
+  check(Modes.trainerTeam("OPP_BUG_CATCHER", 1, { "CATERPIE", "WEEDLE" }, "ROUTE_3") == nil,
+    "gyms: a route trainer keeps his team")
+  pinnedTrainers = "on"
+  Modes.rules.trainers = "on"
+  local bug = Modes.trainerTeam("OPP_BUG_CATCHER", 1, { "CATERPIE", "WEEDLE" }, "ROUTE_3")
+  check(bug and #bug == 2, "on: every trainer, at the same strength: " .. types(bug))
+  Modes.synced = origSynced
+  Modes.rules.trainers = "off"
   local changed = 0
   for i, obj in ipairs(game.data.maps.VIRIDIAN_FOREST.objects or {}) do
     if obj.item and obj.item ~= vanillaForest[i] then changed = changed + 1 end

@@ -173,18 +173,75 @@ return function(ctx)
     return plan and plan.species and plan.species[species] or nil
   end
 
+  -- wild_legendaries: a wild encounter is now and then a legendary at its
+  -- own level (the static ones, script rows, keep theirs)
+  local legendaryList = nil
+  local function random() return ((love and love.math and love.math.random) or math.random)() end
+  function M.wildLegendary()
+    local r = rules()
+    local chance = r and r.randomizer and tonumber(r.wildLegendaries) or 0
+    if chance <= 0 then return nil end
+    legendaryList = legendaryList or Randomizer.legendaryList(Randomizer.LEGENDARY, Game.data and Game.data.pokemon)
+    return Randomizer.rollLegendary(chance, random, legendaryList)
+  end
+
   mod.hooks:wrap("encounter.species", function(nextFn, enc, hctx)
     local e = nextFn(enc, hctx)
-    local s = e and mapSpecies(e.species)
+    local s = e and (M.wildLegendary() or mapSpecies(e.species))
     if s then return { species = s, level = e.level } end
     return e
   end)
 
   mod.hooks:wrap("encounter.fishing", function(nextFn, rod, mapId, pool)
     local e = nextFn(rod, mapId, pool)
-    local s = e and mapSpecies(e.species)
+    local s = e and (M.wildLegendary() or mapSpecies(e.species))
     if s then return { species = s, level = e.level } end
     return e
+  end)
+
+  -- randomize_trainers: gym leaders and their gyms' trainers keep the gym's
+  -- type, the Elite Four theirs; the Champion (and with "on" every other
+  -- trainer) gets Pokémon of the same strength.  Each team comes from the
+  -- run's seed, the trainer's class and party: the same every time, for every
+  -- player.  Levels stay; moves are the new Pokémon's own.
+  local GYM_TYPE = { PEWTER_GYM = "ROCK", CERULEAN_GYM = "WATER", VERMILION_GYM = "ELECTRIC",
+    CELADON_GYM = "GRASS", FUCHSIA_GYM = "POISON", SAFFRON_GYM = "PSYCHIC_TYPE",
+    CINNABAR_GYM = "FIRE", VIRIDIAN_GYM = "GROUND" }
+  local ELITE_TYPE = { OPP_LORELEI = "ICE", OPP_BRUNO = "FIGHTING", OPP_AGATHA = "GHOST",
+    OPP_LANCE = "DRAGON" }
+  M.GYM_TYPE, M.ELITE_TYPE = GYM_TYPE, ELITE_TYPE
+  function M.trainerTeam(oppClass, partyIndex, species, mapId)
+    local r = rules()
+    local mode = r and r.randomizer and r.trainers
+    if mode ~= "gyms" and mode ~= "on" then return nil end
+    if not mapId then
+      local ow = Game.overworld
+      mapId = ow and ow.map and ow.map.id
+    end
+    local theme = ELITE_TYPE[oppClass] or GYM_TYPE[mapId]
+    if not theme and oppClass ~= "OPP_RIVAL3" and mode ~= "on" then return nil end
+    local salt = 30000 + Randomizer.saltOf(tostring(oppClass) .. "#" .. tostring(partyIndex))
+      + ((worlds(r) > 1 and M.world) or 0) * 1000
+    return Randomizer.trainerTeam(Rng.new(r.seed, salt), species, Game.data and Game.data.pokemon,
+      Randomizer.LEGENDARY, theme)
+  end
+
+  mod.hooks:wrap("trainer.party", function(nextFn, oppClass, partyIndex, partyDef)
+    local out = nextFn(oppClass, partyIndex, partyDef)
+    if type(out) ~= "table" or #out == 0 then return out end
+    local species = {}
+    for i, slot in ipairs(out) do species[i] = slot.species end
+    local new = M.trainerTeam(oppClass, partyIndex, species)
+    if not new then return out end
+    local copy = {}
+    for i, slot in ipairs(out) do
+      local row = {}
+      for k, v in pairs(slot) do row[k] = v end
+      -- the vanilla moves belong to the vanilla Pokémon
+      row.species, row.moves = new[i], nil
+      copy[i] = row
+    end
+    return copy
   end)
 
   -- Oak's lab: the starters (plan.starters) on the rows that show, name and

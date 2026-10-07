@@ -72,6 +72,83 @@ function R.speciesMap(rng, pokemon, legendary)
   return map
 end
 
+-- ---- wild legendaries ---------------------------------------------------------
+
+-- With wild_legendaries on, a wild encounter is now and then a legendary.
+-- The game's legendaries, sorted (numbers on FireRed, names on Gen 1);
+-- `pokemon`, when given, drops any the game has no data for.
+function R.legendaryList(legendary, pokemon)
+  local list = {}
+  for id in pairs(legendary or R.LEGENDARY) do
+    if not pokemon or pokemon[id] then list[#list + 1] = id end
+  end
+  table.sort(list, function(a, b)
+    if type(a) == "number" and type(b) == "number" then return a < b end
+    return tostring(a) < tostring(b)
+  end)
+  return list
+end
+
+-- `chance` in percent, `rand()` in [0, 1): a legendary from `list`, or nil
+function R.rollLegendary(chance, rand, list)
+  chance = tonumber(chance) or 0
+  if chance <= 0 or #list == 0 or rand() * 100 >= chance then return nil end
+  return list[math.min(#list, math.floor(rand() * #list) + 1)]
+end
+
+-- ---- trainers -----------------------------------------------------------------
+
+-- randomize_trainers: each Pokémon of a trainer's team becomes one of the few
+-- closest to it in strength (base-stat total), of the trainer's type when it
+-- has one (a gym leader, his gym, the Elite Four), never a legendary; a team
+-- doesn't repeat a Pokémon while it has others to pick.  `team` is a list of
+-- species ids; `pokemon[id]` has baseStats and `types` (names on Gen 1,
+-- numbers on FireRed).  Returns the new list, or nil when nothing fits.
+R.TRAINER_NEAR, R.TRAINER_NEAR_THEMED = 10, 6
+
+local function hasType(def, theme)
+  for _, t in ipairs(def.types or {}) do if t == theme then return true end end
+  return false
+end
+
+function R.trainerTeam(rng, team, pokemon, legendary, theme)
+  legendary = legendary or R.LEGENDARY
+  local pool = {}
+  for id, def in pairs(pokemon or {}) do
+    if type(def) == "table" and def.baseStats and not legendary[id] and (theme == nil or hasType(def, theme)) then
+      pool[#pool + 1] = { id = id, total = statTotal(def), dex = tonumber(def.dex) or 999 }
+    end
+  end
+  if #pool == 0 then return nil end
+  local out, used = {}, {}
+  for i, sp in ipairs(team) do
+    local def = pokemon[sp]
+    local total = (type(def) == "table" and def.baseStats) and statTotal(def) or 300
+    table.sort(pool, function(a, b)
+      local da, db = math.abs(a.total - total), math.abs(b.total - total)
+      if da ~= db then return da < db end
+      if a.dex ~= b.dex then return a.dex < b.dex end
+      return tostring(a.id) < tostring(b.id)
+    end)
+    local k = math.min(#pool, theme and R.TRAINER_NEAR_THEMED or R.TRAINER_NEAR)
+    local choices = {}
+    for j = 1, k do if not used[pool[j].id] then choices[#choices + 1] = pool[j].id end end
+    if #choices == 0 then for j = 1, k do choices[#choices + 1] = pool[j].id end end
+    out[i] = choices[rng:int(1, #choices)]
+    used[out[i]] = true
+  end
+  return out
+end
+
+-- a number from a name, for a trainer's own draw (Gen 1 names its trainers
+-- by class and party, FireRed by number)
+function R.saltOf(key)
+  if type(key) == "number" then return key end
+  local h = 0
+  for i = 1, #tostring(key) do h = (h * 31 + tostring(key):byte(i)) % 1000003 end
+  return h
+end
+
 -- ---- starters -----------------------------------------------------------------
 
 -- The starters become basic Pokémon that evolve twice, as the real ones do:

@@ -148,7 +148,7 @@
   -- The game modes' rules this client plays (modes/): sent with every POST.
   -- A server running a mode turns away clients below its MODES_VERSION, so
   -- nobody plays an old copy of the Nuzlocke rules without knowing.
-  GtsUI.MODES_VERSION = 2
+  GtsUI.MODES_VERSION = 4
 
 
   local Game, Input, OverworldState, BattleState = require("src.core.Game"), require("src.core.Input"), require("src.world.OverworldController"), require("src.battle.BattleState")

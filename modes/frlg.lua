@@ -228,7 +228,7 @@ return function(ctx)
           if into and into > 0 then evolutions[#evolutions + 1] = { species = into } end
         end
         speciesCache[sp] = { baseStats = { st.hp, st.atk, st.def, st.spa, st.spd, st.spe }, dex = nat,
-                             evolutions = evolutions }
+                             evolutions = evolutions, types = Pokemon.types(sp) }
       end
     end
     for _, nat in ipairs(LEGENDARY_DEX) do
@@ -425,23 +425,99 @@ return function(ctx)
   -- starts here; a roamer and the Pokémon Tower's ghost keep their species
   local BattleBridge = require("src.core.game3.battle_bridge")
   local origStartWild = BattleBridge.startWild
+  -- wild_legendaries: an ordinary wild encounter is now and then a legendary
+  -- at its own level.  The field starts those (grass, water, caves, fishing,
+  -- Rock Smash, Sweet Scent) with no options; a scripted battle always has
+  -- some (its done callback at least) and keeps its Pokémon.
+  local legendaryList = nil
+  local function random() return ((love and love.math and love.math.random) or math.random)() end
+  function M.wildLegendary(enc, opts)
+    local r = rules()
+    local chance = r and r.randomizer and tonumber(r.wildLegendaries) or 0
+    if chance <= 0 or type(enc) ~= "table" or enc.roamer then return nil end
+    if type(opts) == "table" and next(opts) ~= nil then return nil end
+    if G3.currentMap() == "FR_POKEMON_TOWER_6F" then return nil end
+    if not legendaryList then
+      local pokemon, legendary = M.speciesData()
+      legendaryList = Randomizer.legendaryList(legendary, pokemon)
+    end
+    return Randomizer.rollLegendary(chance, random, legendaryList)
+  end
+
   BattleBridge.startWild = function(m, game, enc, opts, ...)
+    local to = M.wildLegendary(enc, opts)
     local species = plan and plan.species
-    if species and type(enc) == "table" and not enc.roamer
+    if not to and species and type(enc) == "table" and not enc.roamer
         and G3.currentMap() ~= "FR_POKEMON_TOWER_6F" then
       local sp = tonumber(enc.species) or Pokemon.speciesFromName(enc.species)
-      local to = sp and species[sp]
-      if to then
-        local copy = {}
-        for k, v in pairs(enc) do copy[k] = v end
-        copy.species, copy.speciesId = to, to
-        -- the vanilla moves or personality belong to the vanilla species
-        copy.moves, copy.personality = nil, nil
-        enc = copy
-      end
+      to = sp and species[sp]
+    end
+    if to then
+      local copy = {}
+      for k, v in pairs(enc) do copy[k] = v end
+      copy.species, copy.speciesId = to, to
+      -- the vanilla moves or personality belong to the vanilla species
+      copy.moves, copy.personality = nil, nil
+      enc = copy
     end
     return origStartWild(m, game, enc, opts, ...)
   end
+
+  -- ---- trainers -----------------------------------------------------------------
+
+  -- randomize_trainers: gym leaders, their gyms' trainers and the Elite Four
+  -- keep their type; the Champion (and with "on" every other trainer) gets
+  -- Pokémon of the same strength.  Each team comes from the run's seed and
+  -- the trainer's number: the same every time, for every player.  Levels and
+  -- held items stay; moves are the new Pokémon's own.
+  local TYPE = { FIGHTING = 1, POISON = 3, GROUND = 4, ROCK = 5, GHOST = 7, FIRE = 10, WATER = 11,
+    GRASS = 12, ELECTRIC = 13, PSYCHIC = 14, ICE = 15, DRAGON = 16 }
+  local TRAINER_TYPE = { [414] = TYPE.ROCK, [415] = TYPE.WATER, [416] = TYPE.ELECTRIC,
+    [417] = TYPE.GRASS, [418] = TYPE.POISON, [419] = TYPE.FIRE, [420] = TYPE.PSYCHIC,
+    [350] = TYPE.GROUND,
+    [410] = TYPE.ICE, [411] = TYPE.FIGHTING, [412] = TYPE.GHOST, [413] = TYPE.DRAGON,
+    [735] = TYPE.ICE, [736] = TYPE.FIGHTING, [737] = TYPE.GHOST, [738] = TYPE.DRAGON }
+  local CHAMPION = { [438] = true, [439] = true, [440] = true, [739] = true, [740] = true, [741] = true }
+  local GYM_TYPE = { FR_PEWTER_CITY_GYM = TYPE.ROCK, FR_CERULEAN_CITY_GYM = TYPE.WATER,
+    FR_VERMILION_CITY_GYM = TYPE.ELECTRIC, FR_CELADON_CITY_GYM = TYPE.GRASS,
+    FR_FUCHSIA_CITY_GYM = TYPE.POISON, FR_SAFFRON_CITY_GYM = TYPE.PSYCHIC,
+    FR_CINNABAR_ISLAND_GYM = TYPE.FIRE, FR_VIRIDIAN_CITY_GYM = TYPE.GROUND }
+  M.TRAINER_TYPE, M.GYM_TYPE = TRAINER_TYPE, GYM_TYPE
+
+  -- the new species for a trainer's team (species numbers), or nil to keep it
+  function M.trainerTeam(trainerId, species, mapId)
+    local r = rules()
+    local mode = r and r.randomizer and r.trainers
+    if mode ~= "gyms" and mode ~= "on" then return nil end
+    local id = tonumber(trainerId)
+    local theme = (id and TRAINER_TYPE[id]) or GYM_TYPE[mapId or G3.currentMap()]
+    if not theme and not (id and CHAMPION[id]) and mode ~= "on" then return nil end
+    local pokemon, legendary = M.speciesData()
+    local salt = 30000 + Randomizer.saltOf(id or tostring(trainerId))
+      + ((worlds(r) > 1 and M.world) or 0) * 1000
+    return Randomizer.trainerTeam(Rng.new(r.seed, salt), species, pokemon, legendary, theme)
+  end
+
+  mod.hooks:wrap("trainer.party", function(nextFn, trainerClass, trainerId, party)
+    local out = nextFn(trainerClass, trainerId, party)
+    if type(out) ~= "table" or #out == 0 then return out end
+    local species = {}
+    for i, mon in ipairs(out) do
+      species[i] = tonumber(mon.speciesId) or Pokemon.speciesFromName(mon.species) or 0
+    end
+    local new = M.trainerTeam(trainerId, species)
+    if not new then return out end
+    local copy = {}
+    for i, mon in ipairs(out) do
+      local row = {}
+      for k, v in pairs(mon) do row[k] = v end
+      row.species, row.speciesId = Gen3Compat.speciesName(new[i]) or new[i], new[i]
+      -- the vanilla moves belong to the vanilla Pokémon
+      row.moves, row.moveIds = nil, nil
+      copy[i] = row
+    end
+    return copy
+  end)
 
   -- a Johto or Hoenn Pokémon evolves before the National Pokédex: the shuffle
   -- hands them out from the first route

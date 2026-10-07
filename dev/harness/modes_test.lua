@@ -378,6 +378,67 @@ do
     and fp ~= fp2, "the fingerprint is stable, and changes with the item data")
 end
 
+-- ---- wild legendaries ------------------------------------------------------------------
+do
+  local list = R.legendaryList(nil, pokemon)
+  check(table.concat(list, ",") == "ARTICUNO,MEW,MEWTWO",
+    "Gen 1's legendaries this data has, sorted: " .. table.concat(list, ","))
+  check(table.concat(R.legendaryList({ [383] = true, [150] = true, [249] = true }), ",") == "150,249,383",
+    "FireRed's numbered ones sort by number")
+  local function seq(...)
+    local v, i = { ... }, 0
+    return function() i = i % #v + 1; return v[i] end
+  end
+  check(R.rollLegendary(0, seq(0), list) == nil and R.rollLegendary(nil, seq(0), list) == nil,
+    "off: never")
+  check(R.rollLegendary(1, seq(0.0099, 0.5), list) == "MEW" and R.rollLegendary(1, seq(0.0101, 0.5), list) == nil,
+    "1%: a roll under 1 in 100 is a legendary, the pick from the second roll")
+  check(R.rollLegendary(100, seq(0.999, 0.999), list) == "MEWTWO", "100%: always, the last one reachable")
+  local rng, hits = Rng.new(99, 1), 0
+  for _ = 1, 20000 do
+    if R.rollLegendary(2, function() return rng:next() / 2147483647 end, list) then hits = hits + 1 end
+  end
+  check(hits > 300 and hits < 500, "2% of 20000 encounters is about 400: " .. hits)
+end
+
+-- ---- trainers: teams of the same strength, of the trainer's type -----------------------
+do
+  -- 60 Pokémon: ROCK, WATER and NORMAL in turn, getting stronger; one
+  -- legendary ROCK at the top
+  local mons = {}
+  local kinds = { "ROCK", "WATER", "NORMAL" }
+  for i = 1, 60 do
+    mons["P" .. i] = { dex = i, types = { kinds[(i - 1) % 3 + 1] },
+                       baseStats = { hp = 200 + i * 8, attack = 0, defense = 0, speed = 0, special = 0 } }
+  end
+  mons.LEGEND = { dex = 61, types = { "ROCK" }, baseStats = { hp = 700, attack = 0, defense = 0, speed = 0, special = 0 } }
+  local function total(id) return mons[id].baseStats.hp end
+  local brock = { "P1", "P31" }                     -- a weak one and a mid one
+  local team = R.trainerTeam(Rng.new(7, 30414), brock, mons, { LEGEND = true }, "ROCK")
+  local allRock, close, distinct = true, true, team and team[1] ~= team[2]
+  for i, id in ipairs(team or {}) do
+    if mons[id].types[1] ~= "ROCK" then allRock = false end
+    -- the nearest six ROCKs are within 6 steps of 3 (24 base stats each way)
+    if math.abs(total(id) - total(brock[i])) > 6 * 24 + 24 then close = false end
+  end
+  check(team and allRock and close and distinct, "a gym leader's team: his type, of the same strength, no repeats: "
+    .. table.concat(team or {}, ","))
+  local again = R.trainerTeam(Rng.new(7, 30414), brock, mons, { LEGEND = true }, "ROCK")
+  check(table.concat(again, ",") == table.concat(team, ","), "the same seed and trainer give the same team")
+  local top = R.trainerTeam(Rng.new(7, 1), { "P60", "P60", "P60" }, mons, { LEGEND = true }, "ROCK")
+  local noLegend = true
+  for _, id in ipairs(top) do if id == "LEGEND" then noLegend = false end end
+  check(noLegend, "never a legendary, even for the strongest: " .. table.concat(top, ","))
+  local mixed = R.trainerTeam(Rng.new(7, 2), { "P10", "P20", "P30", "P40" }, mons, { LEGEND = true })
+  local kindsSeen = {}
+  for _, id in ipairs(mixed) do kindsSeen[mons[id].types[1]] = true end
+  check(#mixed == 4 and (kindsSeen.NORMAL or kindsSeen.WATER), "an ordinary trainer: any type, same strength: "
+    .. table.concat(mixed, ","))
+  check(R.trainerTeam(Rng.new(7, 3), { "P1" }, mons, {}, "DRAGON") == nil, "a type nobody has: the team stays")
+  check(R.saltOf("OPP_BROCK#1") == R.saltOf("OPP_BROCK#1") and R.saltOf("OPP_BROCK#1") ~= R.saltOf("OPP_BROCK#2")
+    and R.saltOf(414) == 414, "trainer salts: names hashed, numbers as they are")
+end
+
 -- ---- starters: basic Pokémon that evolve twice -----------------------------------------
 do
   local function line(t, ...)

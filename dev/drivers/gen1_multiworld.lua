@@ -39,7 +39,9 @@ return function(game)
   local http, ltn12 = package.loaded["socket.http"], package.loaded["ltn12"]
   local function post(payload)
     payload.modVersion, payload.gameVersion, payload.generation = "0.5.1", "Pokemon Yellow", 1
-    payload.modesVersion = payload.modesVersion or 2   -- the game modes' rules (GtsUI.MODES_VERSION)
+    -- the game modes' rules this client plays
+    payload.modesVersion = payload.modesVersion
+      or (((game.mods and game.mods.exports or {})["gen1online-plus"] or {}).ui or {}).MODES_VERSION
     local body = Json.encode(payload)
     local res = {}
     http.request({ url = BASE .. "/gts", method = "POST", source = ltn12.source.string(body),

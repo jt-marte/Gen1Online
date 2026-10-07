@@ -130,17 +130,21 @@ RULE_DEFAULTS = {
     "randomize_items": True,
     "randomize_badges": True,
     "randomize_starters": True,
+    "wild_legendaries": 0.0,      # percent of wild encounters that are a legendary
+    "randomize_trainers": "off",  # off | gyms | on
     "shared_key_items": "auto",
     "multiworld": False,
     "players": 2,
     "seed": None,
 }
 NUZLOCKE_MODES = ("off", "hardcore")
+TRAINER_MODES = ("off", "gyms", "on")   # gyms: gym leaders, their gyms, Elite Four, Champion
 # The game modes' rules a client plays (it sends modesVersion with every
 # POST).  While a mode is on, a Gen 1 or FireRed/LeafGreen client below this
 # is turned away with VERSION_MISMATCH, so nobody plays an old copy of the
-# rules (2: the strict first encounter, no dupes clause).
-MODES_VERSION = 2
+# rules (2: the strict first encounter, no dupes clause; 3: wild legendaries;
+# 4: randomized trainers).
+MODES_VERSION = 4
 MODES_GENERATIONS = (1, 3)
 MAX_WORLDS = 8
 SEED_MAX = 2147483646           # the client's Park-Miller generator takes 1..2^31-2
@@ -269,6 +273,14 @@ def parse_rules(text):
                     rules[key] = seed
             elif key == "shared_key_items" and value.lower() == "auto":
                 rules[key] = "auto"
+            elif key == "wild_legendaries":
+                rules[key] = parse_chance(value)
+            elif key == "randomize_trainers":
+                word = value.strip().lower()
+                if word in ("gyms", "gym"):
+                    rules[key] = "gyms"
+                else:
+                    rules[key] = "on" if parse_bool(value) else "off"
             elif key == "players":
                 players = int(value)
                 if not 2 <= players <= MAX_WORLDS:
@@ -279,6 +291,22 @@ def parse_rules(text):
         except ValueError as err:
             raise ValueError("line %d: %s" % (number, err))
     return rules
+
+
+WILD_LEGENDARIES_ON = 1.0       # "on" without a number: 1 in 100 wild encounters
+
+
+def parse_chance(value):
+    """wild_legendaries: off, on (1%) or a percent above 0 and up to 100."""
+    word = value.strip().lower().rstrip("%").strip()
+    if word in ("", "off", "no", "false", "0"):
+        return 0.0
+    if word in ("on", "yes", "true"):
+        return WILD_LEGENDARIES_ON
+    chance = float(word)
+    if not 0 < chance <= 100:
+        raise ValueError("wild_legendaries is off, on, or a percent from 0 to 100")
+    return chance
 
 
 def load_rules(path):
@@ -302,6 +330,8 @@ def rules_view(rules):
         "items": rando and bool(rules.get("randomize_items")),
         "badges": rando and bool(rules.get("randomize_badges")),
         "starters": rando and bool(rules.get("randomize_starters")),
+        "wildLegendaries": float(rules.get("wild_legendaries") or 0) if rando else 0.0,
+        "trainers": (rules.get("randomize_trainers") or "off") if rando else "off",
         "sharedKeyItems": bool(shared),
     }
     # the multiworld splits the shuffled items across worlds: it needs the
@@ -1487,6 +1517,10 @@ def modes_line(store):
     if view["randomizer"]:
         shuffled = [name for name in ("encounters", "items", "badges", "starters") if view[name]]
         parts.append("randomizer (%s)" % (", ".join(shuffled) or "nothing shuffled"))
+        if view["trainers"] != "off":
+            parts.append("trainers (%s)" % ("gyms" if view["trainers"] == "gyms" else "all"))
+        if view["wildLegendaries"]:
+            parts.append("wild legendaries %g%%" % view["wildLegendaries"])
     if view["multiworld"]:
         parts.append("multiworld for %d players" % view["players"])
     if view["sharedKeyItems"]:
