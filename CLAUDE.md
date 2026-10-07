@@ -322,6 +322,12 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     next Route 1 ball is refused and kept; then MISTY's lone CATERPIE loses
     a real battle: her wipe ends run 1 for both, ASH is told why, and both
     start run 2 in the bedroom.
+  - `gen3_options.lua` (FireRed; `randomizer = on`, `wild_legendaries =
+    100`, `randomize_trainers = on`, no Nuzlocke): the options travel from
+    the server's file (rules view and `/server/info`), a Route 1 wild roll
+    is a legendary at its level, and a real Viridian Forest trainer, talked
+    to, sends out the seed's team (`Modes.trainerTeam` of his
+    `Trainers.get` party) at his levels and is beaten.
   - `gen3_social.lua` (FireRed; plain server, `gts_config.txt` at a dead
     port): JOIN reporting the dead server, SERVER ADDRESS typed through
     `love.textinput`, `Game3:keypressed` and the D-pad (bad addresses

@@ -13,6 +13,8 @@ server_secrets.json
 # a rebuilt archive (they are the output, not the source).
 mod.zip
 *.modpkg
+# (modkit matches exact paths only: the old release file in the repo by name)
+gen1online-plus-0.4.0.0.modpkg
 # Developer tooling and notes (dev/, CLAUDE.md) never ship to players.
 # modkit matches exact paths only, so each file is listed.
 CLAUDE.md
@@ -43,6 +45,7 @@ dev/drivers/gen3_multiworld.lua
 dev/drivers/gen3_walk.lua
 dev/drivers/gen3_social.lua
 dev/drivers/gen3_friend.lua
+dev/drivers/gen3_options.lua
 dev/harness/address_test.lua
 dev/harness/modes_test.lua
 # The server (server/) is hosted separately and never ships inside the mod.

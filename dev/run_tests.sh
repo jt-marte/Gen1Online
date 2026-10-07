@@ -229,6 +229,14 @@ if [ "${1:-}" != "quick" ]; then
         step "real $g Nuzlocke with a friend (you)" "$(result "$G1O_WORK/gen3_friend_host.log" | sed 's/.*\t//')"
         step "real $g Nuzlocke with a friend (friend)" "$(result "$G1O_WORK/gen3_friend_guest.log" | sed 's/.*\t//')"
       fi
+      # the optional modes from the server's own file: wild legendaries (at
+      # 100%) and every trainer's team randomized
+      printf 'randomizer = on\nwild_legendaries = 100\nrandomize_trainers = on\nseed = 4242\n' \
+        > "$G1O_WORK/server/options_config.txt"
+      GTS_CONFIG="$G1O_WORK/server/options_config.txt" GTS_GENERATION=3 "$DEV/server.sh" >/dev/null
+      install_frlg "$FPROFILE"
+      frlg $g gen1online-frlg gen3_options.lua gen3_options_$g
+      step "real $g optional modes from the server's file" "$(result "$G1O_WORK/gen3_options_$g.log" | sed 's/.*\t//')"
     fi
   done
   # FireRed and LeafGreen hold the same item places, so their players can

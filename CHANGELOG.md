@@ -162,6 +162,8 @@ A server of our own, built for playing with friends.
 
 ### Fixed
 
+- The mod package carried the old `gen1online-plus-0.4.0.0.modpkg` inside it
+  (`.modkitignore`'s `*.modpkg` matches nothing: modkit takes exact paths).
 - FireRed/LeafGreen: online link trades refused Johto and Hoenn Pokémon
   (and eggs) until both players had the National Pokédex, and a MEW or
   DEOXYS without the event flag, which is how the randomizer hands them
