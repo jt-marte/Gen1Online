@@ -162,6 +162,11 @@ A server of our own, built for playing with friends.
 
 ### Fixed
 
+- FireRed/LeafGreen: online link trades refused Johto and Hoenn Pokémon
+  (and eggs) until both players had the National Pokédex, and a MEW or
+  DEOXYS without the event flag, which is how the randomizer hands them
+  out. Online, the Trade Center now takes them; your last Pokémon still
+  stays, and offline trades keep the cartridge's rules.
 - A teammate's wipe could leave the rest of the team playing on: a game
   online whose modes were never set up (a recovery-token restore before its
   fix, or modes turned on while it played) played no rules and never heard

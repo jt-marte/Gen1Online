@@ -267,7 +267,9 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     back, a KADABRA bought and evolved, Wonder Trade, chat, DISCONNECT and
     back.
   - `gen3_link.lua` (two LÖVE processes, host and guest): a PVP battle and
-    a Trade Center link trade over the server.
+    a Trade Center link trade over the server: RED's TREECKO for LEAF's
+    MEW without its event flag, neither with the National Pokédex (offline,
+    checked first, both are refused).
   - `gen3_modes.lua` (both games; hardcore, randomizer, seed 4242): the map
     walk (`gen3_walk.lua`: every ball and hidden item on a logic map
     reached by a BFS on FireRed's own collision from the map's warps and
@@ -845,6 +847,11 @@ off the open internet.
     set), before the species shuffle. A scripted battle always passes
     options (its `done` at least) and keeps its Pokémon. Gen 1 rolls in the
     `encounter.species` / `encounter.fishing` hooks, from `R.LEGENDARY`.
+  - Trades (`G3.installTrades`): online, `natives_trade.canTradeSelectedMon`
+    runs as if this player and the partner had the National Pokédex, and a
+    MEW/DEOXYS with `fatefulEncounter == false` passes (a proxy with the
+    flag set), as does the partner's in `LT.checkValidityOfTradeMons`. The
+    last-Pokémon rule stays; offline the cartridge's rules stand.
   - Starters: Oak's balls (`FR_OAKS_LAB`) put their species in VAR_TEMP_2
     after their index in VAR_TEMP_1; `M.starterRows` finds those rows by
     place, `apply` sets them and rewrites the question text (found by "X is

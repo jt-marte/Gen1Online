@@ -711,6 +711,57 @@ return function(env)
       if env.online() then return true, "online" end
       return origLocked(self, ...)
     end
+    G3.installTrades()
+  end
+
+  -- Online link trades (the Trade Center screen over the server) are free of
+  -- the cartridge's National Pokédex lock, on either side, and a MEW or
+  -- DEOXYS without the event flag (one the randomizer handed out) may be
+  -- traded too: online, Johto and Hoenn Pokémon turn up from the first
+  -- route.  The last Pokémon still stays.  Offline trades keep the rules.
+  function G3.installTrades()
+    local okT, NTrade = pcall(require, "src.core.game3.scripting.natives_trade")
+    if okT and type(NTrade) == "table" and NTrade.canTradeSelectedMon then
+      local origCan = NTrade.canTradeSelectedMon
+      NTrade.canTradeSelectedMon = function(party, monIdx, opts, ...)
+        if not env.online() then return origCan(party, monIdx, opts, ...) end
+        local o = {}
+        for k, v in pairs(type(opts) == "table" and opts or {}) do o[k] = v end
+        o.nationalDex = true
+        if type(o.partner) == "table" then
+          local p = {}
+          for k, v in pairs(o.partner) do p[k] = v end
+          local flags = tonumber(p.progressFlags) or 0
+          if flags % 16 == 0 then p.progressFlags = flags + 1 end   -- as if it had the National Pokédex
+          o.partner = p
+        end
+        local list, i = party, (tonumber(monIdx) or 0) + 1
+        local mon = type(party) == "table" and party[i]
+        if type(mon) == "table" and mon.fatefulEncounter == false then
+          list = {}
+          for k, v in ipairs(party) do list[k] = v end
+          list[i] = setmetatable({ fatefulEncounter = true }, { __index = mon })
+        end
+        return origCan(list, monIdx, o, ...)
+      end
+    end
+    -- the receiving side's own check of the partner's MEW or DEOXYS
+    local okL, LT = pcall(require, "src.core.game3.link.trade")
+    if okL and type(LT) == "table" and LT.checkValidityOfTradeMons then
+      local origValid = LT.checkValidityOfTradeMons
+      LT.checkValidityOfTradeMons = function(slot, partnerSlot, ...)
+        local list, i = LT.peerParty, tonumber(partnerSlot) or 1
+        local mon = type(list) == "table" and list[i]
+        if not (env.online() and type(mon) == "table" and mon.fatefulEncounter == false) then
+          return origValid(slot, partnerSlot, ...)
+        end
+        list[i] = setmetatable({ fatefulEncounter = true }, { __index = mon })
+        local ok, res = pcall(origValid, slot, partnerSlot, ...)
+        list[i] = mon
+        if not ok then error(res, 0) end
+        return res
+      end
+    end
   end
 
   -- ------------------------------------------- PVP and link trades

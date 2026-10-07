@@ -1,17 +1,20 @@
 -- Two real FireRed / LeafGreen games linked through the test server: a PVP
 -- battle and a link trade, both played by the game's own link code.  Run as
 -- two processes at once (dev/run_tests.sh starts both):
---   G1O_ROLE=host   RED,  the challenger: CHARIZARD Lv 40 and PIKACHU
---   G1O_ROLE=guest  LEAF, who accepts:    RATTATA Lv 5 and PIDGEY
+--   G1O_ROLE=host   RED,  the challenger: CHARIZARD Lv 40 and TREECKO
+--   G1O_ROLE=guest  LEAF, who accepts:    RATTATA Lv 5 and a MEW with no
+--                                         event flag (as the randomizer gives)
 -- 1. Both connect as new characters and meet in the bedroom.  The host faces
 --    LEAF, presses A, picks PVP 1V1 SINGLES; the guest accepts.  The battle
 --    runs at the party's real levels (autoFight picks the moves), CHARIZARD
 --    wins; the server books a win and a loss; both parties come back as they
 --    were (the Union Room's rule).
 -- 2. LEAF offers a LINK TRADE; RED accepts.  The Trade Center's trade
---    screen: RED offers PIKACHU, LEAF PIDGEY, both say yes, the trade scene
+--    screen: RED offers TREECKO, LEAF MEW, both say yes, the trade scene
 --    plays; then both cancel and the link closes.  Each game has the other's
---    Pokémon, OT and all.
+--    Pokémon, OT and all.  Neither has the National Pokédex: online, its
+--    lock and the MEW's missing event flag don't stop the trade (offline,
+--    checked first, they do).
 local U = require("tests.drivers.util")
 
 return function(game)
@@ -32,16 +35,35 @@ return function(game)
   local me, them = host and "RED" or "LEAF", host and "LEAF" or "RED"
 
   H.newOffline(me .. "OFF")
+  -- offline, the cartridge's trade rules: no TREECKO before the National
+  -- Pokédex, no MEW without its event flag
+  local NTrade = require("src.core.game3.scripting.natives_trade")
+  local Pokemon = require("src.core.game3.pokemon")
+  local TREECKO = Pokemon.speciesFromNational(252)
+  do
+    local off = Runtime.getSession()
+    Party.giveMon(off, TREECKO, 5)
+    Party.giveMon(off, 151, 5)
+    off.party[#off.party].fatefulEncounter = false
+    Party.giveMon(off, 16, 5)
+    local n = #off.party
+    check(NTrade.canTradeSelectedMon(off.party, n - 3, {}) == NTrade.CANT_TRADE_NATIONAL,
+      "offline: TREECKO can't be traded before the National Pokédex")
+    check(NTrade.canTradeSelectedMon(off.party, n - 2, { nationalDex = true }) == NTrade.CANT_TRADE_INVALID_MON,
+      "offline: nor a MEW without its event flag")
+    for _ = 1, 3 do table.remove(off.party) end
+  end
   if not check(H.createPlayer(me, host and "^RED$" or "^LEAF$"), "online as " .. me) then return finish() end
   H.closeAll()
   check(H.fieldFree(), "in the field")
   local s = Runtime.getSession()
   if host then
-    Party.giveMon(s, 6, 40)   -- CHARIZARD
-    Party.giveMon(s, 25, 12)  -- PIKACHU
+    Party.giveMon(s, 6, 40)       -- CHARIZARD
+    Party.giveMon(s, TREECKO, 12) -- a Hoenn Pokémon
   else
-    Party.giveMon(s, 19, 5)   -- RATTATA
-    Party.giveMon(s, 16, 5)   -- PIDGEY
+    Party.giveMon(s, 19, 5)       -- RATTATA
+    Party.giveMon(s, 151, 5)      -- MEW, caught: no event flag
+    s.party[2].fatefulEncounter = false
   end
   local myTid = tostring(H.account().trainerId)
 
@@ -149,7 +171,7 @@ return function(game)
   if not check(opened, "the Trade Center's trade screen opened") then return finish() end
   U.wait(120)
   shot("trade_menu")
-  local mySlot = host and 2 or 2     -- PIKACHU / PIDGEY
+  local mySlot = 2                   -- TREECKO / MEW
   local sent = s.party[mySlot]
   local sentPersonality = sent.personality
   check(LT.offer(mySlot) ~= false, "offered " .. tostring(sent.nickname ~= "" and sent.nickname or sent.name))
@@ -171,9 +193,9 @@ return function(game)
   end
   check(scene, "the trade scene played")
   local got = s.party[mySlot]
-  local wanted = host and 16 or 25
+  local wanted = host and 151 or TREECKO
   check(got and tonumber(got.species) == wanted and got.personality ~= sentPersonality,
-    "received " .. them .. "'s " .. (host and "PIDGEY" or "PIKACHU"))
+    "received " .. them .. "'s " .. (host and "MEW" or "TREECKO") .. ", with no National Pokédex on either side")
   check(got and got.otName == them, "with " .. them .. " as its OT (" .. tostring(got and got.otName) .. ")")
   -- both leave the trade screen
   U.wait(60)
