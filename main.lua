@@ -2517,6 +2517,31 @@
     writeOnlineSave(game.save)
   end
 
+  -- The trainer id is a number in the save (a new character's is, and the
+  -- engine compares mon.otId ~= player.id strictly: obedience, traded EXP,
+  -- Yellow's Pikachu follower), but the server's account carries a string.
+  -- Saves that got the string, and their Pokémon caught under it, are put
+  -- back to the number.  Not on FireRed: its save is FireRed's own.
+  function GtsUI.repairOtIds(save)
+    if GtsUI.G3 or type(save) ~= "table" or type(save.player) ~= "table" then return end
+    local id = save.player.id
+    if id == nil then return end
+    local key = tostring(id)
+    local function fix(list)
+      if type(list) ~= "table" then return end
+      for _, mon in ipairs(list) do
+        if type(mon) == "table" and mon.otId ~= nil and mon.otId ~= id and tostring(mon.otId) == key then
+          mon.otId = id
+        end
+      end
+    end
+    fix(save.party)
+    fix(save.box)
+    if type(save.boxes) == "table" then
+      for bIdx = 1, 14 do fix(save.boxes[bIdx]) end
+    end
+  end
+
   -- Sync Local Trainer Profile & Online Account to Server
   loadOnlineAccount = function(save)
     -- Online only: offline these touched the OFFLINE save (renaming its
@@ -2530,7 +2555,10 @@
     if acc and type(acc) == "table" then
       if save then save.onlineAccount = acc end
       if acc.name and save and save.player then save.player.name = acc.name end
-      if acc.trainerId and save and save.player then save.player.id = acc.trainerId end
+      if acc.trainerId and save and save.player then
+        save.player.id = (not GtsUI.G3 and tonumber(acc.trainerId)) or acc.trainerId
+        GtsUI.repairOtIds(save)
+      end
       mmoLevel = tonumber(acc.level) or 1
       mmoXp = tonumber(acc.xp) or 0
       mmoToken = acc.token or nil
@@ -2550,6 +2578,7 @@
     if not save then return end
     save.onlineAccount = save.onlineAccount or {}
     save.onlineAccount.trainerId = (save.player and save.player.id) or save.onlineAccount.trainerId or "100001"
+    if not GtsUI.G3 then save.onlineAccount.trainerId = tonumber(save.onlineAccount.trainerId) or save.onlineAccount.trainerId end
     save.onlineAccount.name = (save.player and save.player.name) or save.onlineAccount.name or "CRYSTAL"
     save.onlineAccount.level = mmoLevel or 1
     save.onlineAccount.xp = mmoXp or 0
@@ -4158,7 +4187,7 @@
     if GtsUI.G3 then
       -- FireRed's in-game trade scene, then a trade evolution
       local ok = GtsUI.G3.receive(game, sentMon, receivedPacked, otName,
-        function() GtsUI.tradeUsed(game) performForcedSave(game) end,
+        function() performForcedSave(game) end,
         function(receivedMon)
           performForcedSave(game)
           if addMmoXp then addMmoXp(game, "gts_trade", 100) end
@@ -4182,8 +4211,6 @@
 
     -- Add to player party / boxes
     local whereTo, slot = GtsUI.addPlayerMon(game, receivedMon)
-    -- one trade used of the hardcore limit, once the Pokémon is here
-    if whereTo then GtsUI.tradeUsed(game) end
 
     -- Update Pokédex seen & caught flags
     if game.save then
@@ -4402,6 +4429,8 @@
                   return
                 end
                 local receivedPacked = res.receivedMon or offered
+                -- a GTS buy uses one of the hardcore limit's trades
+                GtsUI.tradeUsed(game, "THE GTS TRADE")
 
                 -- Update local database
                 gtsDb.claim_boxes[tostring(listing.trainerId)] = gtsDb.claim_boxes[tostring(listing.trainerId)] or {}
@@ -4698,6 +4727,9 @@
           return
         end
         gtsDb.listings[res.listing.id] = res.listing
+        -- the deposit is the trade: it uses the hardcore limit's now, so
+        -- whatever comes back for it is always claimable
+        GtsUI.tradeReserved(game, res.listing.id, "YOUR GTS DEPOSIT")
 
         gtsDb.user_counts[tostring(trainerId)] = (gtsDb.user_counts[tostring(trainerId)] or 0) + 1
         GtsUI.addGtsReceipt(string.format("%s DEPOSITED %s", trainerName, GtsUI.monLabelName(game, depositMon)))
@@ -4825,6 +4857,8 @@
             if returnedMon then GtsUI.addPlayerMon(game, returnedMon) end
 
             gtsDb.listings[id] = nil
+            -- taken back: its trade is given back
+            GtsUI.tradeReleased(game, id)
             gtsDb.user_counts[tostring(trainerId)] = math.max(0, (gtsDb.user_counts[tostring(trainerId)] or 1) - 1)
             GtsUI.addGtsReceipt(string.format("%s WITHDREW DEPOSITED %s", trainerName, offName))
             performForcedSave(game)
@@ -4851,7 +4885,6 @@
             game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
             return
           end
-          if GtsUI.tradeRefusal(game) then return end
           local res = gtsApiPost({ action = "claim", trainerId = trainerId, index = idx - 1, claimId = claim.id }, 2.0)
           if not (res and res.success and res.claimed and res.claimed.mon) then
             game.stack:push(TextBox.new(game, wrapText(res
@@ -4914,7 +4947,6 @@
             game.stack:push(TextBox.new(game, wrapText("YOUR PARTY AND PC BOXES ARE FULL! MAKE ROOM FIRST.")))
             return
           end
-          if GtsUI.tradeRefusal(game) then return end
           local res = gtsApiPost({ action = "wonder_trade_claim", trainerId = trainerId }, 2.0)
           local got = res and res.success and res.claim
           if not (got and got.mon) then
@@ -4967,6 +4999,7 @@
           end
           local returnedMon = GtsUI.unpackMon(game, res.mon)
           if returnedMon then GtsUI.addPlayerMon(game, returnedMon) end
+          GtsUI.tradeReleased(game, "WONDER")
           performForcedSave(game)
           game.stack:push(TextBox.new(game, wrapText(string.format("WITHDREW %s FROM WONDER TRADE POOL!", mName))))
         end
@@ -5013,6 +5046,7 @@
                   return
                 end
 
+                GtsUI.tradeReserved(game, "WONDER", "YOUR WONDER TRADE")
                 performForcedSave(game)
                 local dName = GtsUI.monLabelName(game, depositMon)
                 local msg = res.matched
@@ -5226,13 +5260,13 @@
       {
         label = "CREATE NEW PLAYER",
         onSelect = function()
-          openFreshOnlinePlayerMenu(game)
+          GtsUI.confirmOnlineOverwrite(game, function() openFreshOnlinePlayerMenu(game) end)
         end
       },
       {
         label = "REDEEM RECOVERY TOKEN",
         onSelect = function()
-          openRedeemTokenMenu(game)
+          GtsUI.confirmOnlineOverwrite(game, function() openRedeemTokenMenu(game) end)
         end
       },
       {
@@ -5417,8 +5451,9 @@
           -- Always refresh the account profile on the restored/fresh save.
           newSave.player = newSave.player or {}
           newSave.player.name = acc.name or (isGen2 and "CRYSTAL" or "RED")
-          newSave.player.id = acc.trainerId or getTrainerInfo(game.save)
+          newSave.player.id = tonumber(acc.trainerId) or acc.trainerId or getTrainerInfo(game.save)
           newSave.onlineAccount = acc
+          GtsUI.repairOtIds(newSave)
 
           currentGame = game
           game.save = newSave
@@ -6115,6 +6150,8 @@
             {
               label = "YES, RESET",
               onSelect = function()
+                -- the old character leaves now, not as a frozen ghost for 30 s
+                GtsUI.sendLogout(game)
                 storageRemove("online_save")
                 storageRemove("online_account")
                 openFreshOnlinePlayerMenu(game)
@@ -6366,6 +6403,22 @@
     gtsApiPost({ action = "clear_challenge", trainerId = tid }, 1.5)
   end
 
+  -- ONLINE SETTINGS > CREATE NEW PLAYER / REDEEM RECOVERY TOKEN replace the
+  -- current online character: asked first, as RESET does, and the old
+  -- character logs out before `proceed` runs.
+  function GtsUI.confirmOnlineOverwrite(game, proceed)
+    local confirmMenu = {
+      { label = "YES", onSelect = function()
+          GtsUI.sendLogout(game)
+          proceed()
+        end },
+      { label = "CANCEL", onSelect = function() end },
+    }
+    game.stack:push(TextBox.new(game, wrapText("WARNING: THIS WILL OVERWRITE YOUR ONLINE CHARACTER! LOCAL SAVE IS UNTOUCHED. PROCEED?"), function()
+      game.stack:push(Menu.new(game, confirmMenu, { tx = 0, ty = 0, tw = 20, maxVisible = 6, startCloses = true }))
+    end))
+  end
+
   -- Server game modes on Gen 1 and FireRed/LeafGreen (hardcore Nuzlocke,
   -- the co-op randomizer, shared key items): modes/init.lua and modes/frlg.lua.
   -- The server's server_config.txt picks them; they only ever act while
@@ -6390,12 +6443,35 @@
     end)
     if not okModes then diag("game modes unavailable: %s", tostring(err)) end
     if mod and mod.exports then mod.exports.modes = GtsUI.Modes end
+    -- Gen 1's own Cable Club (the Pokémon Center 2F attendant) is open while
+    -- online, and its trades count too (GtsUI.linkTradeCompleted): past the
+    -- hardcore trade limit it ends before the trade screen.  Only a
+    -- LinkState already on top (exitWith pops the top state): the mod's own
+    -- startLinkTrade starts its mode before the push and asks at the offer.
+    local okLS, LinkState = false, nil
+    if not GtsUI.G3 then okLS, LinkState = pcall(require, "src.link.LinkState") end
+    if okLS and type(LinkState) == "table" and LinkState.startMode
+      and not LinkState._g1oTradeGate then
+      LinkState._g1oTradeGate = true
+      local startMode = LinkState.startMode
+      LinkState.startMode = function(self, mode, isHost, ...)
+        if mode == "trade" and isGtsServerConnected and self.game and self.game.stack
+          and self.game.stack:top() == self and GtsUI.Modes and GtsUI.Modes.tradeRefusal then
+          local okW, why = pcall(GtsUI.Modes.tradeRefusal, self.game.save)
+          if okW and why then return self:exitWith(wrapText(why), "cancel") end
+        end
+        return startMode(self, mode, isHost, ...)
+      end
+    end
   end
 
-  -- The hardcore Nuzlocke's trade limit (modes/).  Every way a Pokémon comes
-  -- in by trade asks first, before anything leaves or a request is posted,
-  -- and counts once the Pokémon is here (GtsUI.tradeUsed).  Gifts and the
-  -- in-game trades never count.  TextBox and wrapText are FireRed's there.
+  -- The hardcore Nuzlocke's trade limit (modes/).  Every trade asks first,
+  -- before anything leaves or a request is posted.  A GTS or Wonder Trade
+  -- deposit uses the trade when it goes in (GtsUI.tradeReserved), and taking
+  -- it back gives it back (GtsUI.tradeReleased); whatever comes back for it
+  -- is always claimable.  A GTS buy and each link trade count when made
+  -- (GtsUI.tradeUsed).  Gifts and the in-game trades never count.  TextBox
+  -- and wrapText are FireRed's there.
   function GtsUI.tradeRefusal(game)
     local M = GtsUI.Modes
     if not (M and M.tradeRefusal and game and game.save) then return false end
@@ -6405,25 +6481,46 @@
     game.stack:push(TextBox.new(game, wrapText(why)))
     return true
   end
-  function GtsUI.tradeUsed(game)
+  function GtsUI.tradeUsed(game, what)
     local M = GtsUI.Modes
     if not (M and M.tradeDone and game and game.save) then return end
-    local ok, err = pcall(M.tradeDone, game.save)
+    local ok, err = pcall(M.tradeDone, game.save, what)
     if not ok then diag("trade count failed: %s", tostring(err)) end
   end
-  -- Gen 1 cable trades over the server (startLinkTrade sets linkTradeLive).
+  function GtsUI.tradeReserved(game, id, what)
+    local M = GtsUI.Modes
+    if not (M and M.tradeReserve and game and game.save and id ~= nil) then return end
+    local ok, err = pcall(M.tradeReserve, game.save, id, what)
+    if not ok then diag("trade reserve failed: %s", tostring(err)) end
+  end
+  function GtsUI.tradeReleased(game, id)
+    local M = GtsUI.Modes
+    if not (M and M.tradeRelease and game and game.save and id ~= nil) then return end
+    local ok, err = pcall(M.tradeRelease, game.save, id)
+    if not ok then diag("trade release failed: %s", tostring(err)) end
+  end
+  -- Gen 1 cable trades: over the server (startLinkTrade sets linkTradeLive)
+  -- or the game's own Cable Club while online (its LinkState on top).
   -- trade.completed fires inside the trade's commit with the LinkState still
   -- on top: when that was the last trade, its link is closed, so the
   -- LinkState ends itself after this trade's scene instead of starting
   -- another round, and the reason shows once the player is on the field.
   function GtsUI.linkTradeCompleted(game)
-    local ls = GtsUI.linkTradeLive
-    if not ls or GtsUI.G3 or isGen2 or not (game and game.save) then return end
-    GtsUI.tradeUsed(game)
+    if GtsUI.G3 or isGen2 or not isGtsServerConnected or not (game and game.save) then return end
+    local ls = GtsUI.linkTradeLive or (game.stack and game.stack.top and game.stack:top())
+    if not (type(ls) == "table" and ls.exitWith and ls.trade) then return end
+    GtsUI.tradeUsed(game, "THE LINK TRADE")
     local M = GtsUI.Modes
     local okL, left = pcall(function() return M and M.tradesLeft and M.tradesLeft(game.save) end)
     if not (okL and tonumber(left) and tonumber(left) <= 0) then return end
-    if type(ls) == "table" and ls.net and ls.net.close then pcall(ls.net.close, ls.net) end
+    if ls.net and ls.net.close then
+      -- the partner's LinkState must hear it ends ("The trade was
+      -- cancelled"); the adapter's own send drops "bye", meant for battles
+      if ls.net.roomId and ls.net.targetId then
+        gtsApiPost({ action = "send_battle_msg", roomId = ls.net.roomId, targetId = ls.net.targetId, msg = { type = "bye" } }, 1.5)
+      end
+      pcall(ls.net.close, ls.net)
+    end
     local okW, why = pcall(function() return M.tradeRefusal and M.tradeRefusal(game.save) end)
     GtsUI.linkTradeNote = okW and why or nil
   end
@@ -6447,7 +6544,7 @@
   -- FireRed/LeafGreen's link trades (gen3/link.lua counts them, and the
   -- Trade Center screen asks before an offer: gen3/init.lua)
   if GtsUI.G3 then
-    GtsUI.G3.onLinkTrade = function() GtsUI.tradeUsed(GtsUI.G3.game) end
+    GtsUI.G3.onLinkTrade = function() GtsUI.tradeUsed(GtsUI.G3.game, "THE LINK TRADE") end
     GtsUI.G3.tradeRefusal = function()
       local M, save = GtsUI.Modes, GtsUI.G3.game.save
       return M and M.tradeRefusal and save and M.tradeRefusal(save) or nil
@@ -6652,6 +6749,10 @@ return function(mod)
   onEvent("pokemon.caught", function(payload)
     if Game and Game.save then
       addMmoXp(Game, "catch")
+      if isGtsServerConnected then
+        gtsApiPost({ action = "report_battle_stat", trainerId = (getTrainerInfo(Game.save)), battleType = "wild",
+          species = payload and (payload.species or (payload.mon and payload.mon.species)), caught = true })
+      end
       performForcedSave(Game)
       syncLocalProfile(Game, 0)
     end
@@ -7481,21 +7582,9 @@ return function(mod)
       end
     end
 
-    -- Hook Catch XP reward & Analytics Stat reporting
-    if Party and Party.add and not Party._mmoHooked then
-      Party._mmoHooked = true
-      local origPartyAdd = Party.add
-      Party.add = function(party, mon)
-        local res = origPartyAdd(party, mon)
-        if res and Game and isGtsServerConnected then
-          addMmoXp(Game, "catch")
-          local tid = getTrainerId and getTrainerId(Game.save) or "100001"
-          local sp = mon and mon.species
-          gtsApiPost({ action = "report_battle_stat", trainerId = tid, battleType = "wild", species = sp, caught = true })
-        end
-        return res
-      end
-    end
+    -- Catch XP and its stat: the pokemon.caught handler.  (A Party.add hook
+    -- here awarded a second "catch" for every catch, and one for each GTS,
+    -- Wonder Trade and gift arrival as well.)
 
     -- Hook Wild / Trainer Battle XP reward & Analytics Stat reporting (Single Authoritative Hook)
     if BattleState and BattleState.finish and not BattleState._mmoHooked then
