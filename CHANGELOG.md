@@ -6,6 +6,15 @@ A server of our own, built for playing with friends.
 
 ### Fixed
 
+- FireRed/LeafGreen: the GTS row shows on the real Pokémon Center PC (the
+  game opens its PC in select mode, where the row was always left out; it
+  no longer shifts LOG OFF's answer to the script either). A link that
+  loses an answer, a peer that vanishes, or a link closed during battle
+  setup no longer freezes the trade or battle for good: a poll stalled 5 s
+  is sent again, both sides send a keep-alive (`g1o_alive`) every 5 s and a
+  link quiet for 60 s is dropped (both players need this version). A link
+  can't start during a battle (the challenger is told "busy"), where its
+  waiting screen could never be closed.
 - Game modes: on FireRed/LeafGreen the TEA is shared with the team (it
   opens Saffron, and a multiworld keeps one copy for the whole team, so
   every other player was shut out of their own Saffron on a third of the
