@@ -162,6 +162,15 @@ A server of our own, built for playing with friends.
 
 ### Fixed
 
+- A teammate's wipe could leave the rest of the team playing on: a game
+  online whose modes were never set up (a recovery-token restore before its
+  fix, or modes turned on while it played) played no rules and never heard
+  that the run ended. Such a game now sets the modes up from its next
+  position sync (once per run if the multiworld refuses it). A wipe the
+  server refuses is no longer dropped in silence (the player is told, and
+  it's sent again), and a battle lost as "whiteout" or "blackout" counts
+  like "lose". Played with two real FireRed games: one player's wipe ends
+  the run for both.
 - Hardcore Nuzlocke (FireRed/LeafGreen and Gen 1): only the first wild
   Pokémon met in an area can be caught, whatever it is. The dupes clause is
   gone (a first encounter of a species you owned let the next one in the

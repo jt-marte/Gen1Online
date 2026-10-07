@@ -6,7 +6,9 @@
 --   other on Route 1 -> ASH catches Route 1's first wild Pokémon and says so
 --   in the chat -> then MISTY catches hers (the area is each player's own)
 --   -> for both, the next one on Route 1 is refused in the bag, the ball
---   kept -> both say DONE and wait for the other.
+--   kept -> MISTY's whole party faints in a real battle: the run is over
+--   for both, and both start run 2 in the bedroom -> both say DONE and wait
+--   for the other.
 --
 -- dev/run_tests.sh runs it on FireRed (both profiles need the cache).
 local U = require("tests.drivers.util")
@@ -43,6 +45,13 @@ return function(game)
     .. ": " .. tostring(Modes.describe()))
   local acc = H.account()
   local myTid = tostring(acc.trainerId)
+  if role == "host" then
+    -- a game online that never set the modes up (as a token restore did
+    -- before it was fixed) sets them up from its next sync
+    Modes.rules = nil
+    for _ = 1, 300 do if Modes.rules then break end U.wait(5) end
+    check(Modes.rules ~= nil and Modes.hardcore(), "a game online without the modes set up gets them from its next sync")
+  end
 
   -- chat lines as signals between the two games
   local function say2(text)
@@ -104,8 +113,8 @@ return function(game)
     for _ = 1, 600 do if H.fieldFree() then break end U.wait(2) end
     return not Battle.isActive()
   end
-  local function wild(species, level)
-    BattleBridge.startWild(nil, game, { species = species, level = level }, {})
+  local function wild(species, level, opts)
+    BattleBridge.startWild(nil, game, { species = species, level = level }, opts or {})
     for _ = 1, 900 do
       local st = Battle.isActive() and Battle.getState()
       if st and st.enemy and st.enemy.mon then return st end
@@ -173,6 +182,44 @@ return function(game)
   end
   check(masterBalls() == balls and #Runtime.getSession().party == before + 1, "the ball kept, nothing caught")
   check(leave(), me .. " ran")
+
+  -- MISTY's whole party faints: the run is over for the whole team
+  local runId = Modes.rules.runId
+  local function newRun()
+    for f = 1, 3000 do
+      H.clearTexts(1)
+      if Message.isOpen() or H.screenUp() then U.tap(game, "a") end
+      if Modes.rules and Modes.rules.runId == runId + 1 and Modes.state().run == runId + 1 then return true end
+      if f % 300 == 0 then
+        say(("  waiting: run %s/%s wiped %s map %s"):format(tostring(Modes.state().run),
+          tostring(Modes.rules and Modes.rules.runId), tostring(Modes.state().wiped), tostring(G3.currentMap())))
+      end
+      U.wait(3)
+    end
+    return false
+  end
+  if role == "guest" then
+    s = Runtime.getSession()
+    for i = #s.party, 1, -1 do table.remove(s.party, i) end
+    require("src.core.game3.party").giveMon(s, 10, 2)      -- a lone CATERPIE
+    say2("MISTY FIGHTS")
+    st = wild(150, 70, { autoFight = true })
+    check(st ~= nil and waitEnd(), "MISTY's last Pokémon lost a real battle")
+    check(newRun(), "her wipe ended run " .. runId .. "; run " .. (runId + 1) .. " began")
+  else
+    check(heard("MISTY FIGHTS"), "MISTY goes into her last battle")
+    check(newRun(), "MISTY's wipe ended ASH's run " .. runId .. " too; run " .. (runId + 1) .. " began")
+    for _ = 1, 300 do H.clearTexts(1); U.wait(1) end
+    local told = false
+    for _, t in ipairs(H.seen) do
+      if t:gsub("%s+", " "):find("A TEAMMATE'S PARTY WIPED OUT", 1, true) then told = true end
+    end
+    check(told, "ASH was told why")
+  end
+  s = Runtime.getSession()
+  check(s.map == "FR_PLAYERS_HOUSE_2F" and #(s.party or {}) == 0 and s.name == me,
+    me .. " starts over in the bedroom (" .. tostring(s.map) .. ")")
+  shot("new_run")
 
   -- done when both are
   say2(me .. " DONE")

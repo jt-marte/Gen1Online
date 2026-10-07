@@ -888,7 +888,8 @@ return function(ctx)
     -- link battles are friendly; the first rival fight in Oak's lab never costs
     if battle and battle.kind == "link" then return end
     if G3.currentMap() == "FR_OAKS_LAB" then return end
-    M.bury(type(ev) == "table" and ev.result == "lose")
+    local result = type(ev) == "table" and ev.result
+    M.bury(result == "lose" or result == "whiteout" or result == "blackout")
   end)
 
   mod.events:on("world.blacked_out", function()
@@ -921,12 +922,22 @@ return function(ctx)
     note(("RUN %d BEGINS!\f%s"):format(r.runId, M.describe()))
   end
 
+  local wipeWarned = false
   local function postWipe(now)
     if now < wipeRetryAt then return end
     local res = ctx.post({ action = "run_wipe", trainerId = trainerId(), token = token(),
                            runId = state().run }, 3.0)
     if res == nil then wipeRetryAt = now + 3 return end
-    wipeQueued = false
+    if not res.success and res.error ~= "NOT_NUZLOCKE" then
+      -- refused (an account problem): never dropped in silence
+      if not wipeWarned then
+        wipeWarned = true
+        note(("THE SERVER WOULDN'T TAKE YOUR TEAM WIPE (%s).\fIT WILL KEEP TRYING."):format(tostring(res.error)))
+      end
+      wipeRetryAt = now + 30
+      return
+    end
+    wipeQueued, wipeWarned = false, false
     if res.success and res.run then
       M.rules = res.run
       pendingRestart = true
@@ -1013,6 +1024,7 @@ return function(ctx)
 
   -- ---- main.lua's calls ------------------------------------------------------
 
+  local refusedRun = nil      -- the run whose world was refused (M.synced asks once)
   function M.connected(game, serverRules, fresh)
     M.rules = (type(serverRules) == "table" and serverRules.active) and serverRules or nil
     M.world = nil
@@ -1022,7 +1034,7 @@ return function(ctx)
       local res = join(M.rules, G3.modData().onlineAccount)
       if not (res and res.success and res.world) then
         game.stack:push(G3.TextBox.new(game, ctx.wrapText(refusalText(res, M.rules))))
-        M.rules = nil
+        refusedRun, M.rules = M.rules.runId, nil
         return
       end
       M.world = res.world
@@ -1044,8 +1056,16 @@ return function(ctx)
     end
   end
 
+  -- every sync_pos answer.  A game online with a mode on that never set the
+  -- modes up (a way in that missed M.connected, or modes turned on while it
+  -- played) does it now: without them it would play no rules and never hear
+  -- that a teammate's wipe ended the run.  Once per run when refused.
   function M.synced(game, res)
-    if not (M.rules and type(res) == "table" and type(res.run) == "table") then return end
+    if not (type(res) == "table" and type(res.run) == "table") then return end
+    if not M.rules then
+      if res.run.active and refusedRun ~= res.run.runId then M.connected(game, res.run, false) end
+      return
+    end
     M.rules = res.run.active and res.run or nil
     if M.rules then M.applyTeam(res.team) end
   end

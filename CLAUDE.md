@@ -118,7 +118,11 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   extracts LuaJIT, LÖVE 11.5 and luasocket from Fedora RPMs (no sudo) and
   imports the ROM into a throwaway LÖVE profile. The user's real game profile
   is never touched. It also clones gen1recomp next to this repo if it's
-  missing, pinned to the verified commit. The tests run `server/gts_server.py`
+  missing, pinned to the verified commit (`RECOMP_REF`, now `21a64419`, dev of
+  2026-10-06). An engine update can bump a game's ROM cache version
+  (FireRed/LeafGreen went 130 -> 131 then): the game then waits in its
+  importer, silently, and every driver hangs. Delete that game's cache in
+  the test profiles and run `setup.sh` with the ROMs again. The tests run `server/gts_server.py`
   through `dev/server.sh` (fresh database each start).
 - **Cloud / no ROM** (Ubuntu, claude.ai/code): run `dev/setup.sh` with no
   argument, then `dev/run_tests.sh quick`. Without `dnf` it apt-installs
@@ -305,9 +309,12 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     find reaching the client, RUN INFO, and a newcomer refused on CONNECT.
   - `gen3_friend.lua` (FireRed; two LÖVE processes, host ASH and guest
     MISTY, on a hardcore server): both get the rules and see each other on
-    Route 1; ASH catches Route 1's first Pokémon and says so in the chat,
+    Route 1 (ASH's game, its modes dropped, sets them up again from its next
+    sync); ASH catches Route 1's first Pokémon and says so in the chat,
     then MISTY catches hers (the area is each player's own); for both the
-    next Route 1 ball is refused and kept.
+    next Route 1 ball is refused and kept; then MISTY's lone CATERPIE loses
+    a real battle: her wipe ends run 1 for both, ASH is told why, and both
+    start run 2 in the bedroom.
   - `gen3_social.lua` (FireRed; plain server, `gts_config.txt` at a dead
     port): JOIN reporting the dead server, SERVER ADDRESS typed through
     `love.textinput`, `Game3:keypressed` and the D-pad (bad addresses

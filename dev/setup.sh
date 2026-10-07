@@ -26,7 +26,7 @@ DEV=$(cd "$(dirname "$0")" && pwd)
 REPO=$(dirname "$DEV")
 WORK=${G1O_WORK:-/tmp/gen1online-dev}
 RECOMP=${G1O_RECOMP:-$(dirname "$REPO")/gen1recomp}
-RECOMP_REF=${G1O_RECOMP_REF:-6613f5bc4239e9076df7366ed4b07b6285194042}
+RECOMP_REF=${G1O_RECOMP_REF:-21a64419fdf34862d10dd9b9e88357afd1044eae}
 mkdir -p "$WORK/rpms" "$WORK/root" "$WORK/bin" "$WORK/server"
 
 # --- engine -------------------------------------------------------------------
