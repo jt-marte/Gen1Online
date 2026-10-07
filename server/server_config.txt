@@ -1,4 +1,13 @@
-# Gen1Online+ server game modes.  Restart the server after editing.
+# Gen1Online+ server settings: where it listens, and the game modes.
+# Restart the server after editing.
+
+# Where the server listens.  host = 0.0.0.0 takes every network (LAN,
+# Tailscale, port forwarding); 127.0.0.1 only this PC.  Players type this
+# PC's address (and the port, when it isn't 7779) in their game: START >
+# CONNECT > SERVER ADDRESS.  --host and --port on the command line win.
+host = 0.0.0.0
+port = 7779
+
 #
 # The modes play on a Gen 1 world (Red, Blue and Yellow) and on a FireRed /
 # LeafGreen world; a Crystal server ignores them.  Everyone on the server

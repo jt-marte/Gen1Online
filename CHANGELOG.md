@@ -6,6 +6,9 @@ A server of our own, built for playing with friends.
 
 ### Added
 
+- `server/server_config.txt` also sets where the server listens: `host`
+  and `port` (command-line flags win, then `$PORT`). The README is
+  shorter.
 - **Randomized trainers** (`randomize_trainers = off | gyms | on`, off by
   default, with the randomizer): `gyms` gives gym leaders and their gyms'
   trainers random Pokémon of the gym's type, the Elite Four theirs and the

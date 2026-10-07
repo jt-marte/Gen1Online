@@ -124,6 +124,8 @@ PRESENCE_FIELDS = ("name", "spriteId", "title", "level", "map", "x", "y", "px",
 # Game modes (server_config.txt).  Booleans read on/off, yes/no, true/false, 1/0;
 # "auto" for shared_key_items means "on when the randomizer is".
 RULE_DEFAULTS = {
+    "host": "0.0.0.0",            # where the server listens (not a game mode)
+    "port": DEFAULT_PORT,
     "nuzlocke": "off",            # off | hardcore
     "randomizer": False,
     "randomize_encounters": True,
@@ -281,6 +283,15 @@ def parse_rules(text):
                     rules[key] = "gyms"
                 else:
                     rules[key] = "on" if parse_bool(value) else "off"
+            elif key == "host":
+                if not value or any(c.isspace() for c in value):
+                    raise ValueError("host is an address like 0.0.0.0 or 127.0.0.1, not %r" % value)
+                rules[key] = value
+            elif key == "port":
+                port = int(value)
+                if not 1 <= port <= 65535:
+                    raise ValueError("port must be 1..65535")
+                rules[key] = port
             elif key == "players":
                 players = int(value)
                 if not 2 <= players <= MAX_WORLDS:
@@ -307,6 +318,17 @@ def parse_chance(value):
     if not 0 < chance <= 100:
         raise ValueError("wild_legendaries is off, on, or a percent from 0 to 100")
     return chance
+
+
+def listen_address(cli_host, cli_port, rules, environ=None):
+    """Where to listen: a command-line flag wins, then $PORT, then
+    server_config.txt's host and port, then 0.0.0.0:7779."""
+    environ = os.environ if environ is None else environ
+    host = cli_host or rules.get("host") or RULE_DEFAULTS["host"]
+    port = cli_port
+    if port is None:
+        port = to_int(environ.get("PORT"), 0) or to_int(rules.get("port"), 0) or DEFAULT_PORT
+    return host, port
 
 
 def load_rules(path):
@@ -1558,10 +1580,11 @@ def banner(host, port, store):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Gen1Online+ server for playing with friends.")
-    parser.add_argument("--host", default="0.0.0.0",
-                        help="address to listen on (default 0.0.0.0: every network)")
-    parser.add_argument("--port", type=int, default=to_int(os.environ.get("PORT"), DEFAULT_PORT),
-                        help="TCP port (default 7779, or $PORT)")
+    parser.add_argument("--host", default=None,
+                        help="address to listen on (default: server_config.txt's host, "
+                             "else 0.0.0.0: every network)")
+    parser.add_argument("--port", type=int, default=None,
+                        help="TCP port (default: $PORT, else server_config.txt's port, else 7779)")
     parser.add_argument("--data", default=os.environ.get("GTS_DB_PATH") or DEFAULT_DATA,
                         help="JSON data file (default server/gts_data.json, or $GTS_DB_PATH)")
     env_gen = to_int(os.environ.get("GTS_GENERATION"), 0) or None
@@ -1570,7 +1593,8 @@ def main(argv=None):
                              "3 = FireRed/LeafGreen "
                              "(default: the first game to connect decides, or $GTS_GENERATION)")
     parser.add_argument("--config", default=os.environ.get("GTS_CONFIG") or DEFAULT_CONFIG,
-                        help="game modes file (default server/server_config.txt, or $GTS_CONFIG)")
+                        help="settings file: address, port, game modes "
+                             "(default server/server_config.txt, or $GTS_CONFIG)")
     parser.add_argument("--new-run", action="store_true",
                         help="end the current Nuzlocke/randomizer run and start the next one")
     args = parser.parse_args(argv)
@@ -1580,6 +1604,7 @@ def main(argv=None):
     except (OSError, ValueError) as err:
         print("%s: %s" % (args.config, err), file=sys.stderr)
         return 1
+    host, port = listen_address(args.host, args.port, rules)
     try:
         store = GtsStore(args.data, version=os.environ.get("GTS_MOD_VERSION") or DEFAULT_VERSION,
                          generation=args.gen, rules=rules)
@@ -1589,12 +1614,13 @@ def main(argv=None):
     if args.new_run:
         store.new_run()
     try:
-        httpd = GtsHTTPServer((args.host, args.port), store)
+        httpd = GtsHTTPServer((host, port), store)
     except OSError as err:
-        print("Could not listen on %s:%d: %s" % (args.host, args.port, err), file=sys.stderr)
-        print("Is the server already running? Pick another port with --port.", file=sys.stderr)
+        print("Could not listen on %s:%d: %s" % (host, port, err), file=sys.stderr)
+        print("Is the server already running? Pick another port in %s (port = ...) or with --port."
+              % os.path.basename(args.config), file=sys.stderr)
         return 1
-    print(banner(args.host, args.port, store), flush=True)
+    print(banner(host, port, store), flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

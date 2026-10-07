@@ -1034,6 +1034,19 @@ class RulesFileTests(unittest.TestCase):
         self.assertEqual(gts_server.rules_view(gts_server.parse_rules("randomize_trainers = on"))["trainers"],
                          "off", "only with the randomizer")
 
+    def test_host_and_port(self):
+        rules = gts_server.parse_rules("host = 127.0.0.1\nport = 8000\n")
+        self.assertEqual((rules["host"], rules["port"]), ("127.0.0.1", 8000))
+        for bad in ("port = 0", "port = 70000", "port = seven", "host ="):
+            with self.assertRaises(ValueError):
+                gts_server.parse_rules(bad)
+        # a command-line flag wins, then $PORT, then the file, then 0.0.0.0:7779
+        listen = gts_server.listen_address
+        self.assertEqual(listen(None, None, rules, {}), ("127.0.0.1", 8000))
+        self.assertEqual(listen(None, None, rules, {"PORT": "9000"}), ("127.0.0.1", 9000))
+        self.assertEqual(listen("10.0.0.5", 7000, rules, {"PORT": "9000"}), ("10.0.0.5", 7000))
+        self.assertEqual(listen(None, None, gts_server.parse_rules(""), {}), ("0.0.0.0", 7779))
+
     def test_wild_legendaries(self):
         def chance(text):
             return gts_server.rules_view(gts_server.parse_rules("randomizer = on\n" + text))["wildLegendaries"]

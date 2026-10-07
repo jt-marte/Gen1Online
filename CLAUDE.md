@@ -599,6 +599,10 @@ with a single command and then either port-forward or use Tailscale. So:
   3.8+, stdlib only, nothing to install, and listening on `0.0.0.0:7779`. Data
   goes to `server/gts_data.json`, next to the script rather than the current
   directory. Gitignore it.
+- `server/server_config.txt` also holds `host` and `port`
+  (`listen_address`: `--host`/`--port` win, then `$PORT`, then the file,
+  then 0.0.0.0:7779). They ride in the rules dict but no rules view reads
+  them, so changing them never starts a new run.
 - Add thin wrappers: `server/start.sh` (Linux/macOS) and `server/start.bat`
   (Windows, double-clickable). Both run the script and pass arguments through.
 - On start, print the URLs to give friends: `http://127.0.0.1:7779` for the
