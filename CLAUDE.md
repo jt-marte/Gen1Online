@@ -120,9 +120,14 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   is never touched. It also clones gen1recomp next to this repo if it's
   missing, pinned to the verified commit (`RECOMP_REF`, now `21a64419`, dev of
   2026-10-06). An engine update can bump a game's ROM cache version
-  (FireRed/LeafGreen went 130 -> 131 then): the game then waits in its
-  importer, silently, and every driver hangs. Delete that game's cache in
-  the test profiles and run `setup.sh` with the ROMs again. The tests run `server/gts_server.py`
+  (`src/import/CacheContract.lua` markers and `versions_frlg.lua`'s
+  CACHE_VERSION; that update moved Crystal v13 -> v14 and FireRed/LeafGreen
+  130 -> 131): the game then waits in its importer, silently, the driver's
+  log stays empty and the step times out. Delete that game's cache in the
+  test profiles (`$G1O_WORK/xdg/love/<identity>/<game>`) and run `setup.sh`
+  with the ROMs again. In this workspace the ROMs are the `.gbc`/`.gba`
+  files next to the repo (`../Pokemon - Crystal Version (UE) (V1.1) [C][!].gbc`,
+  Yellow, FireRed, LeafGreen); never copy them into the repo. The tests run `server/gts_server.py`
   through `dev/server.sh` (fresh database each start).
 - **Cloud / no ROM** (Ubuntu, claude.ai/code): run `dev/setup.sh` with no
   argument, then `dev/run_tests.sh quick`. Without `dnf` it apt-installs
