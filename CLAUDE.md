@@ -518,7 +518,9 @@ Game modes (Gen 1 and FireRed/LeafGreen; `server/server_config.txt`,
   encounters, items, badges, starters, wildLegendaries, trainers,
   sharedKeyItems, active, runId, seed}` (`wildLegendaries`: a percent, 0 when
   off or without the randomizer; `trainers`: "off" | "gyms" | "on";
-  `tradesPerGym`: `nuzlocke_trades`, 0 = unlimited, 0 unless hardcore) rides `/server/info` as
+  `tradesPerGym`: `nuzlocke_trades`, 0 = unlimited, 0 unless hardcore;
+  `runReason`: why the run began, "start" | "wipe" | "config" | "manual",
+  which words the clients' "RUN N IS OVER" note) rides `/server/info` as
   `rules` and every `sync_pos` answer as `run`, next to `team: {rev, items:
   [ITEM]}`. Sub-flags read false when the randomizer is off;
   `shared_key_items = auto` follows the randomizer.
@@ -843,9 +845,12 @@ off the open internet.
     never refused, so nothing gets stuck in a claim box or the pool. Link
     trades: refused on the offer and the accept (`Modes.tradeRefusal`); a
     Gen 1 cable trade counts on `trade.completed` (the mod's room or the
-    game's own Cable Club) and at 0 left the link is closed after that trade
-    (a `bye` to the partner); FireRed counts per `LT.completed` step in
-    `gen3/link.lua` and refuses in `canTradeSelectedMon`.
+    game's own Cable Club); at 0 left the next round is refused in the
+    `LinkState.beginRound` wrap (a `bye` to the partner, then `exitWith`),
+    never inside `trade.completed`, where a `bye` could reach the partner
+    in the same batch as the confirm and cancel a trade this side applied;
+    FireRed counts per `LT.completed` step in `gen3/link.lua` and refuses in
+    `canTradeSelectedMon`.
   - The hardcore rules hook `item.use` (the bag), `ItemEffects.needsTarget`
     (a refused item gets no target picker), `BattleState.safariAction` (the
     Safari Zone's own BALL), `battle.style`, `exp.gain`, and the

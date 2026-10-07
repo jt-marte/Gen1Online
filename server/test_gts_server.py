@@ -1450,6 +1450,17 @@ class RunSignatureTests(unittest.TestCase):
         self.assertEqual(self.run_of({"nuzlocke": "hardcore", "randomizer": True})["id"], 5)
         self.assertEqual(self.run_of({"nuzlocke": "hardcore"})["id"], 6)
 
+    def test_runs_say_why_they_began(self):
+        store = gts_server.GtsStore(self.path, clock=FakeClock(), rules={"nuzlocke": "hardcore"})
+        self.assertEqual(store._run_view()["runReason"], "start")
+        store = gts_server.GtsStore(self.path, clock=FakeClock(), rules={"nuzlocke": "hardcore", "seed": 9})
+        self.assertEqual((store._run_view()["runId"], store._run_view()["runReason"]), (2, "config"))
+        self.assertTrue(store.began_run)
+        store.new_run()
+        self.assertEqual((store._run_view()["runId"], store._run_view()["runReason"]), (3, "manual"))
+        store = gts_server.GtsStore(self.path, clock=FakeClock(), rules={"nuzlocke": "hardcore", "seed": 9})
+        self.assertFalse(store.began_run, "the same config begins nothing")
+
     def test_a_rule_a_newer_server_adds_never_starts_a_run(self):
         # an upgrade adds a key to the rules view: at its default it is no
         # change; set to something else it is

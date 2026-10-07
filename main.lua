@@ -1674,7 +1674,13 @@
         local okS, socket = pcall(require, "socket")
         local writable = okS and socket and socket.select
           and select(2, socket.select(nil, { asyncSock }, 0))
-        if not (writable and writable[1]) then return end
+        if not (writable and writable[1]) then
+          -- Winsock reports a refused non-blocking connect in SO_ERROR and
+          -- never as writable: ask before waiting on
+          local okE0, soErr0 = pcall(asyncSock.getoption, asyncSock, "error")
+          if okE0 and soErr0 and soErr0 ~= 0 then asyncClose("connect failed: " .. tostring(soErr0)) return end
+          return
+        end
         local err
         peer, err = asyncSock:getpeername()
         if not peer then
@@ -2279,6 +2285,18 @@
                   {
                     label = string.format("ACCEPT %s", cType),
                     onSelect = function()
+                      -- the offer lives 15 s on the server and the challenger
+                      -- gives up at 16 s: a late ACCEPT would start this side alone
+                      local shown = GtsUI.challengePrompt
+                      local nowA = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
+                      if shown and shown.at and nowA - shown.at > 13.0 then
+                        GtsUI.offerAnswered()
+                        gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
+                        gtsApiPost({ action = "send_challenge", targetId = challengerId, fromId = myId,
+                          fromName = myName, challengeType = "DECLINE" }, 0.5)
+                        game.stack:push(TextBox.new(game, wrapText("THE OFFER EXPIRED.")))
+                        return
+                      end
                       GtsUI.offerAnswered()
                       gtsApiPost({ action = "clear_challenge", trainerId = myId }, 0.5)
                       local myPackedParty = packPartyForGame(game, game.save and game.save.party or {})
@@ -6566,6 +6584,33 @@
         end
         return startMode(self, mode, isHost, ...)
       end
+      -- The next round of a cable trade (the engine starts one after every
+      -- trade's scene, as the Cable Club does): past the limit, the partner
+      -- is told (bye) and this side leaves.  By now the partner has long
+      -- applied the last trade, so nothing can be cancelled under it.  The
+      -- adapter's own send drops "bye" (meant for battles): over the
+      -- server it is posted to the room directly.
+      local beginRound = LinkState.beginRound
+      LinkState.beginRound = function(self, ...)
+        if isGtsServerConnected and self.game and self.net and GtsUI.Modes and GtsUI.Modes.tradeRefusal then
+          local okW, why = pcall(GtsUI.Modes.tradeRefusal, self.game.save)
+          if okW and why then
+            if self.net.roomId and self.net.targetId then
+              gtsApiPost({ action = "send_battle_msg", roomId = self.net.roomId, targetId = self.net.targetId, msg = { type = "bye" } }, 1.5)
+            elseif self.net.send then
+              pcall(self.net.send, self.net, { type = "bye" })
+            end
+            if self.game.stack and self.game.stack:top() == self then
+              return self:exitWith(wrapText(why), "cancel")
+            end
+            -- not on top (another screen is up): the engine's own broken-link
+            -- exit below, and the reason once the player is on the field
+            if self.net.close then pcall(self.net.close, self.net) end
+            GtsUI.linkTradeNote = why
+          end
+        end
+        return beginRound(self, ...)
+      end
     end
   end
 
@@ -6605,28 +6650,16 @@
   end
   -- Gen 1 cable trades: over the server (startLinkTrade sets linkTradeLive)
   -- or the game's own Cable Club while online (its LinkState on top).
-  -- trade.completed fires inside the trade's commit with the LinkState still
-  -- on top: when that was the last trade, its link is closed, so the
-  -- LinkState ends itself after this trade's scene instead of starting
-  -- another round, and the reason shows once the player is on the field.
+  -- trade.completed fires inside the trade's commit, with the LinkState
+  -- still on top: the trade is counted here and nothing else happens now
+  -- (a "bye" at this moment could reach the partner in the same batch as
+  -- the confirm and cancel a trade this side already applied).  The limit
+  -- is enforced when the next round starts (the LinkState.beginRound wrap).
   function GtsUI.linkTradeCompleted(game)
     if GtsUI.G3 or isGen2 or not isGtsServerConnected or not (game and game.save) then return end
     local ls = GtsUI.linkTradeLive or (game.stack and game.stack.top and game.stack:top())
     if not (type(ls) == "table" and ls.exitWith and ls.trade) then return end
     GtsUI.tradeUsed(game, "THE LINK TRADE")
-    local M = GtsUI.Modes
-    local okL, left = pcall(function() return M and M.tradesLeft and M.tradesLeft(game.save) end)
-    if not (okL and tonumber(left) and tonumber(left) <= 0) then return end
-    if ls.net and ls.net.close then
-      -- the partner's LinkState must hear it ends ("The trade was
-      -- cancelled"); the adapter's own send drops "bye", meant for battles
-      if ls.net.roomId and ls.net.targetId then
-        gtsApiPost({ action = "send_battle_msg", roomId = ls.net.roomId, targetId = ls.net.targetId, msg = { type = "bye" } }, 1.5)
-      end
-      pcall(ls.net.close, ls.net)
-    end
-    local okW, why = pcall(function() return M.tradeRefusal and M.tradeRefusal(game.save) end)
-    GtsUI.linkTradeNote = okW and why or nil
   end
   -- every frame while one is pending: forget the cable trade once its
   -- LinkState is off the stack, then show the note on the field
@@ -7666,10 +7699,12 @@ return function(mod)
           moving = false,
           species = followerSpecies
         }
+        -- a menu or a battle stops the field, so this is the only sync then:
+        -- it carries the session (the server's ALREADY_LOGGED_IN lock holds
+        -- on syncs that name one) and, on FireRed, the whole presence
+        keepalive.sessionId = clientSessionId
         if GtsUI.G3 then
-          -- a menu stops the field, so this is the only sync then: it
-          -- carries the whole presence, as a step's does
-          keepalive.sessionId, keepalive.spriteId, keepalive.level = clientSessionId, localSelectedSprite, mmoLevel
+          keepalive.spriteId, keepalive.level = localSelectedSprite, mmoLevel
           GtsUI.G3.presence(keepalive)
         end
 

@@ -956,7 +956,15 @@ return function(ctx)
     local st = state(game.save)
     if st.run ~= M.rules.runId and not pendingRestart and not wipeQueued then
       if st.run ~= nil then
-        note(("RUN %d IS OVER! A TEAMMATE'S PARTY WIPED OUT.\fEVERYONE STARTS OVER."):format(st.run))
+        -- why the server began a run: a team wipe, the host's changed settings
+        -- (config), or --new-run (manual)
+        local why = M.rules.runReason
+        if why == "config" or why == "manual" then
+          note(("RUN %d IS OVER! THE SERVER STARTED A NEW RUN%s.\fEVERYONE STARTS OVER."):format(
+            st.run, why == "config" and " WITH NEW SETTINGS" or ""))
+        else
+          note(("RUN %d IS OVER! A TEAMMATE'S PARTY WIPED OUT.\fEVERYONE STARTS OVER."):format(st.run))
+        end
       end
       pendingRestart = true
     end

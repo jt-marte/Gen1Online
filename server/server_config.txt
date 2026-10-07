@@ -38,7 +38,8 @@ nuzlocke = off
 # you trade once more, until the next leader (your own gym leaders beaten,
 # not the team's).  A GTS buy, a GTS or Wonder Trade deposit and a link
 # trade each use one; taking a deposit back gives it back, and whatever
-# comes back for a deposit is always yours to claim.
+# comes back for a deposit is always yours to claim.  Like every setting
+# here, changing it starts a new run at the next server start.
 # nuzlocke_trades = off (no limit) | 1 | 2 | ...
 nuzlocke_trades = off
 

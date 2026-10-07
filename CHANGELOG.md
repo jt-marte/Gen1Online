@@ -48,7 +48,9 @@ A server of our own, built for playing with friends.
   ALREADY ACTIVE" on every try (the login sync, which carries no session,
   used to refresh the dead session's lock). Changing a mode or the seed in
   `server_config.txt` now starts a new run at the next server start (host
-  and port don't count; a data file from before keeps its run). A failed
+  and port don't count; a data file from before keeps its run; the run
+  says why it began, so the clients tell "the server started a new run"
+  from "a teammate's party wiped out"). A failed
   write of the data file (Defender, OneDrive, a full disk) no longer turns
   an already-made trade into a `SERVER_ERROR` that duplicates the sent
   Pokémon: the write is retried and the action answers. A team wipe ends

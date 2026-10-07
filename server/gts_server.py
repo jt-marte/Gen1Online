@@ -460,8 +460,9 @@ class GtsStore:
         self.rules.update(rules or {})
         self.data = self._load()
         run = self.data["run"]
+        self.began_run = False      # a run this start began (a changed config)
         if not run.get("id"):
-            self._begin_run(1)
+            self._begin_run(1, reason="start")
         elif "signature" not in run:
             # a data file from before runs remembered their rules: adopt them
             run["signature"] = self._run_signature()
@@ -469,7 +470,8 @@ class GtsStore:
         elif self._rules_changed(run["signature"]):
             # server_config.txt's modes or seed changed: a new run, so every
             # client restarts its online save under the new rules
-            self._begin_run(run["id"] + 1, seed=self.rules.get("seed") or None)
+            self._begin_run(run["id"] + 1, seed=self.rules.get("seed") or None, reason="config")
+            self.began_run = True
         if generation is not None:
             if generation not in GENERATION_NAMES:
                 raise ValueError("generation must be 1, 2 or 3")
@@ -1359,10 +1361,11 @@ class GtsStore:
                 return True
         return False
 
-    def _begin_run(self, run_id, seed=None):
+    def _begin_run(self, run_id, seed=None, reason="wipe"):
         old = self.data.get("run") or {}
+        # reason: start | wipe | config | manual (the clients word the news by it)
         self.data["run"] = {"id": run_id, "seed": seed or self._run_seed(run_id),
-                            "signature": self._run_signature(),
+                            "signature": self._run_signature(), "reason": reason,
                             "started": self._now(),
                             # a multiworld team keeps its worlds from run to run
                             "worlds": old.get("worlds") or {},
@@ -1376,6 +1379,7 @@ class GtsStore:
         view = rules_view(self.rules)
         view["runId"] = run.get("id", 1)
         view["seed"] = run.get("seed")
+        view["runReason"] = run.get("reason") or "wipe"
         return view
 
     def _team_view(self):
@@ -1469,7 +1473,7 @@ class GtsStore:
     def new_run(self):
         """Start the next run by hand (the --new-run option)."""
         with self.lock:
-            self._begin_run(self.data["run"].get("id", 0) + 1)
+            self._begin_run(self.data["run"].get("id", 0) + 1, reason="manual")
 
     # ---- quests ---------------------------------------------------------------------
 
@@ -1722,9 +1726,10 @@ def main(argv=None):
         print("Is the server already running? Pick another port in %s (port = ...) or with --port."
               % os.path.basename(args.config), file=sys.stderr)
         return 1
-    if args.new_run:
+    if args.new_run and not store.began_run:
         # only once the port is ours: a server already running would keep its
-        # run in memory and overwrite this one on its next save
+        # run in memory and overwrite this one on its next save.  A changed
+        # config began a run just now: that one is it, not another.
         store.new_run()
     print(banner(host, port, store), flush=True)
     try:
