@@ -28,6 +28,9 @@ return function(ctx)
   local GameVersion = require("src.core.GameVersion")
   local okV, victories = pcall(require, "data.scripts.victories")
   if not (okV and type(victories) == "table") then victories = {} end
+  -- the growth curves (Growth.expForLevel), for the level cap's EXP clamp
+  local okG, Growth = pcall(require, "src.pokemon.Growth")
+  if not (okG and type(Growth) == "table" and Growth.expForLevel) then Growth = nil end
 
   -- lib: the pure modules, for the dev drivers' checks on real game data
   local M = { rules = nil, world = nil, lib = { Rng = Rng, logic = L, randomizer = Randomizer } }
@@ -575,10 +578,22 @@ return function(ctx)
     return nextFn(battle)
   end)
 
+  -- No EXP at the cap, and none past it below: one battle's EXP stops just
+  -- short of cap + 1, so a Pokémon a level under the cap can't jump over it
+  -- (src.battle.Experience.apply adds the gain to mon.exp, then levels by
+  -- Growth.levelForExp on the species' growthRate and data.growth_rates).
   mod.hooks:wrap("exp.gain", function(nextFn, c)
     local gained = nextFn(c)
-    if M.hardcore() and type(c) == "table" and c.mon and (c.mon.level or 0) >= M.levelCap() then
-      return 0
+    if M.hardcore() and type(c) == "table" and type(c.mon) == "table" then
+      local mon, cap = c.mon, M.levelCap()
+      if (tonumber(mon.level) or 0) >= cap then return 0 end
+      local data = Game.data
+      local def = data and data.pokemon and data.pokemon[mon.species]
+      local exp = tonumber(mon.exp)
+      if Growth and def and exp and tonumber(gained) and cap < 100 then
+        local limit = Growth.expForLevel(def.growthRate, cap + 1, data.growth_rates) - 1
+        gained = math.max(0, math.min(gained, limit - exp))
+      end
     end
     return gained
   end)
@@ -689,13 +704,20 @@ return function(ctx)
     end
   end
 
+  local function isOaksLabRival(battle)
+    if BattleState.isOaksLabStarterRival then return BattleState.isOaksLabStarterRival(battle) end
+    local ow = Game.overworld
+    return battle.oppClass == "OPP_RIVAL1" and ow ~= nil and ow.map ~= nil and ow.map.id == "OAKS_LAB"
+  end
+
   mod.events:on("battle.ended", function(ev)
     battleInfo = nil
     currentBattle = nil
     if not M.hardcore() then return end
     local battle = type(ev) == "table" and ev.battle or nil
     -- link battles (PVP) are friendly; the Oak's Lab rival is never a loss
-    if battle and (battle.kind == "link" or battle.oppClass == "OPP_RIVAL1") then return end
+    -- (the engine's own test: OPP_RIVAL1 is also the Route 22 and Cerulean rival)
+    if battle and (battle.kind == "link" or isOaksLabRival(battle)) then return end
     local result = type(ev) == "table" and ev.result
     M.bury(result == "lose" or result == "whiteout" or result == "blackout")
   end)

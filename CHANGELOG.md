@@ -6,6 +6,14 @@ A server of our own, built for playing with friends.
 
 ### Fixed
 
+- Game modes: on FireRed/LeafGreen the TEA is shared with the team (it
+  opens Saffron, and a multiworld keeps one copy for the whole team, so
+  every other player was shut out of their own Saffron on a third of the
+  seeds); Oak's question names the right starter on every seed (two balls'
+  texts could swap when a shuffled starter was another vanilla one); the
+  hardcore level cap can't be jumped by one battle's EXP (the gain stops
+  just short of the next level); on Gen 1 only Oak's lab rival skips the
+  burial, not the Route 22 and Cerulean ones.
 - Server: reconnecting within 30 s of a crash no longer gets "ACCOUNT
   ALREADY ACTIVE" on every try (the login sync, which carries no session,
   used to refresh the dead session's lock). Changing a mode or the seed in

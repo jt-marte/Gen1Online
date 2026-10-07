@@ -92,9 +92,13 @@ return function(ctx)
   local LEADER = { "BROCK", "MISTY", "LT. SURGE", "ERIKA", "KOGA", "SABRINA", "BLAINE", "GIOVANNI" }
 
   -- shared: badges, key items and HMs, but not the quest items one player's
-  -- script consumes (Oak's Parcel, the fossils, the Bike Voucher...)
+  -- script consumes (Oak's Parcel, the fossils, the Bike Voucher...).  The
+  -- TEA is shared: it is progression (L.PROGRESSION, the SAFFRON macro), and a
+  -- multiworld keeps one copy for the whole team, so every player's own gate
+  -- guards need the team's copy (st.got stops it arriving twice).
+  -- dev/harness/modes_test.lua mirrors this list (FRLG_NOT_SHARED).
   local NOT_SHARED = { OAKS_PARCEL = true, BIKE_VOUCHER = true, DOME_FOSSIL = true,
-    HELIX_FOSSIL = true, OLD_AMBER = true, GOLD_TEETH = true, TEA = true, RUBY = true,
+    HELIX_FOSSIL = true, OLD_AMBER = true, GOLD_TEETH = true, RUBY = true,
     SAPPHIRE = true, METEORITE = true, FAME_CHECKER = true, TEACHY_TV = true }
   function M.isShared(key)
     if type(key) ~= "string" or NOT_SHARED[key] then return false end
@@ -315,7 +319,9 @@ return function(ctx)
     if not at then return s end
     return s:sub(1, at - 1) .. new .. replacePlain(s:sub(at + #old), old, new)
   end
-  -- the text key of the question for a vanilla starter ("... X is your choice.")
+  -- the text key of the question for a vanilla starter ("... X is your choice.").
+  -- Only unambiguous on the vanilla texts: apply() looks up all three before
+  -- rewriting any (a rewritten question may name another ball's species).
   function M.starterQuestion(vanilla)
     local text = (bundle() or {}).text or {}
     local mark = " " .. G3.speciesName(vanilla) .. " is your choice."
@@ -350,16 +356,24 @@ return function(ctx)
       t[k] = v
     end
     if p.starters then
+      -- Every ball's question is looked up (by its vanilla name) BEFORE any
+      -- is rewritten: the pool holds the vanilla three, so once one question
+      -- names another ball's vanilla species, a lookup would find two texts
+      -- and pairs() order would pick which one to rewrite.
+      local text = (bundle() or {}).text
+      local todo = {}
       for _, row in ipairs(M.starterRows()) do
-        local to = p.starters[row[2]]
+        local from = row[2]
+        local to = p.starters[from]
         if to then
-          local from = row[2]
-          set(row, 2, to)
-          if row.value ~= nil then set(row, "value", to) end
-          local text = (bundle() or {}).text
           local key, ir = M.starterQuestion(from)
-          if text and key then set(text, key, starterQuestionFor(ir, from, to)) end
+          todo[#todo + 1] = { row = row, from = from, to = to, key = key, ir = ir }
         end
+      end
+      for _, t in ipairs(todo) do
+        set(t.row, 2, t.to)
+        if t.row.value ~= nil then set(t.row, "value", t.to) end
+        if text and t.key then set(text, t.key, starterQuestionFor(t.ir, t.from, t.to)) end
       end
     end
     for _, loc in ipairs(p.locations or {}) do
@@ -875,10 +889,26 @@ return function(ctx)
     return origStyle(...)
   end
 
+  -- No EXP at the cap, and none past it below: one battle's EXP stops just
+  -- short of cap + 1, so a Pokémon a level under the cap can't jump over it.
+  -- src.core.game3.battle.experience: apply() first resets an exp outside
+  -- the level's span to the level's threshold (syncExpToLevel), then adds
+  -- the gain on the mon's growth curve (expForLevel); the clamp does alike.
+  local okX, Exp3 = pcall(require, "src.core.game3.battle.experience")
+  if not (okX and type(Exp3) == "table" and Exp3.expForLevel) then Exp3 = nil end
   mod.hooks:wrap("exp.gain", function(nextFn, c)
     local gained = nextFn(c)
-    if M.hardcore() and type(c) == "table" and c.mon and (tonumber(c.mon.level) or 0) >= M.levelCap() then
-      return 0
+    if M.hardcore() and type(c) == "table" and type(c.mon) == "table" then
+      local mon, cap = c.mon, M.levelCap()
+      local level = tonumber(mon.level) or 0
+      if level >= cap then return 0 end
+      if Exp3 and level >= 1 and cap < (Exp3.MAX_LEVEL or 100) and tonumber(gained) then
+        local at, nxt = Exp3.expForLevel(mon, level), Exp3.expForLevel(mon, level + 1)
+        local exp = tonumber(mon.exp)
+        if not exp or exp < at or exp >= nxt then exp = at end
+        local limit = Exp3.expForLevel(mon, cap + 1) - 1
+        gained = math.max(0, math.min(math.floor(tonumber(gained)), limit - exp))
+      end
     end
     return gained
   end)
