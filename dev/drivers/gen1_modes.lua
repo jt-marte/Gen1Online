@@ -306,6 +306,9 @@ return function(game)
     return finish()
   end
   check(Modes.state(game.save).run == 1, "the new character's save starts run 1")
+  -- nuzlocke_trades = 1 (run_tests.sh): one trade per gym leader beaten
+  check(r.tradesPerGym == 1 and Modes.tradesLeft(game.save) == 1,
+    "the trade limit: 1 per gym leader, 1 left (" .. tostring(Modes.tradesLeft(game.save)) .. ")")
   local plan = Modes.plan()
   if not check(plan and plan.ok and plan.species, "the seed built a finishable world") then
     return finish()
@@ -509,6 +512,11 @@ return function(game)
   check(game.data.text["_G1O_GYM_OPP_BROCK_1"] ~= nil
     and game.data.text["_G1O_GYM_OPP_BROCK_1"]:find(itemName(slot.item), 1, true) ~= nil,
     "his badge line names the new reward")
+  -- a leader beaten opens a new trade allowance (no trades made yet)
+  check(Modes.gymsBeaten(game.save) == 1 and Modes.tradesLeft(game.save) == 1,
+    "after Brock: 1 leader beaten, 1 trade left (" .. tostring(Modes.tradesLeft(game.save)) .. ")")
+  check((Modes.infoText(game.save) or ""):find("TRADES: 1 OF 1", 1, true) ~= nil,
+    "RUN INFO's text has the trades left: " .. tostring(Modes.infoText(game.save)))
 
   -- ---- the team's shared key items --------------------------------------------------------
   local function teamItems()

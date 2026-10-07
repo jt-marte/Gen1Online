@@ -520,6 +520,12 @@ return function(game)
     check(H.said("BADGE WAS SHUFFLED"), "and said BROCK's badge was shuffled")
   end
   check(Gen3Compat.getFlag("FLAG_DEFEATED_BROCK"), "BROCK counts as beaten")
+  -- nuzlocke_trades = 1 (run_tests.sh): a leader beaten opens a new trade
+  -- allowance (no trades made yet)
+  check(Modes.gymsBeaten() == 1 and Modes.tradesLeft() == 1,
+    "after BROCK: 1 leader beaten, 1 trade left (" .. tostring(Modes.tradesLeft()) .. ")")
+  check((Modes.infoText() or ""):find("TRADES: 1 OF 1", 1, true) ~= nil,
+    "RUN INFO's text has the trades left: " .. tostring(Modes.infoText()))
   for i = #s.party, 1, -1 do if s.party[i] == zard then table.remove(s.party, i) end end
   -- a Pokémon fainting is buried
   s.party[2].hp = 0

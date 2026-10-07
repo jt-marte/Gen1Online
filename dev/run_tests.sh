@@ -54,6 +54,13 @@ for g in red blue yellow; do
   G1O_GAME=$g DEV=1 "$LUAJIT" "$DEV/harness/gen1_test.lua" > "$G1O_WORK/gen1_$g.log" 2>&1
   step "synthetic gen1 online ($g)" "$(result "$G1O_WORK/gen1_$g.log")"
 done
+# the hardcore Nuzlocke's trade limit (1 per gym leader) on every way a
+# Pokémon comes in by trade: GTS, Wonder Trade, link trade offers and answers
+mkdir -p "$G1O_WORK/server"
+printf 'nuzlocke = hardcore\nnuzlocke_trades = 1\n' > "$G1O_WORK/server/trades_config.txt"
+GTS_CONFIG="$G1O_WORK/server/trades_config.txt" GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
+G1O_GAME=yellow DEV=1 "$LUAJIT" "$DEV/harness/nuzlocke_trades_test.lua" > "$G1O_WORK/nuzlocke_trades.log" 2>&1
+step "synthetic nuzlocke trade limit (yellow)" "$(result "$G1O_WORK/nuzlocke_trades.log")"
 GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
 DEV=1 "$LUAJIT" "$DEV/harness/wrong_world_test.lua" > "$G1O_WORK/wrong_world_crystal.log" 2>&1
 step "synthetic wrong world (crystal on gen 1)" "$(result "$G1O_WORK/wrong_world_crystal.log")"
@@ -116,7 +123,9 @@ if [ "${1:-}" != "quick" ]; then
   if [ ! -f "$YPROFILE/yellow/rom-cache.complete" ]; then
     echo "== real Yellow game modes: skipped (needs the Yellow cache)"
   else
-    printf 'nuzlocke = hardcore\nrandomizer = on\nseed = 4242\n' > "$G1O_WORK/server/modes_config.txt"
+    # nuzlocke_trades: gen1_modes.lua checks the allowance around Brock;
+    # gen1_nuzlocke.lua makes no trades, so the limit never gets in its way
+    printf 'nuzlocke = hardcore\nnuzlocke_trades = 1\nrandomizer = on\nseed = 4242\n' > "$G1O_WORK/server/modes_config.txt"
     GTS_CONFIG="$G1O_WORK/server/modes_config.txt" GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
     rm -rf "$YPROFILE/mods" "$YPROFILE/mod_compat" "$YPROFILE/saves" "$YPROFILE"/save_yellow.lua*
     mkdir -p "$YPROFILE/mods/gen1online-plus"
@@ -192,7 +201,9 @@ if [ "${1:-}" != "quick" ]; then
     # badges, shared key items): the map walk and seeds, the shuffled world,
     # the team's finds, Brock's slot, the Nuzlocke rules and a run ending
     mkdir -p "$G1O_WORK/server"
-    printf 'nuzlocke = hardcore\nrandomizer = on\nseed = 4242\n' > "$G1O_WORK/server/modes_config.txt"
+    # nuzlocke_trades: gen3_modes.lua checks the allowance after BROCK;
+    # gen3_nuzlocke.lua and gen3_friend.lua make no trades
+    printf 'nuzlocke = hardcore\nnuzlocke_trades = 1\nrandomizer = on\nseed = 4242\n' > "$G1O_WORK/server/modes_config.txt"
     GTS_CONFIG="$G1O_WORK/server/modes_config.txt" GTS_GENERATION=3 "$DEV/server.sh" >/dev/null
     install_frlg "$FPROFILE"
     frlg $g gen1online-frlg gen3_modes.lua gen3_modes_$g
