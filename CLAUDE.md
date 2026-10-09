@@ -55,10 +55,12 @@ randomizer, multiworld) play on Gen 1 and FireRed/LeafGreen. `manifest.json` `"g
   on gen1recomp `21a64419`. The tag first held the original Gen1Online
   author's first commit (an unrelated history); that is `original-v1.0.0`
   now.
-- The sandbox can push commits and tags, but has no GitHub API token (`gh`
-  answers "Bad credentials"): the release itself (`gh release create` with
-  the zips) is made on the host. Pack into `dist/` (gitignored) only after
-  `modkit pack` has run: modkit packs every file not listed in
+- Release: pack, then `gh release create v<version> <mod zip> <server zip>
+  sha256sums.txt --verify-tag` after pushing the tag (1.0.0 was made from
+  the sandbox: `gh` works once the host has set the sandbox's `github`
+  secret, and that token needs the `workflow` scope, since
+  `original-v1.0.0` carries a workflow file). Pack into `dist/` (gitignored)
+  only after `modkit pack` has run: modkit packs every file not listed in
   `.modkitignore`, `dist/` included.
 
 ## Layout
