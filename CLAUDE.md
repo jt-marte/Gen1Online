@@ -3,10 +3,10 @@
 Online multiplayer mod for **Pokémon Red, Blue, Yellow, Crystal, FireRed and
 LeafGreen** on the gen1recomp engine (a LÖVE2D re-implementation). Live co-op
 overworld, GTS trading, PVP link battles, global chat, co-op parties, a
-separate online save; true-color followers and the server RTC on Crystal
-only, face-to-face link trades on Gen 1 and FireRed/LeafGreen. The server's
-game modes (Nuzlocke, randomizer, multiworld) play on Gen 1 and
-FireRed/LeafGreen. `manifest.json` `"games": ["red", "blue", "yellow",
+separate online save; the server RTC on Crystal only (no follower: the
+mod's true-color followers were removed in 1.0.0), face-to-face link
+trades on Gen 1 and FireRed/LeafGreen. The server's game modes (Nuzlocke,
+randomizer, multiworld) play on Gen 1 and FireRed/LeafGreen. `manifest.json` `"games": ["red", "blue", "yellow",
 "crystal", "firered", "leafgreen"]`. A server hosts one generation's world
 (see "Server").
 
@@ -37,6 +37,30 @@ FireRed/LeafGreen. `manifest.json` `"games": ["red", "blue", "yellow",
   the workspace root: `../Pokemon - Fire Red Version (U) (V1.1).gba` and
   `../Pokemon - Leaf Green Version (U) (V1.1).gba`.
 
+## Releases
+
+- The version lives in `main.lua` (`MOD_VERSION`), `manifest.json`,
+  `server/gts_server.py` (`DEFAULT_VERSION`), the README badge and the test
+  helpers' raw posts (`dev/drivers/*`, `dev/harness/*`,
+  `server/test_gts_server.py`). A server accepts clients of its own
+  major.minor only.
+- The engine's launcher updates a mod from the GitHub repo in
+  `manifest.json` (`github`, now `jt-marte/Gen1Online`): it takes the
+  release's `.zip` asset, preferably `gen1online-plus-<version>.zip`, with
+  `manifest.json` at the zip's root. That is `modkit pack`'s output
+  (`python3 tools/modkit.py pack ../gen1online -o <file>` from gen1recomp,
+  honoring `.modkitignore`) renamed to `.zip`. The server ships as its own
+  zip (`gts_server.py`, `start.sh`, `start.bat`, `server_config.txt`).
+- 1.0.0 (2026-10-09) was released from `master` with tag `v1.0.0`, tested
+  on gen1recomp `21a64419`. The tag first held the original Gen1Online
+  author's first commit (an unrelated history); that is `original-v1.0.0`
+  now.
+- The sandbox can push commits and tags, but has no GitHub API token (`gh`
+  answers "Bad credentials"): the release itself (`gh release create` with
+  the zips) is made on the host. Pack into `dist/` (gitignored) only after
+  `modkit pack` has run: modkit packs every file not listed in
+  `.modkitignore`, `dist/` included.
+
 ## Layout
 
 | Path | What |
@@ -47,7 +71,6 @@ FireRed/LeafGreen. `manifest.json` `"games": ["red", "blue", "yellow",
 | `npcs/`, `quests/` | Registries (empty). `npcs/{quest,trade}/*` are dead Gen 1 leftovers. |
 | `modes/` | Server game modes: `init.lua` (Gen 1: hooks, the run, shared items, Nuzlocke), `frlg.lua` (the same interface on FireRed/LeafGreen), `randomizer.lua` (pure: build/apply/undo the world from a seed; `build` also takes another game's places and species), `logic.lua` / `logic_frlg.lua` (what each item place needs), `rng.lua` (Park-Miller, pinned). Loaded by main.lua as `GtsUI.Modes` (exported as `mod.exports.modes`). |
 | `gen3/` | The FireRed/LeafGreen layer (`GtsUI.G3`, exported as `mod.exports.gen3`): `ui.lua` (the mod's screens on FireRed's modal stack, in its windows and font), `init.lua` (game wrapper, live save view, session swap, Pokémon and PC, presence actors, avatars, the PC's GTS row), `link.lua` (PVP and link trades over the server). |
-| `assets/followers/` | Follower sheets (16x96, 6 frames), from pokeemerald via `tools/import_emerald_follower.py`. |
 | `gts_config.txt` | `server_url=...`, read at startup through `mod:read`. The default only: an address typed in-game (START > CONNECT > SERVER ADDRESS, stored as `gts_server_url`) wins. |
 | `server/` | The server (`gts_server.py`, stdlib Python), its unittest, `start.sh`/`start.bat`. Never packaged. |
 | `dev/` | Test harness (excluded from packages by `.modkitignore`). |
@@ -262,7 +285,8 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   top (the snapshot says `locked`); a forced switch menu opens on
   `game.partyMenuSavedIndex`; `battle.ended` is observed by wrapping
   `Runtime.emit` (a driver can't use `mod.events`).
-  - `follower.lua`: follower and offline checks.
+  - `crystal_offline.lua`: offline, no follower behind the player and no
+    wild Pokémon roaming.
   - `online.lua`: run twice (fresh install, then returning player). Covers
     connect, PVP with non-default moves on both sides, a GTS trade with
     Kadabra→Alakazam trade evolution, save routing, and disconnect.
@@ -406,7 +430,7 @@ Transport and framing:
 - POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 5: the
   game modes' rules the client plays). While a game mode is on, the server
   answers a Gen 1 or FireRed/LeafGreen POST below `MODES_VERSION` (logout
-  excepted) with `VERSION_MISMATCH`, `serverVersion` "0.5.1+ (GAME MODES)":
+  excepted) with `VERSION_MISMATCH`, `serverVersion` "<version>+ (GAME MODES)":
   the rules are enforced by each client, so an old copy would play without
   them. Bump both when the rules change.
 - Errors are `{"success":false,"error":"CODE"}`. The client acts on

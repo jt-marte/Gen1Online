@@ -1,7 +1,7 @@
 # Gen1Online+
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Mod Version: v0.5.1](https://img.shields.io/badge/version-0.5.1-green.svg)](manifest.json)
+[![Mod Version: v1.0.0](https://img.shields.io/badge/version-1.0.0-green.svg)](manifest.json)
 [![Games: Red, Blue, Yellow, Crystal, FireRed, LeafGreen](https://img.shields.io/badge/target-Red%20%7C%20Blue%20%7C%20Yellow%20%7C%20Crystal%20%7C%20FireRed%20%7C%20LeafGreen-blue.svg)](https://github.com/bryanthaboi/gen1recomp)
 
 Online multiplayer for *Pokémon Red, Blue, Yellow, Crystal, FireRed* and *LeafGreen* on the [gen1recomp](https://github.com/bryanthaboi/gen1recomp) engine: see other trainers on the map, trade, battle and chat, on a server you host for your friends.
@@ -13,7 +13,7 @@ Online multiplayer for *Pokémon Red, Blue, Yellow, Crystal, FireRed* and *LeafG
 - **PVP**: face another player, press **A**, and battle on the game's own link battle.
 - **Chat, co-op parties** (up to 4; warp to a teammate), trainer cards and an online level.
 - **A separate online save**: your offline save is never touched.
-- **Crystal extras**: true-color follower sprites, a shared server clock for day and night, and a PokéGear chat tab with [pokegear_cards](https://github.com/1Jamie/pokegear_cards).
+- **Crystal extras**: a shared server clock for day and night, and a PokéGear chat tab with [pokegear_cards](https://github.com/1Jamie/pokegear_cards).
 - **Game modes** on Red/Blue/Yellow and FireRed/LeafGreen: hardcore Nuzlocke, co-op randomizer, randomized trainers, wild legendaries, shared key items and multiworld. See [Game modes](#game-modes).
 
 A server hosts one generation: Red/Blue/Yellow together, Crystal, or FireRed/LeafGreen together.
@@ -63,18 +63,3 @@ seed =                     # a number replays the same world
 - **ONLINE > RUN INFO** shows the modes, the level cap, your fallen Pokémon and the team's finds.
 
 Turning a mode on, or a new run starting, restarts each player's **online** save in the bedroom (the old one is kept as a backup). While a mode is on, every player needs the current version of the mod. On FireRed/LeafGreen, online link trades ignore the National Pokédex lock.
-
-## Follower sprites (Crystal)
-
-The follower sheets live in `assets/followers/`. `tools/import_emerald_follower.py --emerald-dir <pokeemerald-expansion>/graphics/pokemon --out-dir assets/followers --all` makes more from a [pokeemerald-expansion](https://github.com/rh-hideout/pokeemerald-expansion) checkout.
-
-## Credits
-
-- **Project Lead & Core Direction**: **Brookes**
-- **Original Mod Creator**: **Gamecorner33**
-- **Engine, Netcode, RTC Sync & Cart Architecture**: **Antigravity**
-- **Platform & Recompilation Engine**: **bryanthaboi** and the **Gen 1 Recomp Team** ([bryanthaboi/gen1recomp](https://github.com/bryanthaboi/gen1recomp))
-- **Decompilation Assets & Sprite Data**: **pret** / The **pokeemerald** & **pokeemerald-expansion** decompilation projects ([rh-hideout/pokeemerald-expansion](https://github.com/rh-hideout/pokeemerald-expansion))
-- **MMO Architecture Foundation**: **alamops** ([alamops/RBYMMOMod](https://github.com/alamops/RBYMMOMod))
-- **PotatoVoxel 3D Diorama Bridge**: **ShaneMcGovernIE** ([ShaneMcGovernIE/potato_voxel](https://github.com/ShaneMcGovernIE/potato_voxel))
-- **PokéGear Cards Expansion**: **1Jamie** ([1Jamie/pokegear_cards](https://github.com/1Jamie/pokegear_cards))

@@ -82,7 +82,7 @@ if [ "${1:-}" != "quick" ]; then
         timeout 600 "$LOVE" . > "$G1O_WORK/$2.log" 2>&1
       step "real Crystal $2" "$(result "$G1O_WORK/$2.log" | sed 's/.*\t//')"
     }
-    run follower.lua follower
+    run crystal_offline.lua crystal_offline
     run online.lua online_fresh
     run online.lua online_returning
   fi

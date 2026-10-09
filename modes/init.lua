@@ -710,20 +710,15 @@ return function(ctx)
     end
   end
 
-  local function isOaksLabRival(battle)
-    if BattleState.isOaksLabStarterRival then return BattleState.isOaksLabStarterRival(battle) end
-    local ow = Game.overworld
-    return battle.oppClass == "OPP_RIVAL1" and ow ~= nil and ow.map ~= nil and ow.map.id == "OAKS_LAB"
-  end
-
   mod.events:on("battle.ended", function(ev)
     battleInfo = nil
     currentBattle = nil
     if not M.hardcore() then return end
     local battle = type(ev) == "table" and ev.battle or nil
-    -- link battles (PVP) are friendly; the Oak's Lab rival is never a loss
-    -- (the engine's own test: OPP_RIVAL1 is also the Route 22 and Cerulean rival)
-    if battle and (battle.kind == "link" or isOaksLabRival(battle)) then return end
+    -- link battles (PVP) are friendly.  The first rival fight in Oak's lab
+    -- counts like any other: the game heals and carries on (no blackout),
+    -- but losing it ends the run.
+    if battle and battle.kind == "link" then return end
     local result = type(ev) == "table" and ev.result
     M.bury(result == "lose" or result == "whiteout" or result == "blackout")
   end)

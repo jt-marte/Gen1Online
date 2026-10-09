@@ -23,19 +23,19 @@ local ltn12 = require("ltn12")
 local socket = require("socket")
 
 local function post(payload)
-  payload.modVersion = payload.modVersion or "0.5.1"
+  payload.modVersion = payload.modVersion or "1.0.0"
   payload.gameVersion = payload.gameVersion or "Pokemon Blue"
   local body = Json.encode(payload)
   local out = {}
   http.request({ url = BASE .. "/gts", method = "POST", source = ltn12.source.string(body),
     headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body),
-      ["X-Mod-Version"] = "0.5.1" }, sink = ltn12.sink.table(out) })
+      ["X-Mod-Version"] = "1.0.0" }, sink = ltn12.sink.table(out) })
   local ok, res = pcall(Json.decode, table.concat(out))
   return ok and res or nil
 end
 local function get(path)
   local out = {}
-  http.request({ url = BASE .. path .. (path:find("?", 1, true) and "&" or "?") .. "version=0.5.1",
+  http.request({ url = BASE .. path .. (path:find("?", 1, true) and "&" or "?") .. "version=1.0.0",
     sink = ltn12.sink.table(out) })
   local ok, res = pcall(Json.decode, table.concat(out))
   return ok and res or nil

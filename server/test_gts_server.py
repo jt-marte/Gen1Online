@@ -23,7 +23,7 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gts_server  # noqa: E402
 
-VERSION = "0.5.1"
+VERSION = "1.0.0"
 
 
 class FakeClock:
@@ -141,10 +141,10 @@ class TransportTests(ServerTest):
         self.assertTrue(res["success"])
 
     def test_version_gate_matches_major_minor(self):
-        for ok in ("0.5.0", "0.5.1", "0.5.9", "0.5.1.3"):
+        for ok in ("1.0.0", "1.0.1", "1.0.9", "1.0.1.3"):
             self.assertTrue(self.post("get_quests", version=ok)["success"], ok)
             self.assertTrue(self.get("/chat/history", version=ok)["success"], ok)
-        for bad in ("0.4.0", "0.6.0", "1.5.1", "0.3.5.59", None):
+        for bad in ("0.5.1", "0.9.0", "1.1.0", "2.0.0", "0.3.5.59", None):
             res = self.post("get_quests", version=bad)
             self.assertError(res, "VERSION_MISMATCH")
             self.assertEqual(res["serverVersion"], VERSION)
@@ -152,7 +152,7 @@ class TransportTests(ServerTest):
 
     def test_header_version_is_enough(self):
         body = json.dumps({"action": "get_quests"}).encode()
-        res = self.request("POST", "/gts", body, {"X-Mod-Version": "0.5.0"})
+        res = self.request("POST", "/gts", body, {"X-Mod-Version": "1.0.0"})
         self.assertTrue(res["success"])
 
     def test_errors_are_http_200_json(self):
@@ -213,7 +213,7 @@ class TransportTests(ServerTest):
         head, data = self.raw(
             b"POST /gts HTTP/1.1\r\nHost: x\r\nConnection: close\r\n"
             b"Content-Type: application/json\r\nContent-Length: %d\r\n"
-            b"X-Mod-Version: 0.5.1\r\n\r\n%s" % (len(body), body))
+            b"X-Mod-Version: 1.0.0\r\n\r\n%s" % (len(body), body))
         self.assertTrue(head.startswith("HTTP/1.1 200"))
         self.assertIn("Connection: close", head)
         self.assertEqual(json.loads(data), {"success": True, "quests": []})
@@ -257,7 +257,7 @@ class TransportTests(ServerTest):
         res = self.post("send_chat", trainerId=tid, name="ETHAN", text="POKéMON ♂ ok", scope="global")
         self.assertEqual(res["message"]["text"], "POKéMON ♂ ok")
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
-        conn.request("GET", "/chat/history?version=0.5.1")
+        conn.request("GET", "/chat/history?version=1.0.0")
         raw = conn.getresponse().read()
         conn.close()
         self.assertIn("POKéMON ♂ ok".encode("utf-8"), raw)
@@ -1021,7 +1021,7 @@ class BindingTests(ServerTest):
 class CommandLineTests(unittest.TestCase):
     def test_defaults(self):
         self.assertEqual(gts_server.DEFAULT_PORT, 7779)
-        self.assertEqual(gts_server.DEFAULT_VERSION, "0.5.1")
+        self.assertEqual(gts_server.DEFAULT_VERSION, "1.0.0")
         self.assertEqual(gts_server.DEFAULT_DATA,
                          os.path.join(os.path.dirname(os.path.abspath(gts_server.__file__)),
                                       "gts_data.json"))

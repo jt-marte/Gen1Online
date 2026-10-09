@@ -81,7 +81,7 @@ if [ $# -ge 1 ] && [ ! -f "$PROFILE/crystal/rom-cache.complete" ] && [ -x "$WORK
   (cd "$RECOMP" && XDG_DATA_HOME="$WORK/xdg" POKEPORT_IDENTITY=gen1online-test \
     POKEPORT_VERSION=crystal POKEPORT_IMPORT_ONLY=1 POKEPORT_IMPORT_ROM="$ROM" \
     "$WORK/bin/love" .)
-  # the engine's bundled follower mod would muddy the follower tests
+  # the engine's bundled follower mod stays off: the tests run this mod alone
   python3 - "$PROFILE/options.lua" <<'EOF'
 import sys
 p = sys.argv[1]

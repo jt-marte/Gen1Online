@@ -4,7 +4,7 @@
 
   -- Resolved before anything else: request headers, the default avatar and
   -- the save paths below all read these.
-  local MOD_VERSION = "0.5.1"
+  local MOD_VERSION = "1.0.0"
   local isGen2, isGen3 = false, false
   if mod and mod.generation then
     isGen2 = (mod.generation == 2)
@@ -24,7 +24,7 @@
   end
 
   -- (helpers below sit in do-blocks: this chunk is at Lua's 200-local cap)
-  local requireLocal, modFileExists
+  local requireLocal
   do
     -- The mod's own Lua files, compiled into this sandbox through mod:read
     -- and cached the way require caches.  require("mods.gen1online-plus.x")
@@ -41,18 +41,6 @@
       local result = chunk()
       localModules[relative] = result
       return result
-    end
-
-    -- Whether a file ships inside this mod (mod:info, cached: the follower
-    -- and wild-spawn code asks every frame).
-    local modFileCache = {}
-    modFileExists = function(relative)
-      local hit = modFileCache[relative]
-      if hit ~= nil then return hit end
-      local ok, info = pcall(function() return mod and mod.info and mod:info(relative) end)
-      hit = (ok and type(info) == "table" and info.type == "file") and true or false
-      modFileCache[relative] = hit
-      return hit
     end
   end
 
@@ -273,7 +261,7 @@
   local activeBattleAdapter, activeParty, pendingPartyInvite, lastPartySyncTime, openPartyMainMenu = nil, nil, nil, 0, nil
   local isWaitingForChallenge, challengeWaitTimer, lastBattleEndTime, inBattle = false, 0, -999, false
   local clientSessionId = string.format("%08x%08x", math.random(10000000, 99999999), os.time())
-  local netNpcs, netFollowers, netPlayerMap, gtsSpriteDiagWritten = {}, {}, {}, false
+  local netNpcs, netPlayerMap, gtsSpriteDiagWritten = {}, {}, false
   -- How long a player who isn't moving waits between syncs.  Other players
   -- only arrive in the answer to our own sync, so with someone else on the
   -- map this has to stay short or they move in jumps, seconds late.
@@ -3091,37 +3079,10 @@
     game.stack:push(linkState)
   end
 
-  -- Remove ONLY the follower NPC for a remote player (keeps the player avatar)
-  local function removeNetFollower(ow, tid)
-    if not ow then return end
-    tid = tostring(tid)
-
-    if netFollowers[tid] then
-      local fNpc = netFollowers[tid]
-      if ow.npcs then
-        for i = #ow.npcs, 1, -1 do
-          if ow.npcs[i] == fNpc or (ow.npcs[i] and ow.npcs[i].trainerId == tid and ow.npcs[i].isCoopFollower) then
-            table.remove(ow.npcs, i)
-          end
-        end
-      end
-      if ow.entities then
-        for j = #ow.entities, 1, -1 do
-          if ow.entities[j] == fNpc or (ow.entities[j] and ow.entities[j].trainerId == tid and ow.entities[j].isCoopFollower) then
-            table.remove(ow.entities, j)
-          end
-        end
-      end
-      netFollowers[tid] = nil
-    end
-  end
-
   -- CLEAN ENTITY GC HELPER
   local function removeNetPlayer(ow, tid)
     if not ow then return end
     tid = tostring(tid)
-
-    removeNetFollower(ow, tid)
 
     if netNpcs[tid] then
       local pNpc = netNpcs[tid]
@@ -3152,7 +3113,6 @@
     end
     netNpcs = {}
     mod.exports.netNpcs = netNpcs
-    netFollowers = {}
     netPlayerMap = {}
   end
 
@@ -3698,221 +3658,6 @@
     end
   end
 
-  -- =========================================================================
-  -- OVERWORLD POKEMON FOLLOWER SYSTEM (GEN 2 CRYSTAL)
-  -- =========================================================================
-
-  -- Crystal's follower system only.  Gen 1's one follower is Yellow's own
-  -- Pikachu (src.world.PikachuFollower), whose spawning, talk and moods are
-  -- the game's, so the mod leaves Gen 1 followers alone.
-  local FollowerMod = nil
-  if isGen2 then
-    pcall(function() FollowerMod = require("src.world.gen2.Follower") end)
-  end
-
-  local function isMonShiny(mon)
-    if not mon then return false end
-    if mon.shiny ~= nil then return mon.shiny end
-    local dvs = mon.dvs
-    if dvs and dvs.defense == 10 and dvs.speed == 10 and dvs.special == 10 then
-      local atk = dvs.attack or 0
-      if atk == 2 or atk == 3 or atk == 6 or atk == 7 or atk == 10 or atk == 11 or atk == 14 or atk == 15 then
-        return true
-      end
-    end
-    return false
-  end
-
-  local followerSpriteCache = {}
-
-  local function getFollowerSpriteDef(game, species, isShiny)
-    if not species then return nil, nil end
-    local spKey = species:lower():gsub("-", "_"):gsub(" ", "_")
-    local suffix = isShiny and "_shiny" or ""
-    local spriteId = "FOLLOWER_" .. species:upper() .. (isShiny and "_SHINY" or "")
-
-    if followerSpriteCache[spriteId] then
-      return followerSpriteCache[spriteId], spriteId
-    end
-
-    local sprites = (game and game.data and (game.data.gen2Sprites or game.data.sprites))
-    if sprites and sprites[spriteId] then
-      followerSpriteCache[spriteId] = sprites[spriteId]
-      return sprites[spriteId], spriteId
-    end
-
-    -- Converted follower sheets ship inside this mod; the engine loads them by
-    -- the mod's own path, whatever its install folder is called.
-    local assetPath = nil
-    for _, rel in ipairs({
-      "assets/followers/" .. spKey .. suffix .. ".png",
-      "assets/followers/" .. spKey .. ".png",
-      "assets/followers/pikachu.png",
-    }) do
-      if modFileExists(rel) then
-        assetPath = (mod.path or "mods/gen1online-plus") .. "/" .. rel
-        break
-      end
-    end
-
-    -- If no follower asset exists on disk, fallback gracefully to vanilla sprite record
-    if not assetPath then
-      local fallbackDef = sprites and (sprites["SPRITE_PIKACHU"] or sprites["SPRITE_CHRIS"] or sprites["SPRITE_RED"] or (game.save and game.save.player and game.save.player.spriteDef))
-      return fallbackDef, "SPRITE_PIKACHU"
-    end
-
-    local def = {
-      id = spriteId,
-      image = assetPath,
-      frames = 6,
-      frameWidth = 16,
-      frameHeight = 16,
-      walker = true,
-      trueColor = true,
-      anchorX = 8,
-      anchorY = 16,
-    }
-
-    -- Straight into the live sprite table the world reads: the content
-    -- registry only merges at load, and registering here collided with this
-    -- very write.
-    if sprites then
-      sprites[spriteId] = def
-    end
-
-    followerSpriteCache[spriteId] = def
-    return def, spriteId
-  end
-
-  -- Enable follower spawning whenever player has a lead Pokemon
-  if FollowerMod and FollowerMod.setShouldSpawn then
-    FollowerMod.setShouldSpawn(function(game, world)
-      if not game or not game.save or not game.save.party or #game.save.party == 0 then
-        return false
-      end
-      local p = world and world.player
-      if p and (p.cycling or p.surfing) then
-        return false
-      end
-      return true
-    end)
-  end
-
-  -- Update active follower entity to match lead Pokemon (only updates on actual changes)
-  local function updatePlayerFollower(game, world)
-    if not FollowerMod then return end
-    if not game or not game.save or not game.save.party or #game.save.party == 0 then return end
-    local leadMon = game.save.party[1]
-    if not leadMon or not leadMon.species then return end
-
-    local isShiny = isMonShiny(leadMon)
-    local def, spId = getFollowerSpriteDef(game, leadMon.species, isShiny)
-    if not def then return end
-
-    if FollowerMod then
-      FollowerMod.SPRITE = spId
-    end
-
-    local ow = world or getWorld(game)
-    if not ow then return end
-
-    local fNpc = FollowerMod and FollowerMod.current and FollowerMod.current(ow)
-    if fNpc then
-      if fNpc.lastSpecies ~= leadMon.species or fNpc.lastShiny ~= isShiny or not fNpc.sprite then
-        fNpc.lastSpecies = leadMon.species
-        fNpc.lastShiny = isShiny
-        fNpc.spriteDef = def
-        fNpc.sprite = SpriteRenderer.new(def, 1)
-      end
-    end
-  end
-
-  -- Follower Interaction: Cry + Companion Dialogs
-  if FollowerMod then
-    FollowerMod.talk = function(game, world, npc, done)
-      local save = game and game.save
-      if not save or not save.party or #save.party == 0 then
-        if done then done() end
-        return false
-      end
-
-      local leadMon = save.party[1]
-      local def = game.data and game.data.pokemon and game.data.pokemon[leadMon.species]
-      local monName = leadMon.nickname or (def and def.name) or leadMon.species
-
-      -- Play Cry
-      pcall(function()
-        local Sound = require("src.core.Sound")
-        if Sound.playCry then
-          Sound.playCry(game.data, leadMon.species)
-        end
-      end)
-
-      local dialogues = {
-        string.format("%s is happily\nfollowing you!", monName),
-        string.format("%s is nudging your\nleg playfully!", monName),
-        string.format("%s looked up at\nyou and smiled!", monName),
-        string.format("%s is curious\nabout the area.", monName),
-        string.format("%s is filled\nwith energy!", monName),
-        string.format("%s gave a cheerful\nand confident nod!", monName),
-        string.format("%s is watching\nyour back closely!", monName),
-        string.format("%s hopped excitedly\nnext to you!", monName)
-      }
-
-      local msg = dialogues[math.random(1, #dialogues)]
-      local cb = done or function() end
-      game.stack:push(TextBox.new(game, wrapText(msg), cb))
-      return true
-    end
-  end
-
-  -- A press on the follower: a cry and a companion line.  facingObjectCell
-  -- answers two coordinates, and the counter rule it applies is the one
-  -- npcAt needs.
-  pcall(function()
-    if not isGen2 then return end -- a Gen 2 engine module
-    local World = require("src.world.gen2.World")
-    if World and World.interactBody then
-      local origInteractBody = World.interactBody
-      World.interactBody = function(self)
-        if not self:busy() and self.player and not self.player.moving then
-          local tx, ty = self:facingObjectCell()
-          local npc = tx and self:npcAt(tx, ty)
-          if npc and (npc.follower or npc.pikachuFollower) then
-            if FollowerMod and FollowerMod.talk then
-              -- frozen for the line; World:step releases it once not busy
-              self:freezeNpc(npc)
-              return FollowerMod.talk(self.game, self, npc)
-            end
-          end
-        end
-        return origInteractBody(self)
-      end
-    end
-  end)
-
-  -- PokeEmerald Decomp Asset Status Check & Notification
-  local hasCheckedEmeraldAssets = false
-  local function checkEmeraldAssetsStartup(game)
-    if hasCheckedEmeraldAssets then return end
-    if not game or not game.stack or isPlayerBusy(game) then return end
-    hasCheckedEmeraldAssets = true
-
-    local samples = {
-      "pikachu", "bulbasaur", "charmander", "squirtle",
-      "chikorita", "cyndaquil", "totodile",
-      "treecko", "torchic", "mudkip", "gengar", "eevee"
-    }
-    for _, sp in ipairs(samples) do
-      if modFileExists("assets/followers/" .. sp .. ".png") then return end
-    end
-    -- Only the actionable case interrupts play: the sheets ship with the mod,
-    -- so this fires when an install is missing them.
-    game.stack:push(TextBox.new(game, wrapText(
-      "POKEEMERALD ASSETS:\nNOT FOUND (OPTIONAL)\nFOLLOWERS USING FALLBACK\nSEE README_ASSETS.MD")))
-  end
-
-
   -- Register persistent background jobs for asynchronous MMO coordination
 
   -- =========================================================================
@@ -3989,11 +3734,8 @@
   Jobs.submit("overworld_placement", function(job, game, dt)
     local ow = getWorld(game)
     if ow then
-      checkEmeraldAssetsStartup(game)
-      updatePlayerFollower(game, ow)
       if isGtsServerConnected then
         for _, pNpc in pairs(netNpcs) do updateNpcMovement(pNpc, dt) end
-        for _, fNpc in pairs(netFollowers) do updateNpcMovement(fNpc, dt) end
       end
     end
   end, nil, true)
@@ -5660,7 +5402,6 @@
                 -- boy or a girl to match the avatar
                 netNpcs = {}
                 mod.exports.netNpcs = netNpcs
-                netFollowers = {}
                 isWaitingForChallenge = false
                 currentGame = game
                 GtsUI.G3.enter(GtsUI.G3.newGameSave(chosenName, GtsUI.G3.genderOf(chosenSprite), tostring(newTid)))
@@ -5735,7 +5476,6 @@
               -- Clear stale net state from the previous character.
               netNpcs = {}
               mod.exports.netNpcs = netNpcs
-              netFollowers = {}
               isWaitingForChallenge = false
 
               -- Apply sprite to local player immediately with Gen 2 palettes
@@ -6292,7 +6032,6 @@
           isGtsServerConnected = false
           netNpcs = {}
           mod.exports.netNpcs = netNpcs
-          netFollowers = {}
           if game and game.save then
             writeOnlineSave(game.save)
           end
@@ -7021,7 +6760,6 @@ return function(mod)
       end
       -- Maintain NPC movement lerp
       for _, pNpc in pairs(netNpcs) do updateNpcMovement(pNpc, dt) end
-      for _, fNpc in pairs(netFollowers) do updateNpcMovement(fNpc, dt) end
 
       -- CRITICAL: Keep pushing sync_pos to the background thread every 150ms so it
       -- polls the server and brings back the ACCEPT_PVP / DECLINE response.
@@ -7341,7 +7079,6 @@ return function(mod)
           end
         end
         for _, pNpc in pairs(netNpcs) do updateNpcMovement(pNpc, dt) end
-        for _, fNpc in pairs(netFollowers) do updateNpcMovement(fNpc, dt) end
 
         local now = (_G.love and _G.love.timer and _G.love.timer.getTime) and _G.love.timer.getTime() or os.time()
         if now - lastSendTime >= 0.15 and self.player and self.map and netOutChannel then

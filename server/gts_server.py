@@ -55,7 +55,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_VERSION = "0.5.1"
+DEFAULT_VERSION = "1.0.0"
 DEFAULT_PORT = 7779
 DEFAULT_DATA = os.path.join(SCRIPT_DIR, "gts_data.json")
 DEFAULT_CONFIG = os.path.join(SCRIPT_DIR, "server_config.txt")

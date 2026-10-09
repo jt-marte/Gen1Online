@@ -1036,9 +1036,10 @@ return function(ctx)
     local battle = currentBattle
     battleInfo, currentBattle = nil, nil
     if not M.hardcore() then return end
-    -- link battles are friendly; the first rival fight in Oak's lab never costs
+    -- link battles are friendly.  The first rival fight in Oak's lab counts
+    -- like any other: the game heals and carries on, but losing it ends the
+    -- run (with only the starter, a loss is a wipe).
     if battle and battle.kind == "link" then return end
-    if G3.currentMap() == "FR_OAKS_LAB" then return end
     local result = type(ev) == "table" and ev.result
     M.bury(result == "lose" or result == "whiteout" or result == "blackout")
   end)

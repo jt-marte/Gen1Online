@@ -31,7 +31,7 @@ dev/harness/gen1_test.lua
 dev/harness/gen1_offline_test.lua
 dev/harness/wrong_world_test.lua
 dev/drivers/online.lua
-dev/drivers/follower.lua
+dev/drivers/crystal_offline.lua
 dev/drivers/gen1_voxel.lua
 dev/drivers/gen1_modes.lua
 dev/drivers/gen1_nuzlocke.lua
@@ -48,6 +48,7 @@ dev/drivers/gen3_friend.lua
 dev/drivers/gen3_options.lua
 dev/harness/address_test.lua
 dev/harness/modes_test.lua
+dev/harness/nuzlocke_trades_test.lua
 # The server (server/) is hosted separately and never ships inside the mod.
 server/gts_server.py
 server/test_gts_server.py

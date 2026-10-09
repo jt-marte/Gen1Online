@@ -43,13 +43,13 @@ return function(game)
 
   local http, ltn12 = package.loaded["socket.http"], package.loaded["ltn12"]
   local function post(payload)
-    payload.modVersion, payload.gameVersion, payload.generation = "0.5.1", "Pokemon Yellow", 1
+    payload.modVersion, payload.gameVersion, payload.generation = "1.0.0", "Pokemon Yellow", 1
     payload.modesVersion = payload.modesVersion or (g1o and g1o.ui and g1o.ui.MODES_VERSION)
     local body = Json.encode(payload)
     local res = {}
     http.request({ url = BASE .. "/gts", method = "POST", source = ltn12.source.string(body),
       headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body),
-        ["X-Mod-Version"] = "0.5.1" }, sink = ltn12.sink.table(res) })
+        ["X-Mod-Version"] = "1.0.0" }, sink = ltn12.sink.table(res) })
     local ok, decoded = pcall(Json.decode, table.concat(res))
     return ok and decoded or nil
   end
@@ -831,6 +831,28 @@ return function(game)
     if (obj.item or false) ~= vanillaForest[i] then shuffled = true end
   end
   check(shuffled and Modes.plan() ~= nil, "and the shuffled world")
+
+  -- ---- the first rival battle in Oak's lab counts: losing it ends the run --------------------
+  local runLab = Modes.rules.runId
+  -- the ONLINE menu the token restore opened, closed as a player would (a new
+  -- run waits for the overworld)
+  for _ = 1, 30 do
+    if top() == game.overworld then break end
+    clearTexts(5)
+    U.tap(game, "b"); U.wait(4)
+  end
+  table.insert(game.save.party, require("src.pokemon.Pokemon").new(game.data, "PIDGEY", 5))
+  local rival = { kind = "trainer", oppClass = "OPP_RIVAL1" }
+  ModRuntime.emit("battle.started", { battle = rival, kind = "trainer" })
+  ModRuntime.emit("battle.ended", { battle = rival, result = "lose" })
+  for _ = 1, 200 do
+    U.wait(5)
+    clearTexts(20)
+    if Modes.state(game.save).run == runLab + 1 then break end
+  end
+  drain()
+  check(Modes.rules.runId == runLab + 1 and Modes.state(game.save).run == runLab + 1,
+    "losing the first rival battle ended run " .. runLab .. " too; run " .. (runLab + 1) .. " began")
 
   return finish()
 end

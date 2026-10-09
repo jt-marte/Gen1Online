@@ -13,6 +13,9 @@
 --      buried after it, the others stay
 --   4. a party that can't win blacks out: the run ends, run 2 starts in the
 --      bedroom
+--   5. run 2's very first battle: a starter picked in Oak's lab loses to
+--      the rival (the game heals and carries on), and the run ends too:
+--      run 3 starts in the bedroom
 local U = require("tests.drivers.util")
 
 return function(game)
@@ -293,5 +296,79 @@ return function(game)
   check(newRun, "the blackout ended run " .. runId .. "; run " .. (runId + 1) .. " began")
   s = Runtime.getSession()
   check(s.map == "FR_PLAYERS_HOUSE_2F" and #s.party == 0, "a new game in the bedroom")
+  H.closeAll()
+  H.fieldFree()
+
+  -- 5. the first battle of run 2: Oak's starter loses to the rival
+  local Flags = require("src.core.game3.scripting.flags")
+  local Space = require("src.core.game3.scripting.space")
+  local Player = require("src.core.game3.player")
+  local LAB = "FR_OAKS_LAB"
+  local run2 = Modes.rules.runId
+  -- Oak waits for a choice (VAR_MAP_SCENE_PALLET_TOWN_PROFESSOR_OAKS_LAB = 2)
+  Flags.setVar(s, nil, 0x4055, 2)
+  Flags.setVar(Space.store, nil, 0x4055, 2)
+  local scripts, ball = Space.ensureBundle().scripts, nil
+  for _, obj in ipairs(G3.raw().data.maps[LAB].objects or {}) do
+    local rows = obj.scriptKey and scripts[obj.scriptKey] or {}
+    for i, r in ipairs(rows) do
+      local prev = rows[i - 1]
+      if not ball and r.op == "setvar" and r[1] == 0x4002 and prev and prev.op == "setvar" and prev[1] == 0x4001 then
+        ball = obj
+      end
+    end
+  end
+  check(ball and H.talkTo(LAB, ball.x, ball.y), "run 2: at one of Oak's balls")
+  local yes = false
+  for _ = 1, 1500 do
+    if Choice.active then
+      if not yes then yes = true; U.tap(game, "a") else U.tap(game, "b") end   -- YES, then no nickname
+    elseif Naming.isOpen() then Naming.close("")
+    elseif Message.isOpen() or G3.busy() then U.tap(game, "a")
+    else break end
+    U.wait(3)
+  end
+  s = Runtime.getSession()
+  local starter = s.party[1]
+  check(#s.party == 1 and starter, "picked " .. tostring(starter and Pokemon.name(tonumber(starter.species))))
+  -- a sure loss whatever the shuffle gave (a GASTLY can't be touched by the
+  -- rival's Normal moves): a 1-HP MAGIKARP takes the starter's place
+  Party.giveMon(s, 129, 2)
+  s.party[1] = table.remove(s.party)
+  s.party[1].hp = 1
+  -- walking to the door, the rival stops the player (the lab's y = 8 row)
+  G3.warpTo(LAB, 6, 7, "down")
+  for _ = 1, 300 do if G3.currentMap() == LAB and H.fieldFree() then break end U.wait(2) end
+  U.hold(game, "down", 24)
+  for _ = 1, 1500 do
+    if Battle.isActive() then break end
+    if Message.isOpen() then U.tap(game, "a") end
+    U.wait(2)
+  end
+  check(Battle.isActive(), "the rival stopped the player for the first battle")
+  shot("first_battle")
+  local intent2 = 0
+  for _ = 1, 6000 do
+    if not Battle.isActive() then break end
+    local snap = api:snapshot()
+    if snap and (snap.prompt == "menu" or snap.prompt == "moves") then
+      intent2 = intent2 + 1000
+      api:submit({ id = intent2, revision = snap.revision, kind = snap.prompt == "menu" and "menu" or "move",
+        choice = "fight", slot = 1 })
+    elseif Choice.active then U.tap(game, "b")
+    else U.tap(game, "a") end
+    U.wait(2)
+  end
+  check(not Battle.isActive(), "the first battle is over")
+  local over = false
+  for _ = 1, 2000 do
+    H.clearTexts(1)
+    if Message.isOpen() or H.screenUp() or G3.busy() then U.tap(game, "a") end
+    if Modes.rules and Modes.rules.runId == run2 + 1 and Modes.state().run == run2 + 1 then over = true break end
+    U.wait(3)
+  end
+  check(over, "losing it ended run " .. run2 .. "; run " .. (run2 + 1) .. " began")
+  s = Runtime.getSession()
+  check(s.map == "FR_PLAYERS_HOUSE_2F" and #s.party == 0, "back in the bedroom with no Pokémon")
   return finish()
 end
