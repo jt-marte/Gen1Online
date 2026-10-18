@@ -2,7 +2,7 @@
 
 Online multiplayer mod for **Pokémon Red, Blue, Yellow, Crystal, FireRed and
 LeafGreen** on the gen1recomp engine (a LÖVE2D re-implementation). Live co-op
-overworld, GTS trading, PVP link battles, global chat, co-op parties, a
+overworld, GTS trading, PVP link battles, global chat, warps to friends, a
 separate online save; the server RTC on Crystal only (no follower: the
 mod's true-color followers were removed in 1.0.0), face-to-face link
 trades on Gen 1 and FireRed/LeafGreen. The server's game modes (Nuzlocke,

@@ -38,7 +38,7 @@ server with a password through `gts_config.txt`
 - **Co-op parties** (create, invite, members, leave): every friend online
   is a warp away instead. The server keeps the party actions for older
   games.
- - 2026-10-18
+## [1.0.4] - 2026-10-18
 
 1.0 servers and clients still play together. On a server running a game
 mode or a game speed above 1, an older client is told to update (the rules
