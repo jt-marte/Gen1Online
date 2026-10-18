@@ -7,9 +7,9 @@
 --   refused, the real one connects -> a new player -> MY PROFILE (the
 --   trainer card) and EXP -> ONLINE SETTINGS: title, avatar (our field
 --   sprite and what BUDDY sees), favorite Pokémon, the token, live chat ->
---   BUDDY's trainer card through A -> parties: BUDDY's invite accepted,
---   MEMBERS & HUD, WARP TO MEMBER (BUDDY in Pallet Town), LEAVE PARTY; our
---   own party, BUDDY invited and joining -> DISCONNECT, the online files
+--   BUDDY's trainer card through A -> no co-op parties: the ONLINE menu's
+--   WARP TO PLAYER lists BUDDY and takes ASH beside him in Pallet Town ->
+--   DISCONNECT, the online files
 --   gone (a new device): a wrong token refused, then REDEEM RECOVERY TOKEN
 --   brings ASH back, and DISCONNECT still restores the offline game.
 --
@@ -259,32 +259,13 @@ return function(game)
   U.tap(game, "b"); U.wait(4)
   closeAll()
 
-  -- ------------------------------------------------------------- parties
-  -- BUDDY invites ASH; the invite arrives with the next sync
-  local res = post({ action = "party_invite", trainerId = bTid, name = "BUDDY", targetId = myTid,
-    level = 3, map = bMap })
-  check(res and res.success, "BUDDY invited ASH")
-  check(waitFor(function()
-    buddySync()
-    return isText(top()) and textOf(top()):find("BUDDY INVITED YOU", 1, true) ~= nil
-  end, 600), "the invite pops up")
-  shot("invite")
-  choose("ACCEPT INVITE")
-  clearTexts()
-  check(saw("JOINED CO-OP PARTY"), "ASH accepted")
-  local _, r = seenByBuddy()
-  check(r and r.party and r.party.members and r.party.members[myTid] ~= nil, "BUDDY's party has ASH")
-  closeAll()
+  -- ------------------------------------------------------- WARP TO PLAYER
+  -- no co-op parties: the ONLINE menu warps to any friend online
   startItem("gen1online")
-  check(isMenu(top()) and labels(top()):find("PARTY (ACTIVE)", 1, true), "the ONLINE menu shows the party")
-  choose("PARTY %(ACTIVE%)")
-  choose("MEMBERS")
-  check(labels(top()):find("BUDDY*", 1, true) and labels(top()):find("ASH", 1, true),
-    "MEMBERS & HUD: " .. labels(top()))
-  shot("members")
+  check(isMenu(top()) and labels(top()):find("WARP TO PLAYER", 1, true) and not labels(top()):find("PARTY", 1, true),
+    "the ONLINE menu warps to a player and has no co-op party: " .. labels(top()))
   closeAll()
-
-  -- BUDDY goes to Pallet Town; WARP TO MEMBER takes ASH beside him (one
+  -- BUDDY goes to Pallet Town; WARP TO PLAYER takes ASH beside him (one
   -- cell east), in front of the player's house
   local pallet = G3.raw().data.maps.FR_PALLET_TOWN
   local door
@@ -295,11 +276,12 @@ return function(game)
   bMap, bx, by = "PALLET_TOWN", door.x - 1, door.y + 1
   buddySync()
   startItem("gen1online")
-  choose("PARTY %(ACTIVE%)")
-  choose("WARP TO MEMBER")
-  choose("WARP: BUDDY")
+  choose("WARP TO PLAYER")
+  check(isMenu(top()) and labels(top()):find("BUDDY (LV", 1, true), "every other player online: " .. labels(top()))
+  shot("warp_list")
+  choose("^BUDDY")
   clearTexts()
-  check(saw("WARPED TO BUDDY"), "WARP TO MEMBER")
+  check(saw("WARPED TO BUDDY"), "WARP TO PLAYER")
   closeAll()
   check(waitFor(function() return G3.currentMap() == "FR_PALLET_TOWN" and fieldFree() end, 300),
     "ASH is in Pallet Town (" .. tostring(G3.currentMap()) .. ")")
@@ -308,49 +290,6 @@ return function(game)
   check(waitFor(function() buddySync(); return netNpcs()[bTid] ~= nil end, 300), "and sees him there")
   U.wait(30)
   shot("warped")
-  startItem("gen1online")
-  choose("PARTY %(ACTIVE%)")
-  choose("LEAVE PARTY")
-  clearTexts()
-  check(saw("LEFT THE PARTY"), "LEAVE PARTY")
-  _, r = seenByBuddy()
-  check(r and r.party and r.party.members and r.party.members[myTid] == nil, "BUDDY's party lost ASH")
-  closeAll()
-  -- a sync answered before the leave may still hold the party: the next
-  -- one puts it right
-  for _ = 1, 12 do buddySync(); U.wait(10) end
-  startItem("gen1online")
-  check(isMenu(top()) and labels(top()):find("^CO%-OP PARTY") ~= nil, "the ONLINE menu has no party: " .. labels(top()))
-  closeAll()
-
-  -- ASH's own party, BUDDY invited
-  startItem("gen1online")
-  choose("CO%-OP PARTY")
-  choose("CREATE PARTY")
-  clearTexts()
-  check(saw("PARTY CREATED"), "CREATE PARTY")
-  check(isMenu(top()) and labels(top()):find("INVITE PLAYER", 1, true), "then the party menu: " .. labels(top()))
-  choose("INVITE PLAYER")
-  choose("^BUDDY")
-  clearTexts()
-  check(saw("INVITATION SENT TO BUDDY"), "BUDDY invited")
-  local invite
-  waitFor(function()
-    local _, rr = seenByBuddy()
-    invite = rr and rr.partyInvite
-    return invite ~= nil
-  end, 100)
-  check(invite and invite.fromName == "ASH", "BUDDY got ASH's invite")
-  res = post({ action = "party_accept", trainerId = bTid, name = "BUDDY", level = 3, map = bMap })
-  check(res and res.success, "BUDDY accepted")
-  closeAll()
-  -- the client hears of it with its next sync
-  for _ = 1, 30 do buddySync(); U.wait(10) end
-  startItem("gen1online")
-  choose("PARTY %(ACTIVE%)")
-  choose("MEMBERS")
-  check(labels(top()):find("BUDDY (", 1, true) and labels(top()):find("ASH* (", 1, true),
-    "ASH's party has BUDDY, ASH leading: " .. labels(top()))
   closeAll()
 
   -- ------------------------------------------- a new device: the token

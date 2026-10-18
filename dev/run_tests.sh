@@ -40,11 +40,15 @@ step "synthetic wonder trade" "$(result "$G1O_WORK/wonder.log")"
 DEV=1 "$LUAJIT" "$DEV/harness/gts_test.lua" > "$G1O_WORK/gts.log" 2>&1
 step "synthetic gts" "$(result "$G1O_WORK/gts.log")"
 
-# the server address typed in-game, on Crystal and on Gen 1
+# the server address typed in-game, on Crystal and on Gen 1; then a server
+# with a password (1.2.3.4/PASSWORD)
 for g in crystal yellow; do
   "$DEV/server.sh" >/dev/null
   G1O_GAME=$g DEV=1 "$LUAJIT" "$DEV/harness/address_test.lua" > "$G1O_WORK/address_$g.log" 2>&1
   step "synthetic server address ($g)" "$(result "$G1O_WORK/address_$g.log")"
+  GTS_PASSWORD=ZQXW42 "$DEV/server.sh" >/dev/null
+  GTS_PASSWORD=ZQXW42 G1O_GAME=$g DEV=1 "$LUAJIT" "$DEV/harness/password_test.lua" > "$G1O_WORK/password_$g.log" 2>&1
+  step "synthetic server password ($g)" "$(result "$G1O_WORK/password_$g.log")"
 done
 
 # Gen 1: Red, Blue and Yellow on a Gen 1 server; each generation turned away
@@ -81,7 +85,7 @@ if [ "${1:-}" != "quick" ]; then
     run() {
       XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=gen1online-test POKEPORT_VERSION=crystal \
         POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/$1 SHOTS=$G1O_WORK/shots/$2 \
-        timeout 600 "$LOVE" . > "$G1O_WORK/$2.log" 2>&1
+        timeout -k 10 600 "$LOVE" . > "$G1O_WORK/$2.log" 2>&1
       step "real Crystal $2" "$(result "$G1O_WORK/$2.log" | sed 's/.*\t//')"
     }
     run crystal_offline.lua crystal_offline
@@ -114,7 +118,7 @@ if [ "${1:-}" != "quick" ]; then
     rm -rf "$G1O_WORK/shots/gen1_voxel"
     XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=gen1online-yellow POKEPORT_VERSION=yellow \
       POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_voxel.lua SHOTS=$G1O_WORK/shots/gen1_voxel \
-      timeout 900 "$LOVE" . > "$G1O_WORK/gen1_voxel.log" 2>&1
+      timeout -k 10 900 "$LOVE" . > "$G1O_WORK/gen1_voxel.log" 2>&1
     step "real Yellow + voxel" "$(result "$G1O_WORK/gen1_voxel.log" | sed 's/.*\t//')"
   fi
 fi
@@ -137,14 +141,14 @@ if [ "${1:-}" != "quick" ]; then
     rm -rf "$G1O_WORK/shots/gen1_modes"
     XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=gen1online-yellow POKEPORT_VERSION=yellow \
       POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_modes.lua SHOTS=$G1O_WORK/shots/gen1_modes \
-      timeout 600 "$LOVE" . > "$G1O_WORK/gen1_modes.log" 2>&1
+      timeout -k 10 600 "$LOVE" . > "$G1O_WORK/gen1_modes.log" 2>&1
     step "real Yellow game modes" "$(result "$G1O_WORK/gen1_modes.log" | sed 's/.*\t//')"
     # the same modes in real battles (fresh server, fresh profile)
     GTS_CONFIG="$G1O_WORK/server/modes_config.txt" GTS_GENERATION=1 "$DEV/server.sh" >/dev/null
     rm -rf "$YPROFILE/mod_compat" "$YPROFILE/saves" "$YPROFILE"/save_yellow.lua*
     XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=gen1online-yellow POKEPORT_VERSION=yellow \
       POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_nuzlocke.lua SHOTS=$G1O_WORK/shots/gen1_nuzlocke \
-      timeout 900 "$LOVE" . > "$G1O_WORK/gen1_nuzlocke.log" 2>&1
+      timeout -k 10 900 "$LOVE" . > "$G1O_WORK/gen1_nuzlocke.log" 2>&1
     step "real Yellow Nuzlocke battles" "$(result "$G1O_WORK/gen1_nuzlocke.log" | sed 's/.*\t//')"
     # the multiworld split: two worlds, a third player turned away
     printf 'randomizer = on\nmultiworld = on\nplayers = 2\nseed = 4242\n' > "$G1O_WORK/server/multiworld_config.txt"
@@ -152,7 +156,7 @@ if [ "${1:-}" != "quick" ]; then
     rm -rf "$YPROFILE/mod_compat" "$YPROFILE/saves" "$YPROFILE"/save_yellow.lua*
     XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=gen1online-yellow POKEPORT_VERSION=yellow \
       POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/gen1_multiworld.lua SHOTS=$G1O_WORK/shots/gen1_multiworld \
-      timeout 600 "$LOVE" . > "$G1O_WORK/gen1_multiworld.log" 2>&1
+      timeout -k 10 600 "$LOVE" . > "$G1O_WORK/gen1_multiworld.log" 2>&1
     step "real Yellow multiworld" "$(result "$G1O_WORK/gen1_multiworld.log" | sed 's/.*\t//')"
   fi
 fi
@@ -176,7 +180,7 @@ frlg() {   # frlg <game> <identity> <driver> <name> [env...]
   rm -rf "$G1O_WORK/shots/$name"
   env "$@" XDG_DATA_HOME=$G1O_WORK/xdg POKEPORT_IDENTITY=$identity POKEPORT_VERSION=$game \
     POKEPORT_BACKGROUND=1 POKEPORT_DRIVER=$DEV/drivers/$driver SHOTS=$G1O_WORK/shots/$name \
-    timeout 900 "$LOVE" . > "$G1O_WORK/$name.log" 2>&1
+    timeout -k 10 900 "$LOVE" . > "$G1O_WORK/$name.log" 2>&1
 }
 if [ "${1:-}" != "quick" ]; then
   for g in firered leafgreen; do
@@ -228,7 +232,7 @@ if [ "${1:-}" != "quick" ]; then
       install_frlg "$FPROFILE"
       printf 'server_url=http://127.0.0.1:1\n' > "$FPROFILE/mods/gen1online-plus/gts_config.txt"
       frlg $g gen1online-frlg gen3_social.lua gen3_social_$g
-      step "real $g parties, profile, address, token" "$(result "$G1O_WORK/gen3_social_$g.log" | sed 's/.*\t//')"
+      step "real $g warp, profile, address, token" "$(result "$G1O_WORK/gen3_social_$g.log" | sed 's/.*\t//')"
       # you and a friend: two games on one hardcore server, each with their
       # own first encounter per area
       if [ -f "$FPROFILE2/$g/rom-cache.complete" ]; then

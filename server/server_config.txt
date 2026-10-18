@@ -1,132 +1,35 @@
-# Gen1Online+ server settings: where it listens, and the game modes.
-# Restart the server after editing.
+# Gen1Online+ server settings. Restart the server after editing.
+# The game modes and the seed start a new run when changed (everyone's ONLINE
+# save restarts in the bedroom; offline saves are never touched).
+# More about each mode: README.md, "Game modes".
 
-# Where the server listens.  host = 0.0.0.0 takes every network (LAN,
-# Tailscale, port forwarding); 127.0.0.1 only this PC.  Players type this
-# PC's address (and the port, when it isn't 7779) in their game: START >
-# CONNECT > SERVER ADDRESS.  --host and --port on the command line win.
-host = 0.0.0.0
+host = 0.0.0.0             # 0.0.0.0: every network; 127.0.0.1: this PC only
 port = 7779
 
-# Game speed for everyone while online, battles (PVP too) and walking
-# included: 1.5 runs the game 50% faster.  Music and sounds keep their normal
-# speed.  Every player on the server plays at it (offline, each player's own
-# GAME SPEED option applies again).  Unlike the modes below, changing it
-# never starts a new run.
-# game_speed = 1 (normal) | a number up to 4, like 1.5 or 2
-game_speed = 1
+# What friends type after the address: 1.2.3.4/PASSWORD (1.2.3.4:PORT/PASSWORD
+# if the port isn't 7779). auto: picked on the first start and written here.
+# Or your own (4 to 16 letters and digits), or off (LAN or Tailscale only).
+# It travels unencrypted: never use a password you use anywhere else.
+server_password = auto
 
-#
-# The modes play on a Gen 1 world (Red, Blue and Yellow) and on a FireRed /
-# LeafGreen world; a Crystal server ignores them.  Everyone on the server
-# plays the same run with the same rules and, with the randomizer, the same
-# shuffled world.  Changing a mode or the seed here starts a new run (the
-# next time the server starts; host and port don't count), and a new run
-# restarts every player's ONLINE save from their bedroom; their offline
-# saves are never touched, and the old online save is kept as a backup.
+game_speed = 1             # everyone online at this speed: 1 to 4, like 1.5
 
-# Hardcore Nuzlocke:
-#   - only the first wild Pokemon you meet in each area can be caught,
-#     whatever it is (one per player; a species you already own counts too).
-#     Encounters before you first have Poke Balls (Route 1) don't count; from
-#     then on every area's first one does, even with no ball in your bag
-#   - every player needs the current version of the mod: an older one is
-#     told to update
-#   - a Pokemon that faints is gone for good
-#   - no items in battle (Poke Balls still work), battle style is SET,
-#     and Pokemon stop gaining EXP at the level cap of the next gym (with
-#     shuffled badges: the weakest gym leader you can reach and haven't beaten)
-#   - if ANY player's whole party faints, the run is over for the whole team:
-#     the server starts a new run (with a new seed) and everyone starts over
-# nuzlocke = off | hardcore
-nuzlocke = off
+# ---- game modes: Red/Blue/Yellow and FireRed/LeafGreen, all off by default ----
 
-# Trades in the hardcore Nuzlocke: how many trades each player gets between
-# two gym leaders.  With 1, you may trade once; beating a gym leader lets
-# you trade once more, until the next leader (your own gym leaders beaten,
-# not the team's).  A GTS buy, a GTS or Wonder Trade deposit and a link
-# trade each use one; taking a deposit back gives it back, and whatever
-# comes back for a deposit is always yours to claim.  Like every setting
-# here, changing it starts a new run at the next server start.
-# nuzlocke_trades = off (no limit) | 1 | 2 | ...
-nuzlocke_trades = off
+nuzlocke = off             # off | hardcore
+nuzlocke_trades = off      # hardcore only: trades between gym leaders (off = no limit, or 1, 2...)
 
-# Co-op randomizer: wild Pokemon, items and gym badges are shuffled.
-# A gym leader might hand over a POTION while the BOULDERBADGE lies on the
-# floor somewhere or comes from an NPC.  Placement follows the game's
-# progression, so a run can always be finished (nothing you need is left
-# aboard the S.S. Anne, and the early routes always have wild Pokemon that
-# can learn CUT).
-# On FireRed and LeafGreen every wild Pokemon may be any of the 386 (Gen 1
-# to 3; they evolve before the National Pokedex), and the item balls, hidden
-# items, a few gifts (the TEA, the LIFT KEY, the SILPH SCOPE, HM06...) and
-# the gym badges are shuffled.
-# randomizer = on | off
-randomizer = off
-
-# What the randomizer shuffles (only when randomizer = on).  The starters
-# become basic Pokemon that evolve twice, like the real ones (on Yellow too:
-# Oak hands over something else than PIKACHU, which then doesn't follow you);
-# the rival keeps his usual team.
-randomize_encounters = on
+randomizer = off           # on: shuffle wild Pokemon, items, badges and starters
+randomize_encounters = on  # the randomizer's parts, each on | off
 randomize_items = on
 randomize_badges = on
 randomize_starters = on
+randomize_trainers = off   # off | gyms (leaders keep their type) | on (every trainer)
+crazy_randomizer = off     # on: any Pokemon of any strength, random movesets
+wild_legendaries = off     # off | on (1 in 100) | a percent, like 2
+shared_key_items = auto    # the team shares key items, HMs and badges (auto = with the randomizer)
 
-# Legendary Pokemon in the wild (randomizer only): each wild encounter in
-# grass, water, caves, fishing or Rock Smash has this chance of being a
-# legendary instead, at that encounter's level (FireRed/LeafGreen: any of
-# the 21, Lugia to Deoxys; Gen 1: the birds, MEWTWO and MEW).  Scripted
-# battles (SNORLAX, the legendaries' own spots) stay as they are.
-# wild_legendaries = off | on (1 in 100) | a percent, like 0.5 or 2
-wild_legendaries = off
+multiworld = off           # on: one world per player, each key item in only one of them
+players = 2                # multiworld: how many worlds, 2 to 8
 
-# Trainers' teams (randomizer only).  Each Pokemon becomes one of similar
-# strength at the same level, never a legendary; every player meets the same
-# teams.
-#   gyms: gym leaders and the trainers in their gyms get the gym's type
-#         (Brock Rock, Misty Water...), the Elite Four theirs (Ice, Fighting,
-#         Ghost, Dragon), the Champion any type
-#   on:   the same, and every other trainer gets random Pokemon too
-# randomize_trainers = off | gyms | on
-randomize_trainers = off
-
-# Crazy randomizer (randomizer only): no more "similar strength".  A wild
-# Pokemon becomes ANY other one, at the level of the one it replaces (a
-# DRAGONITE on Route 1 at level 3); every PIDGEY in the game becomes the same
-# one.  The starters may be any Pokemon at all, legendaries included, and
-# randomized trainers (above) get any Pokemon too; gym leaders and the Elite
-# Four still keep their type.  Wild legendaries stay out of it (see
-# wild_legendaries).  Every new Pokemon (wild, a starter or gift, a
-# trainer's) knows up to four moves drawn at random from everything it learns
-# by level-up, at any level: a level 5 HO-OH may know SACRED FIRE.  HM moves
-# stay out.  A trainer's moves come from the run's seed (the same in every
-# rematch, for every player); a trainer with moves of his own keeps them,
-# unless randomize_trainers changed his team.
-# crazy_randomizer = off | on
-crazy_randomizer = off
-
-# The team shares key items, HMs and badges: whatever one player finds, every
-# player gets.  auto = on whenever the randomizer is.
-# shared_key_items = auto | on | off
-shared_key_items = auto
-
-# Multiworld (needs randomizer = on): every player gets their OWN world, and
-# each badge, HM and key item exists in exactly ONE of them.  The BOULDERBADGE
-# might lie in one friend's Mt. Moon and nowhere else; when that friend picks
-# it up, the whole team has it.  The shuffle still guarantees the team can
-# finish.  Wild Pokemon differ per world too.
-#   - players = how many worlds; the first players to join each take one
-#     and keep it (also across Nuzlocke runs).  Anyone else is turned away.
-#   - everyone must play the same game's data (Red/Blue, or Yellow, or
-#     FireRed/LeafGreen); the first player to join decides.
-#   - a world's items are only reachable by its player: if someone stops
-#     playing, the team may get stuck.
-# multiworld = off | on
-multiworld = off
-players = 2
-
-# A number from 1 to 2147483646 replays the same world for the run it
-# starts (run 1, or the run a changed setting starts); later runs derive
-# their own.  Leave it empty for a new random world every run.
-seed =
+seed =                     # a number replays the same world; empty = a new one every run

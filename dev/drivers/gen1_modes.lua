@@ -43,13 +43,13 @@ return function(game)
 
   local http, ltn12 = package.loaded["socket.http"], package.loaded["ltn12"]
   local function post(payload)
-    payload.modVersion, payload.gameVersion, payload.generation = "1.0.4", "Pokemon Yellow", 1
+    payload.modVersion, payload.gameVersion, payload.generation = "1.0.5", "Pokemon Yellow", 1
     payload.modesVersion = payload.modesVersion or (g1o and g1o.ui and g1o.ui.MODES_VERSION)
     local body = Json.encode(payload)
     local res = {}
     http.request({ url = BASE .. "/gts", method = "POST", source = ltn12.source.string(body),
       headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body),
-        ["X-Mod-Version"] = "1.0.4" }, sink = ltn12.sink.table(res) })
+        ["X-Mod-Version"] = "1.0.5" }, sink = ltn12.sink.table(res) })
     local ok, decoded = pcall(Json.decode, table.concat(res))
     return ok and decoded or nil
   end

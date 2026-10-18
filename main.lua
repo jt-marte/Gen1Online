@@ -4,7 +4,7 @@
 
   -- Resolved before anything else: request headers, the default avatar and
   -- the save paths below all read these.
-  local MOD_VERSION = "1.0.4"
+  local MOD_VERSION = "1.0.5"
   local isGen2, isGen3 = false, false
   if mod and mod.generation then
     isGen2 = (mod.generation == 2)
@@ -229,6 +229,10 @@
     local stored = storageRead and storageRead("gts_server_url")
     if not (type(stored) == "string" and #stored > 0) then stored = nil end
     local fromFile = (not stored) and readServerUrlFromConfig() or nil
+    -- gts_config.txt may hold an address as players type it (1.2.3.4/PASSWORD)
+    if fromFile and GtsUI.normalizeServerAddress then
+      fromFile = GtsUI.normalizeServerAddress(fromFile) or fromFile
+    end
     GTS_SERVER_URL = stored or fromFile or DEFAULT_SERVER_URL
     GtsUI.serverUrlTyped = stored ~= nil
     _G.GTS_SERVER_URL = GTS_SERVER_URL
@@ -239,16 +243,26 @@
   local function getServerUrl()
     return GTS_SERVER_URL
   end
-  -- "192.168.1.23", "100.64.0.7:8000" or "http://host:7779/" ->
-  -- "http://host:port" (port 7779 when none is given); nil and a reason
-  -- when the text isn't an address.
+  -- "192.168.1.23", "100.64.0.7:8000", "1.2.3.4/PIKACHU" or
+  -- "http://host:7779/PIKACHU/" -> "http://host:port[/PASSWORD]" (port 7779
+  -- when none is given; the password in capitals, which the client then
+  -- sends as the first part of every path: server_password); nil and a
+  -- reason when the text isn't an address.
   function GtsUI.normalizeServerAddress(text)
     local s = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
     s = s:gsub("^[Hh][Tt][Tt][Pp][Ss]?://", ""):gsub("/+$", "")
     if s == "" then return nil, "TYPE THE HOST'S ADDRESS." end
+    local key = nil
+    local slash = s:find("/", 1, true)
+    if slash then
+      s, key = s:sub(1, slash - 1), s:sub(slash + 1)
+      if not key:match("^%w+$") or #key < 4 or #key > 16 then
+        return nil, "THE PASSWORD AFTER / IS 4 TO 16 LETTERS AND DIGITS."
+      end
+    end
     local host, port = s:match("^([%w%.%-]+):(%d+)$")
     if not host then host = s:match("^([%w%.%-]+)$") end
-    if not host then return nil, "USE ONLY LETTERS, DIGITS, . - AND :PORT." end
+    if not host then return nil, "USE ONLY LETTERS, DIGITS, . - :PORT AND /PASSWORD." end
     if host:find("..", 1, true) or host:sub(1, 1) == "." or host:sub(-1) == "." then
       return nil, "THAT ADDRESS HAS A STRAY DOT."
     end
@@ -262,12 +276,27 @@
     end
     port = tonumber(port or "7779")
     if not port or port < 1 or port > 65535 then return nil, "THE PORT IS 1 TO 65535." end
-    return "http://" .. host:lower() .. ":" .. port
+    return "http://" .. host:lower() .. ":" .. port .. (key and ("/" .. key:upper()) or "")
   end
-  -- what menus show: no scheme, no default port
+  -- what menus show: no scheme, no default port, and the password hidden
+  -- (no game's font has "*"; every one has the parentheses)
   function GtsUI.displayAddress(url)
-    local s = tostring(url or ""):gsub("^%a+://", ""):gsub("/+$", ""):gsub(":7779$", "")
-    return s:upper()
+    local s = tostring(url or ""):gsub("^%a+://", ""):gsub("/+$", "")
+    local host, key = s:match("^([^/]*)/(.+)$")
+    if host then s = host end
+    s = s:gsub(":7779$", "")
+    return s:upper() .. (key and " (PASSWORD)" or "")
+  end
+  -- a password server's refusal (server_password), in the player's words
+  function GtsUI.passwordText(code)
+    if code == "PASSWORD_REQUIRED" then
+      return "THIS SERVER NEEDS A PASSWORD. TYPE IT AFTER THE ADDRESS, LIKE 1.2.3.4/PASSWORD. ASK THE HOST FOR IT."
+    elseif code == "WRONG_PASSWORD" then
+      return "WRONG PASSWORD FOR THIS SERVER. CHECK THE ADDRESS WITH THE HOST."
+    elseif code == "TOO_MANY_TRIES" then
+      return "TOO MANY WRONG PASSWORDS. WAIT 15 MINUTES, THEN TRY AGAIN."
+    end
+    return nil
   end
   local isGtsServerConnected = false -- Explicit manual connection required via menu
   -- The live game instance (set every frame in core.update) so writeOnlineSave
@@ -284,7 +313,7 @@
   -- Networking State
   local netSession, isHost, roomCode, lastSendTime = nil, false, nil, 0
   local lastPlayerX, lastPlayerY, lastPlayerMap, lastPlayerMoving = nil, nil, nil, false
-  local activeBattleAdapter, activeParty, pendingPartyInvite, lastPartySyncTime, openPartyMainMenu = nil, nil, nil, 0, nil
+  local activeBattleAdapter = nil
   local isWaitingForChallenge, challengeWaitTimer, lastBattleEndTime, inBattle = false, 0, -999, false
   local clientSessionId = string.format("%08x%08x", math.random(10000000, 99999999), os.time())
   local netNpcs, netPlayerMap, gtsSpriteDiagWritten = {}, {}, false
@@ -1146,7 +1175,7 @@
     AddressScreen.isOpaque = true
     AddressScreen.gtsTextInput = true
     AddressScreen.MAX = 40
-    AddressScreen.CHARS = "0123456789.:-ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    AddressScreen.CHARS = "0123456789.:-/ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     GtsUI.AddressScreen = AddressScreen
 
     function AddressScreen.new(game, opts)
@@ -1167,7 +1196,7 @@
       if self.game.stack:top() == self then self.game.stack:pop() end
     end
     function AddressScreen:add(text)
-      for ch in tostring(text or ""):upper():gmatch("[%w%.%:%-]") do
+      for ch in tostring(text or ""):upper():gmatch("[%w%.%:%-/]") do
         if #self.buffer < AddressScreen.MAX then self.buffer = self.buffer .. ch end
       end
       self.message = nil
@@ -1269,7 +1298,7 @@
         G.rectangle("fill", cx, fy + R.under, lw, 1)
       end
       local lines = self.message and wrapText(self.message, 18)
-        or "EX: 192.168.1.23\nOR 100.64.0.7:7779"
+        or "EX: 192.168.1.23\nOR 1.2.3.4/PASSWORD"
       local y = R.msg
       for line in (lines .. "\n"):gmatch("([^\n\f]*)[\n\f]") do
         if y <= R.msgEnd then Font.draw(line, 8, y) end
@@ -2126,72 +2155,15 @@
         elseif res.error == "WRONG_GENERATION" then
           handleDisconnect(game, GtsUI.wrongWorldText(res.serverGeneration))
           return
+        elseif GtsUI.passwordText(res.error) then
+          handleDisconnect(game, res.error == "TOO_MANY_TRIES" and GtsUI.passwordText(res.error)
+            or "THE SERVER'S PASSWORD CHANGED. ASK THE HOST FOR THE NEW ADDRESS.")
+          return
         end
 
         if res.success then
-          -- Party invite receiver
-          if res.partyInvite and not pendingPartyInvite and not activeParty then
-            pendingPartyInvite = res.partyInvite
-            local inv = res.partyInvite
-            local tid, tName = getTrainerInfo(game.save)
-                        local pMenu = {
-              {
-                label = "ACCEPT INVITE",
-                onSelect = function()
-                    local gWorld = getWorld(game)
-                    local curMap = (gWorld and gWorld.map and gWorld.map.id) or defaultStartingOutdoor
-                    local curX = (gWorld and gWorld.player and gWorld.player.cellX) or defaultStartingOutdoorX
-                    local curY = (gWorld and gWorld.player and gWorld.player.cellY) or defaultStartingOutdoorY
-                    local aRes = gtsApiPost({
-                      action = "party_accept",
-                      trainerId = tid,
-                      name = tName,
-                      level = mmoLevel or 1,
-                      map = curMap,
-                      x = curX,
-                      y = curY,
-                      spriteId = localSelectedSprite
-                    }, 1.5)
-                    if aRes and aRes.success then
-                      activeParty = aRes.party
-                      pendingPartyInvite = nil
-                      game.stack:push(TextBox.new(game, wrapText("JOINED CO-OP PARTY!\nYOU CAN NOW WARP TO YOUR PARTY MEMBERS!")))
-                    else
-                      pendingPartyInvite = nil
-                      game.stack:push(TextBox.new(game, wrapText("COULD NOT JOIN PARTY!")))
-                    end
-                  end
-                },
-                {
-                  label = "DECLINE",
-                  onSelect = function()
-                    gtsApiPost({ action = "party_decline", trainerId = tid }, 1.0)
-                    pendingPartyInvite = nil
-                  end
-                }
-              }
-              local invMsg = string.format("%s INVITED YOU TO A CO-OP PARTY!\nACCEPT INVITE?", inv.fromName or "A TRAINER")
-              game.stack:push(TextBox.new(game, wrapText(invMsg), function()
-                -- B or START declines, so a later invite can still come
-                game.stack:push(Menu.new(game, pMenu, { tx = 0, ty = 0, tw = 20, maxVisible = 6, startCloses = true,
-                  onCancel = pMenu[2].onSelect }))
-              end))
-            end
-
-            -- Shared Party XP receiver
-            if res.partyXp and #res.partyXp > 0 then
-              for _, xev in ipairs(res.partyXp) do
-                addMmoXp(game, "party_share", xev.xp or 50)
-                game.stack:push(TextBox.new(game, wrapText(string.format("PARTY CO-OP BONUS!\n+%d XP FROM %s!", xev.xp or 50, xev.fromName or "TEAMMATE"))))
-              end
-            end
-
-            -- a sync answer's party is the server's word, null for none: an
-            -- answer sent before LEAVE PARTY (still holding the party) is
-            -- put right by the next one instead of keeping it for good
-            if res.party ~= nil or res.players ~= nil then
-              activeParty = res.party
-            end
+          -- (no co-op parties any more: the server's partyInvite, partyXp
+          -- and party fields are for 1.0.0-1.0.4 clients)
             if GtsUI.Modes and res.run then GtsUI.Modes.synced(game, res) end
             if res.gameSpeed ~= nil then GtsUI.setOnlineSpeed(res.gameSpeed) end
             -- Synchronize RTC Clock with Server
@@ -3154,7 +3126,7 @@
     roomCode = nil
     activeBattleAdapter = nil
     isWaitingForChallenge = false
-    pendingPartyInvite, GtsUI.pendingOffer, GtsUI.challengePrompt = nil, nil, nil
+    GtsUI.pendingOffer, GtsUI.challengePrompt = nil, nil
 
     -- 1. Save online progress to save_online.lua before disconnecting
     if isGtsServerConnected and game and game.save then
@@ -3214,7 +3186,7 @@
     roomCode = nil
     activeBattleAdapter = nil
     isWaitingForChallenge = false
-    pendingPartyInvite, GtsUI.pendingOffer, GtsUI.challengePrompt = nil, nil, nil
+    GtsUI.pendingOffer, GtsUI.challengePrompt = nil, nil
     if game and game.save then
       writeOnlineSave(game.save)
     end
@@ -5773,201 +5745,47 @@
     game.stack:push(Menu.new(game, chatOptions, { tx = 1, ty = 1, tw = 18, maxVisible = 6, startCloses = true }))
   end
 
-    -- =========================================================================
-  -- CO-OP MULTIPLAYER PARTY SYSTEM (Shared Double XP, Party Warp & Status HUD)
-  -- =========================================================================
-
-  openPartyMainMenu = function(game)
-    local trainerId, trainerName = getTrainerInfo(game.save)
-    local gWorld = getWorld(game)
-    local curMap = (gWorld and gWorld.map and gWorld.map.id) or defaultStartingOutdoor
-    local px = (gWorld and gWorld.player and gWorld.player.cellX) or defaultStartingOutdoorX
-    local py = (gWorld and gWorld.player and gWorld.player.cellY) or defaultStartingOutdoorY
-
-    if not activeParty then
-      local soloItems = {
-        {
-          label = "CREATE PARTY",
+  -- WARP TO PLAYER (ONLINE SETTINGS): any friend online, any time.  The
+  -- server answers where they last synced (party_warp_target, which never
+  -- needed a party); the warp lands one cell to their right.
+  function GtsUI.openWarpMenu(game)
+    local trainerId = getTrainerInfo(game.save)
+    local pRes = gtsApiGet("/gts/players", 1.5)
+    local items = {}
+    for tid, p in pairs((pRes and pRes.players) or {}) do
+      if tostring(tid) ~= tostring(trainerId) then
+        local name = p.name or "TRAINER"
+        items[#items + 1] = {
+          label = string.format("%s (LV%d)", name:sub(1, 10), tonumber(p.level) or 1),
           onSelect = function()
-            local res = gtsApiPost({
-              action = "party_create",
-              trainerId = trainerId,
-              name = trainerName,
-              level = mmoLevel or 1,
-              map = curMap,
-              x = px,
-              y = py,
-              spriteId = localSelectedSprite
-            }, 1.5)
-            if res and res.success then
-              activeParty = res.party
-              local msg = "PARTY CREATED!\nINVITE PLAYERS TO TEAM UP AND WARP TO EACH OTHER!"
-              game.stack:push(TextBox.new(game, wrapText(msg), function()
-                openPartyMainMenu(game)
-              end))
-            else
-              game.stack:push(TextBox.new(game, wrapText("COULD NOT CREATE PARTY!")))
-            end
-          end
-        },
-        {
-          label = "INVITE PLAYER",
-          onSelect = function()
-            local pRes = gtsApiGet("/gts/players", 1.5)
-            local players = (pRes and pRes.players) or {}
-            local inviteItems = {}
-            for tid, p in pairs(players) do
-              if tostring(tid) ~= tostring(trainerId) then
-                local pNameShort = (p.name or "TRAINER"):sub(1, 8)
-                table.insert(inviteItems, {
-                  label = string.format("%s (LV%d)", pNameShort, p.level or 1),
-                  onSelect = function()
-                    local iRes = gtsApiPost({
-                      action = "party_invite",
-                      trainerId = trainerId,
-                      name = trainerName,
-                      targetId = tid,
-                      level = mmoLevel or 1,
-                      map = curMap,
-                      x = px,
-                      y = py,
-                      spriteId = localSelectedSprite
-                    }, 1.5)
-                    if iRes and iRes.success then
-                      local msg = string.format("INVITATION SENT TO %s!", p.name or "TRAINER")
-                      game.stack:push(TextBox.new(game, wrapText(msg)))
-                    else
-                      game.stack:push(TextBox.new(game, wrapText("COULD NOT SEND INVITE!")))
-                    end
-                  end
-                })
+            local wRes = gtsApiPost({ action = "party_warp_target", targetId = tid }, 1.5)
+            local wWorld = getWorld(game)
+            if wRes and wRes.success and wWorld and wWorld.setMap then
+              pcall(function() require("src.core.Sound").play(game.data, "Teleport_Exit1") end)
+              -- false: the game couldn't load the spot (Crystal's and
+              -- FireRed's say so; Gen 1's setMap answers nothing)
+              local moved
+              if GtsUI.G3 then
+                moved = GtsUI.G3.warpTo(wRes.map or defaultStartingOutdoor, (wRes.x or 5) + 1, wRes.y or 5, "down")
+              else
+                moved = wWorld:setMap(wRes.map or defaultStartingOutdoor, (wRes.x or 5) + 1, wRes.y or 5, "down")
               end
-            end
-            if #inviteItems == 0 then
-              game.stack:push(TextBox.new(game, wrapText("NO OTHER PLAYERS CURRENTLY ONLINE.")))
+              game.stack:push(TextBox.new(game, wrapText(string.format(moved == false
+                and "COULD NOT WARP TO %s." or "WARPED TO %s!", name))))
             else
-              table.insert(inviteItems, { label = "BACK", onSelect = function() end })
-              game.stack:push(Menu.new(game, inviteItems, { tx = 0, ty = 0, tw = 20, maxVisible = 7, startCloses = true }))
+              game.stack:push(TextBox.new(game, wrapText(string.format("COULD NOT WARP TO %s.", name))))
             end
           end
-        },
-        { label = "BACK", onSelect = function() end }
-      }
-      game.stack:push(Menu.new(game, soloItems, { tx = 0, ty = 0, tw = 20, maxVisible = 7, startCloses = true }))
+        }
+      end
+    end
+    if #items == 0 then
+      game.stack:push(TextBox.new(game, wrapText("NO OTHER PLAYERS ONLINE.")))
       return
     end
-
-    -- In active party
-    local isLeader = (tostring(activeParty.leaderId) == tostring(trainerId))
-    local partyItems = {
-      {
-        label = "MEMBERS & HUD",
-        onSelect = function()
-          local memberItems = {}
-          for mid, m in pairs(activeParty.members or {}) do
-            local leaderTag = (tostring(mid) == tostring(activeParty.leaderId)) and "*" or ""
-            local mNameShort = (m.name or "TRAINER"):sub(1, 8)
-            table.insert(memberItems, {
-              label = string.format("%s%s (LV%d)", mNameShort, leaderTag, m.level or 1),
-              onSelect = function()
-                local statusMsg = string.format("PARTY MEMBER:\nNAME: %s\nLEVEL: %d\nMAP: %s", m.name or "TRAINER", m.level or 1, m.map or "UNKNOWN")
-                game.stack:push(TextBox.new(game, wrapText(statusMsg)))
-              end
-            })
-          end
-          table.insert(memberItems, { label = "BACK", onSelect = function() end })
-          game.stack:push(Menu.new(game, memberItems, { tx = 0, ty = 0, tw = 20, maxVisible = 7, startCloses = true }))
-        end
-      },
-      {
-        label = "WARP TO MEMBER",
-        onSelect = function()
-          local warpItems = {}
-          for mid, m in pairs(activeParty.members or {}) do
-            if tostring(mid) ~= tostring(trainerId) then
-              local mNameShort = (m.name or "TRAINER"):sub(1, 10)
-              table.insert(warpItems, {
-                label = string.format("WARP: %s", mNameShort),
-                onSelect = function()
-                  local wRes = gtsApiPost({ action = "party_warp_target", targetId = mid }, 1.5)
-                  local wWorld = getWorld(game)
-                  if wRes and wRes.success and wWorld and wWorld.setMap then
-                    pcall(function() require("src.core.Sound").play(game.data, "Teleport_Exit1") end)
-                    if GtsUI.G3 then
-                      GtsUI.G3.warpTo(wRes.map or defaultStartingOutdoor, (wRes.x or 5) + 1, wRes.y or 5, "down")
-                    else
-                      wWorld:setMap(wRes.map or defaultStartingOutdoor, (wRes.x or 5) + 1, wRes.y or 5, "down")
-                    end
-                    local msg = string.format("WARPED TO %s!", m.name or "TEAMMATE")
-                    game.stack:push(TextBox.new(game, wrapText(msg)))
-                  else
-                    game.stack:push(TextBox.new(game, wrapText("COULD NOT WARP TO MEMBER!")))
-                  end
-                end
-              })
-            end
-          end
-          if #warpItems == 0 then
-            game.stack:push(TextBox.new(game, wrapText("NO OTHER PARTY MEMBERS TO WARP TO.")))
-          else
-            table.insert(warpItems, { label = "BACK", onSelect = function() end })
-            game.stack:push(Menu.new(game, warpItems, { tx = 0, ty = 0, tw = 20, maxVisible = 7, startCloses = true }))
-          end
-        end
-      },
-      {
-        label = "INVITE PLAYER",
-        onSelect = function()
-          local pRes = gtsApiGet("/gts/players", 1.5)
-          local players = (pRes and pRes.players) or {}
-          local inviteItems = {}
-          for tid, p in pairs(players) do
-            if tostring(tid) ~= tostring(trainerId) and not (activeParty.members and activeParty.members[tostring(tid)]) then
-              local pNameShort = (p.name or "TRAINER"):sub(1, 8)
-              table.insert(inviteItems, {
-                label = string.format("%s (LV%d)", pNameShort, p.level or 1),
-                onSelect = function()
-                  local iRes = gtsApiPost({
-                    action = "party_invite",
-                    trainerId = trainerId,
-                    name = trainerName,
-                    targetId = tid,
-                    level = mmoLevel or 1,
-                    map = curMap,
-                    x = px,
-                    y = py,
-                    spriteId = localSelectedSprite
-                  }, 1.5)
-                  if iRes and iRes.success then
-                    local msg = string.format("INVITATION SENT TO %s!", p.name or "TRAINER")
-                    game.stack:push(TextBox.new(game, wrapText(msg)))
-                  else
-                    game.stack:push(TextBox.new(game, wrapText("COULD NOT SEND INVITE!")))
-                  end
-                end
-              })
-            end
-          end
-          if #inviteItems == 0 then
-            game.stack:push(TextBox.new(game, wrapText("NO OTHER AVAILABLE PLAYERS ONLINE.")))
-          else
-            table.insert(inviteItems, { label = "BACK", onSelect = function() end })
-            game.stack:push(Menu.new(game, inviteItems, { tx = 0, ty = 0, tw = 20, maxVisible = 7, startCloses = true }))
-          end
-        end
-      },
-      {
-        label = "LEAVE PARTY",
-        onSelect = function()
-          gtsApiPost({ action = "party_leave", trainerId = trainerId }, 1.5)
-          activeParty = nil
-          game.stack:push(TextBox.new(game, wrapText("LEFT THE PARTY.")))
-        end
-      },
-      { label = "BACK", onSelect = function() end }
-    }
-
-    game.stack:push(Menu.new(game, partyItems, { tx = 0, ty = 0, tw = 20, maxVisible = 7, startCloses = true }))
+    table.sort(items, function(a, b) return a.label < b.label end)
+    items[#items + 1] = { label = "BACK", onSelect = function() end }
+    game.stack:push(Menu.new(game, items, { tx = 0, ty = 0, tw = 20, maxVisible = 7, startCloses = true }))
   end
 
     -- Online Options Menu (Shown in Start Menu once connected)
@@ -6013,10 +5831,8 @@
 
     local items = {
       {
-        label = (activeParty and "PARTY (ACTIVE)") or "CO-OP PARTY",
-        onSelect = function()
-          openPartyMainMenu(game)
-        end
+        label = "WARP TO PLAYER",
+        onSelect = function() GtsUI.openWarpMenu(game) end
       },
       {
         label = "MY PROFILE",
@@ -6130,6 +5946,13 @@
       GtsUI.openAddressEntry(game)
       game.stack:push(TextBox.new(game, wrapText("COULDN'T REACH THE SERVER AT "
         .. GtsUI.displayAddress(getServerUrl()) .. ".\nCHECK THE ADDRESS WITH THE HOST.")))
+      return
+    end
+    -- a server with a password tells nothing else without it
+    local refused = GtsUI.passwordText(srvInfo.error)
+    if refused then
+      GtsUI.openAddressEntry(game)
+      game.stack:push(TextBox.new(game, wrapText(refused)))
       return
     end
     if srvInfo and (srvInfo.modVersion or srvInfo.version) then

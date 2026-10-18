@@ -1,7 +1,7 @@
 # Gen1Online+
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Mod Version: v1.0.4](https://img.shields.io/badge/version-1.0.4-green.svg)](manifest.json)
+[![Mod Version: v1.0.5](https://img.shields.io/badge/version-1.0.5-green.svg)](manifest.json)
 [![Games: Red, Blue, Yellow, Crystal, FireRed, LeafGreen](https://img.shields.io/badge/target-Red%20%7C%20Blue%20%7C%20Yellow%20%7C%20Crystal%20%7C%20FireRed%20%7C%20LeafGreen-blue.svg)](https://github.com/bryanthaboi/gen1recomp)
 
 Online multiplayer for *Pokémon Red, Blue, Yellow, Crystal, FireRed* and *LeafGreen* on the [gen1recomp](https://github.com/bryanthaboi/gen1recomp) engine: see other trainers on the map, trade, battle and chat, on a server you host for your friends.
@@ -11,7 +11,7 @@ Online multiplayer for *Pokémon Red, Blue, Yellow, Crystal, FireRed* and *LeafG
 - **Live co-op overworld**: other players walk the map with you, with name tags and trainer avatars.
 - **Trading**: the GTS (START menu and the Pokémon Center PC), Wonder Trade, and face-to-face link trades on Red/Blue/Yellow and FireRed/LeafGreen (Crystal trades through the GTS). Trade evolutions included.
 - **PVP**: face another player, press **A**, and battle on the game's own link battle.
-- **Chat, co-op parties** (up to 4; warp to a teammate), trainer cards and an online level.
+- **Chat, warp to any friend online** (ONLINE SETTINGS > WARP TO PLAYER), trainer cards and an online level.
 - **A separate online save**: your offline save is never touched.
 - **Instant text**: every text box shows its whole page at once instead of letter by letter, in the field and in battles, on every game (offline too). Press **A** to go on, as usual.
 - **Faster online play**: the host can run everyone at up to 4X (like `game_speed = 1.5` in `server/server_config.txt`), walking, battles and PVP included. Music and sounds keep their normal speed.
@@ -25,12 +25,14 @@ A server hosts one generation: Red/Blue/Yellow together, Crystal, or FireRed/Lea
 The server is one Python file: Python 3.8 or newer, nothing to install.
 
 1. **Start it**: `server/start.sh` (Linux/macOS) or double-click `server\start.bat` (Windows; tick "Add python.exe to PATH" when installing Python). It prints the addresses to give your friends. **Ctrl+C** stops it; your world lives in `server/gts_data.json`.
-2. **Set it up** in `server/server_config.txt`, then restart: the address and port it listens on (`host`, `port`), the game speed for everyone (`game_speed`, 1 to 4, like 1.5) and the game modes. Command-line flags win over the file: `--host`, `--port`, `--data <file>`, `--gen 1|2|3`, `--config <file>`, `--new-run`.
-3. **Connect each game**: **START > CONNECT > SERVER ADDRESS**, type the host's address (like `192.168.1.23`; `:7779` is added when there's no port) and press **A**. The game remembers it. `gts_config.txt` in the mod folder holds the default, `server_url=http://127.0.0.1:7779`, which is right for the host.
+2. **Set it up** in `server/server_config.txt`, then restart: the address and port it listens on (`host`, `port`), the password (`server_password`, see below), the game speed for everyone (`game_speed`, 1 to 4, like 1.5) and the game modes. Command-line flags win over the file: `--host`, `--port`, `--password <word|auto|off>`, `--data <file>`, `--gen 1|2|3`, `--config <file>`, `--new-run`.
+3. **Connect each game**: **START > CONNECT > SERVER ADDRESS**, type the host's address and the password after a slash (like `192.168.1.23/K7QMXR2P`; `:7779` is added when there's no port, otherwise `192.168.1.23:8000/K7QMXR2P`) and press **A**. The game remembers it. `gts_config.txt` in the mod folder holds the default, `server_url=http://127.0.0.1:7779`; with a password the host types `127.0.0.1/PASSWORD` too (the server prints every address to use).
 4. **Let friends reach it**, one of:
    - **Same Wi-Fi**: the host's LAN address. Let TCP 7779 through the firewall: `sudo ufw allow 7779/tcp`, `sudo firewall-cmd --add-port=7779/tcp`, or on Windows allow Python on private networks.
    - **[Tailscale](https://tailscale.com/download)** (best over the internet): everyone joins the host's tailnet and uses its `100.x.y.z` address. Nothing to forward.
-   - **Port forwarding**: forward TCP 7779 to the host and share your public IP with friends only.
+   - **Port forwarding** (no Hamachi or Tailscale needed): forward TCP 7779 on your router to the host's PC, nothing else (no DMZ, no UPnP), and give friends `<your public IP>/PASSWORD` (a "what is my IP" search shows the IP).
+
+**The password** keeps strangers out of a server anyone could reach: the server answers nobody without it, and an address that guesses wrong 10 times waits 15 minutes. `server_password = auto` (the default) picks one the first time the server starts, writes it into `server_config.txt` and prints the addresses to give your friends; set your own (4 to 16 letters and digits) or `off` (a LAN or Tailscale only) instead. Connections and requests are limited per address too, in memory only. The game can't encrypt its traffic, so the password (and everything else) travels in plain text: never use a password you use anywhere else, and keep `server/gts_data.json` (everyone's recovery tokens) to yourself.
 
 The first game to connect decides the server's generation (or start it with `--gen`). To host two, give each its own port and data file: `server/start.sh --gen 1 --port 7780 --data server/gts_data_gen1.json`.
 
@@ -42,6 +44,7 @@ Red/Blue/Yellow and FireRed/LeafGreen servers; everyone on the server plays the 
 
 ```
 host = 0.0.0.0             # 127.0.0.1 = this PC only
+server_password = auto     # off | a word: what friends type after the address
 port = 7779
 game_speed = 1             # 1.5 = everyone online 50% faster (any server)
 nuzlocke = hardcore        # off | hardcore
@@ -61,9 +64,9 @@ seed =                     # a number replays the same world
 ```
 
 - **Hardcore Nuzlocke**: only the first wild Pokémon you meet in each area can be caught (encounters before your first Poké Balls don't count), fainted Pokémon are gone for good, no items in battle, SET style, and a level cap at the next gym leader's ace. If any player's whole party faints, the run ends for everyone and a new world begins. With `nuzlocke_trades = 1`, each player gets one trade between two gym leaders (a GTS buy, a GTS or Wonder Trade deposit, or a link trade; taking a deposit back gives the trade back, and what comes back for a deposit is always yours to claim): beat a leader and you may trade once more.
-- **Randomizer**: wild Pokémon (swapped for ones of similar strength; on FireRed/LeafGreen any of the 386), items, gym badges and Oak's starters, with progression logic so every run can be finished. **Trainers**: random teams of the same strength; gym leaders and the Elite Four keep their type. **Crazy randomizer**: the same, with no strength matching, so a DRAGONITE can be on Route 1 at a Route 1 level, a starter can be any Pokémon at all, legendaries included, and randomized trainers get Pokémon of any strength (gym leaders and the Elite Four still keep their type). Every new Pokémon (wild, a starter or gift, a trainer's) also knows up to four moves drawn at random from its whole level-up list, whatever its level (a level 5 HO-OH may know SACRED FIRE); HM moves stay out. **Wild legendaries**: a small chance per wild encounter.
+- **Randomizer**: wild Pokémon (swapped for ones of similar strength; on FireRed/LeafGreen any of the 386), items, gym badges and Oak's starters (on Yellow, a starter other than PIKACHU doesn't follow you), with progression logic so every run can be finished. **Trainers**: random teams of the same strength; gym leaders and the Elite Four keep their type. **Crazy randomizer**: the same, with no strength matching, so a DRAGONITE can be on Route 1 at a Route 1 level, a starter can be any Pokémon at all, legendaries included, and randomized trainers get Pokémon of any strength (gym leaders and the Elite Four still keep their type). Every new Pokémon (wild, a starter or gift, a trainer's) also knows up to four moves drawn at random from its whole level-up list, whatever its level (a level 5 HO-OH may know SACRED FIRE); HM moves stay out. **Wild legendaries**: a small chance per wild encounter.
 - **Shared key items**: key items, HMs and badges belong to the team; whatever one player finds, everyone gets.
-- **Multiworld**: each player gets their own world, and every key item exists in only one of them.
+- **Multiworld**: each player gets their own world, and every key item exists in only one of them (`players` worlds; the first players to join each take one). If a player stops playing, the team may get stuck.
 - **ONLINE > RUN INFO** shows the modes, the level cap, your fallen Pokémon and the team's finds.
 
 Turning a mode on, or a new run starting, restarts each player's **online** save in the bedroom (the old one is kept as a backup). While a mode is on, every player needs the current version of the mod. On FireRed/LeafGreen, online link trades ignore the National Pokédex lock.

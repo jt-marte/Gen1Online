@@ -31,13 +31,13 @@ return function(game)
   -- client the mod itself loaded at boot
   local http, ltn12 = package.loaded["socket.http"], package.loaded["ltn12"]
   local function post(payload)
-    payload.modVersion = payload.modVersion or "1.0.4"
+    payload.modVersion = payload.modVersion or "1.0.5"
     payload.gameVersion = payload.gameVersion or "Pokemon Crystal"
     local body = Json.encode(payload)
     local res = {}
     http.request({ url = BASE .. "/gts", method = "POST", source = ltn12.source.string(body),
       headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body),
-        ["X-Mod-Version"] = "1.0.4" }, sink = ltn12.sink.table(res) })
+        ["X-Mod-Version"] = "1.0.5" }, sink = ltn12.sink.table(res) })
     local ok, decoded = pcall(Json.decode, table.concat(res))
     return ok and decoded or nil
   end

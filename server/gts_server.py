@@ -8,8 +8,17 @@ standard library only: nothing to install.
     python3 server/gts_server.py --port 8000 --data /srv/gen1online.json
 
 Options can also come from the environment: PORT, GTS_DB_PATH,
-GTS_GENERATION, GTS_CONFIG and GTS_MOD_VERSION (the version this server
-speaks; clients with the same major.minor are accepted).
+GTS_GENERATION, GTS_CONFIG, GTS_PASSWORD and GTS_MOD_VERSION (the version
+this server speaks; clients with the same major.minor are accepted).
+
+A password keeps strangers out, so a port forwarded on the router is safe to
+open: friends type it after the address (`1.2.3.4/PASSWORD`, which the
+client sends as the first part of every path), and without it the server
+answers nobody.  server_config.txt's `server_password = auto` (the default)
+picks one on the first start and writes it there.  Connections, requests
+and bodies are limited per address, in memory only.  The traffic itself is
+plain HTTP (the client has no TLS): the password and accounts' tokens travel
+unencrypted, so a password must never be one used anywhere else.
 
 Game modes come from server/server_config.txt (or --config): a hardcore
 Nuzlocke and a co-op randomizer, both off by default and played on Gen 1
@@ -32,13 +41,13 @@ Accounts, GTS listings and claims, the trade history, chat, the Wonder Trade
 pool and its claims are saved to a JSON file (written atomically).  Who is
 online, challenges, battle rooms and parties live in memory only.
 
-There is no analytics, rate limiting, IP logging or anti-cheat: run it for
-people you trust (on your LAN, over Tailscale, or behind a port forward you
-only share with friends).
+There is no analytics, IP logging or anti-cheat: run it for people you trust
+(on your LAN, over Tailscale, or behind a port forward with a password).
 """
 
 import argparse
 import copy
+import hmac
 import json
 import os
 import random
@@ -55,10 +64,25 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_VERSION = "1.0.4"
+DEFAULT_VERSION = "1.0.5"
 DEFAULT_PORT = 7779
 DEFAULT_DATA = os.path.join(SCRIPT_DIR, "gts_data.json")
 DEFAULT_CONFIG = os.path.join(SCRIPT_DIR, "server_config.txt")
+
+# An open port (router port forwarding): a password in the address, and
+# limits that keep one address from tying the server up.  The addresses are
+# kept in memory only, never logged or saved.
+PASSWORD_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"   # what auto picks: no 0/O or 1/I/L
+PASSWORD_AUTO_LEN = 8
+PASSWORD_MIN_LEN, PASSWORD_MAX_LEN = 4, 16
+ROUTE_ROOTS = ("gts", "server", "chat", "player")   # every path's first part
+WRONG_PASSWORD_TRIES = 10        # this many wrong passwords from one address ...
+WRONG_PASSWORD_WINDOW = 10 * 60  # ... within this long lock it out ...
+WRONG_PASSWORD_LOCK = 15 * 60    # ... for this long (TOO_MANY_TRIES)
+MAX_CONNECTIONS = 64             # open at once, everyone together
+MAX_CONNECTIONS_PER_IP = 16      # open at once from one address
+REQUEST_RATE = 60.0              # requests a second one address keeps up
+REQUEST_BURST = 600              # and how many it may send at once (SLOW_DOWN past it)
 
 PRESENCE_TTL = 30            # a player is dropped after this long without a sync
 SESSION_LOCK = 10            # another session is "live" if it synced this recently
@@ -78,7 +102,7 @@ CHAT_KEEP = 100
 CHAT_HISTORY_SENT = 50
 CHAT_MAX_LEN = 200           # the client's limit
 NAME_MAX_LEN = 16
-MAX_BODY = 2 * 1024 * 1024
+MAX_BODY = 256 * 1024       # the client's biggest post is a few kilobytes
 MAX_INBOX = 500
 
 # The client's addMmoXp amounts.  sync_xp carries the client's own delta in
@@ -143,6 +167,9 @@ RULE_DEFAULTS = {
     # everyone's game speed while online, battles included (not a game mode:
     # like host and port it is no rule a run is started under)
     "game_speed": 1.0,
+    # what friends type after the address: auto (picked on the first start
+    # and written into server_config.txt), off, or a word (not a game mode)
+    "server_password": "auto",
 }
 NUZLOCKE_MODES = ("off", "hardcore")
 TRADES_MAX = 99                 # nuzlocke_trades: trades allowed between two gym leaders
@@ -307,6 +334,8 @@ def parse_rules(text):
                 if not 1 <= port <= 65535:
                     raise ValueError("port must be 1..65535")
                 rules[key] = port
+            elif key == "server_password":
+                rules[key] = parse_password(value)
             elif key == "players":
                 players = int(value)
                 if not 2 <= players <= MAX_WORLDS:
@@ -364,6 +393,73 @@ def parse_trades(value):
     if not 1 <= count <= TRADES_MAX:
         raise ValueError("nuzlocke_trades is off, on, or a number from 1 to %d" % TRADES_MAX)
     return count
+
+
+def parse_password(value):
+    """server_password: auto (or empty), off, or 4 to 16 letters and digits,
+    read in capitals (the game's keyboards type them)."""
+    word = str(value if value is not None else "").strip()
+    if word.lower() in ("", "auto"):
+        return "auto"
+    if word.lower() in ("off", "none", "no"):
+        return "off"
+    if not (word.isascii() and word.isalnum()
+            and PASSWORD_MIN_LEN <= len(word) <= PASSWORD_MAX_LEN):
+        raise ValueError("server_password is auto, off, or %d to %d letters and digits, not %r"
+                         % (PASSWORD_MIN_LEN, PASSWORD_MAX_LEN, word))
+    if word.lower() in ROUTE_ROOTS:
+        raise ValueError("server_password can't be %r (the server's own paths start with it)" % word)
+    return word.upper()
+
+
+def resolve_password(cli, environ, rules):
+    """The password setting: --password wins, then $GTS_PASSWORD, then
+    server_config.txt's (auto when it has none).  auto, off or the word."""
+    environ = os.environ if environ is None else environ
+    if cli is not None:
+        return parse_password(cli)
+    if environ.get("GTS_PASSWORD"):
+        return parse_password(environ["GTS_PASSWORD"])
+    return parse_password(rules.get("server_password", "auto"))
+
+
+def new_password():
+    return "".join(secrets.choice(PASSWORD_ALPHABET) for _ in range(PASSWORD_AUTO_LEN))
+
+
+PASSWORD_LINE = re.compile(r"^([ \t]*server_password[ \t]*=)[^\r\n#]*(#[^\r\n]*)?(?=\r|\n|\Z)",
+                           re.IGNORECASE | re.MULTILINE)
+
+
+def save_password(path, password):
+    """Write a picked password into server_config.txt in place of its
+    server_password line (or add one), keeping the file's BOM and line
+    endings, atomically.  False when the file can't be written."""
+    try:
+        raw = b""
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                raw = f.read()
+        bom = raw.startswith(b"\xef\xbb\xbf")
+        text = raw[3:].decode("utf-8") if bom else raw.decode("utf-8")
+        newline = "\r\n" if "\r\n" in text else "\n"
+
+        def put(match):
+            comment = match.group(2)
+            return match.group(1) + " " + password + ((" " + comment) if comment else "")
+        text, found = PASSWORD_LINE.subn(put, text, count=1)
+        if not found:
+            if text and not text.endswith(("\n", "\r")):
+                text += newline
+            text += "server_password = " + password + newline
+        data = (b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8")
+        tmp = path + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+        return True
+    except (OSError, UnicodeDecodeError):
+        return False
 
 
 def listen_address(cli_host, cli_port, rules, environ=None):
@@ -1537,12 +1633,80 @@ GtsStore.ACTIONS = {name[4:]: getattr(GtsStore, name)
 # --------------------------------------------------------------------------
 # HTTP
 
+class Guard:
+    """What one address may do, kept in memory only (never logged or saved):
+    how many connections it holds, how fast it sends requests (a token
+    bucket on the real clock), and its wrong passwords (on the store's
+    clock, so the tests can move it)."""
+
+    def __init__(self, clock=time.time):
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.total = 0
+        self.conns = {}      # address -> open connections
+        self.buckets = {}    # address -> [tokens, last refill]
+        self.misses = {}     # address -> times of its recent wrong passwords
+        self.locked = {}     # address -> locked out until
+
+    def open(self, ip, total_max, ip_max):
+        with self.lock:
+            if self.total >= total_max or self.conns.get(ip, 0) >= ip_max:
+                return False
+            self.total += 1
+            self.conns[ip] = self.conns.get(ip, 0) + 1
+            return True
+
+    def close(self, ip):
+        with self.lock:
+            self.total = max(0, self.total - 1)
+            left = self.conns.get(ip, 0) - 1
+            if left > 0:
+                self.conns[ip] = left
+            else:
+                self.conns.pop(ip, None)
+
+    def allow(self, ip, rate, burst):
+        now = time.monotonic()
+        with self.lock:
+            if len(self.buckets) > 1000:   # forget the addresses that went quiet
+                for old in [a for a, b in self.buckets.items() if now - b[1] > 60]:
+                    del self.buckets[old]
+            tokens, last = self.buckets.get(ip, (burst, now))
+            tokens = min(burst, tokens + max(0.0, now - last) * rate)
+            if tokens < 1:
+                self.buckets[ip] = [tokens, now]
+                return False
+            self.buckets[ip] = [tokens - 1, now]
+            return True
+
+    def is_locked(self, ip):
+        with self.lock:
+            until = self.locked.get(ip)
+            if until is None:
+                return False
+            if self.clock() < until:
+                return True
+            del self.locked[ip]
+            return False
+
+    def missed(self, ip):
+        now = self.clock()
+        with self.lock:
+            recent = [t for t in self.misses.get(ip, ()) if now - t < WRONG_PASSWORD_WINDOW]
+            recent.append(now)
+            if len(recent) >= WRONG_PASSWORD_TRIES:
+                self.locked[ip] = now + WRONG_PASSWORD_LOCK
+                self.misses.pop(ip, None)
+            else:
+                self.misses[ip] = recent
+
+
 class GtsHandler(BaseHTTPRequestHandler):
     # HTTP/1.1: the client's async engine reuses keep-alive connections, and
     # its synchronous helpers send Connection: close and read to EOF.
     protocol_version = "HTTP/1.1"
     server_version = "Gen1OnlineServer"
-    timeout = 300   # an idle keep-alive connection is closed after this
+    timeout = 60    # an idle keep-alive connection is closed after this (clients sync every few seconds)
 
     def version_string(self):
         return self.server_version
@@ -1593,6 +1757,31 @@ class GtsHandler(BaseHTTPRequestHandler):
             raise ValueError("body too large")
         return self.rfile.read(length) if length else b""
 
+    def _gate(self, path):
+        """(path, None) with the password taken off, or (None, an answer):
+        an address locked out, sending too fast, or with no or the wrong
+        password.  Every refusal closes the connection."""
+        server, ip = self.server, self.client_address[0]
+        guard = server.guard
+        if guard.is_locked(ip):
+            return None, {"success": False, "error": "TOO_MANY_TRIES"}
+        if not guard.allow(ip, server.request_rate, server.request_burst):
+            return None, {"success": False, "error": "SLOW_DOWN"}
+        parts = path.split("/")
+        first = parts[1] if len(parts) > 1 else ""
+        rest = "/" + "/".join(parts[2:]) if len(parts) > 2 else "/"
+        if server.password:
+            if first == "" or first.lower() in ROUTE_ROOTS:
+                return None, {"success": False, "error": "PASSWORD_REQUIRED"}
+            given = first.upper().encode("utf-8", "surrogateescape")
+            if not hmac.compare_digest(given, server.password.encode("ascii")):
+                guard.missed(ip)
+                return None, {"success": False, "error": "WRONG_PASSWORD"}
+            return rest, None
+        if first and first.lower() not in ROUTE_ROOTS:
+            return rest, None   # a password typed for a server that has none
+        return path, None
+
     def _guard(self, fn):
         try:
             self._reply(fn())
@@ -1607,6 +1796,10 @@ class GtsHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         def run():
             path, query_string = self._path()
+            path, refused = self._gate(path)
+            if refused:
+                self.close_connection = True
+                return refused
             query = {k: v[-1] for k, v in parse_qs(
                 query_string, keep_blank_values=True, encoding="utf-8",
                 errors="surrogateescape").items()}
@@ -1616,6 +1809,10 @@ class GtsHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         def run():
             path, _ = self._path()
+            path, refused = self._gate(path)
+            if refused:
+                self.close_connection = True   # its body is left unread
+                return refused
             try:
                 raw = self._read_body()
             except ValueError:
@@ -1637,10 +1834,35 @@ class GtsHTTPServer(ThreadingHTTPServer):
     # in use, so two servers would silently share one data file: there the
     # second start must fail instead.
     allow_reuse_address = os.name != "nt"
+    max_connections = MAX_CONNECTIONS
+    max_connections_per_ip = MAX_CONNECTIONS_PER_IP
+    request_rate = REQUEST_RATE
+    request_burst = REQUEST_BURST
 
-    def __init__(self, address, store):
+    def __init__(self, address, store, password=None):
         self.store = store
+        self.password = password   # None: anyone may connect
+        self.guard = Guard(store.clock)
         ThreadingHTTPServer.__init__(self, address, GtsHandler)
+
+    # one more connection than an address (or everyone) may hold is closed
+    # at once, before it gets a thread
+    def process_request(self, request, client_address):
+        ip = client_address[0]
+        if not self.guard.open(ip, self.max_connections, self.max_connections_per_ip):
+            self.shutdown_request(request)
+            return
+        try:
+            ThreadingHTTPServer.process_request(self, request, client_address)
+        except Exception:
+            self.guard.close(ip)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            ThreadingHTTPServer.process_request_thread(self, request, client_address)
+        finally:
+            self.guard.close(client_address[0])
 
 
 # --------------------------------------------------------------------------
@@ -1697,7 +1919,14 @@ def modes_line(store):
     return "%s; run %d, seed %s" % (", ".join(parts), view["runId"], view["seed"])
 
 
-def banner(host, port, store):
+def share_address(ip, port, password):
+    """What a friend types in SERVER ADDRESS: the port only when it isn't
+    7779, the password after a slash."""
+    text = ip if port == DEFAULT_PORT else "%s:%d" % (ip, port)
+    return text + ("/" + password if password else "")
+
+
+def banner(host, port, store, password=None, saved=True):
     gen = store.data["generation"]
     world = (GENERATION_NAMES[gen] if gen else
              "not set yet: the first game to connect decides (or start with --gen 1, 2 or 3)")
@@ -1707,7 +1936,11 @@ def banner(host, port, store):
              "Modes: %s" % modes_line(store)]
     if store.game_speed() != 1:
         lines.append("Game speed: %gX for everyone online, battles included" % store.game_speed())
-    lines += ["", "Put one of these lines in gts_config.txt (next to the mod's main.lua):"]
+    if password:
+        lines.append("Password: %s%s" % (password, " (server_password in server_config.txt)" if saved
+                                          else " (for this run only: server_config.txt couldn't be written)"))
+    lines += ["", "Friends type the address for their network in START > CONNECT > SERVER ADDRESS",
+              "(or put its server_url line in gts_config.txt, next to the mod's main.lua):"]
     urls = [("this PC", "127.0.0.1")]
     if host in ("0.0.0.0", ""):
         ip, ts = lan_ip(), tailscale_ip()
@@ -1717,11 +1950,18 @@ def banner(host, port, store):
             urls.append(("Tailscale", ts))
     elif not host.startswith("127."):
         urls = [("this address", host)]
+    key = ("/" + password) if password else ""
     for label, ip in urls:
-        lines.append("  %-15s server_url=http://%s:%d" % (label + ":", ip, port))
+        lines.append("  %-15s %-28s  server_url=http://%s:%d%s"
+                     % (label + ":", share_address(ip, port, password), ip, port, key))
     lines.append("")
-    lines.append("Over the internet: forward TCP %d on your router and give friends"
-                 " server_url=http://<your public IP>:%d (or use Tailscale)." % (port, port))
+    lines.append("Over the internet: forward TCP %d on your router to this PC, then give friends"
+                 % port)
+    lines.append("  %s  (your public IP is what a \"what is my IP\" search shows)"
+                 % share_address("<your public IP>", port, password))
+    if not password and not host.startswith("127."):
+        lines += ["", "WARNING: no password (server_password = off): anyone who can reach this port",
+                  "can join. That's fine on a LAN or Tailscale; set one before port forwarding."]
     lines.append("Press Ctrl+C to stop.")
     return "\n".join(lines)
 
@@ -1743,6 +1983,11 @@ def main(argv=None):
     parser.add_argument("--config", default=os.environ.get("GTS_CONFIG") or DEFAULT_CONFIG,
                         help="settings file: address, port, game modes "
                              "(default server/server_config.txt, or $GTS_CONFIG)")
+    parser.add_argument("--password", default=None,
+                        help="what friends type after the address (1.2.3.4/PASSWORD): 4 to 16 "
+                             "letters and digits, auto (pick one and save it in server_config.txt) "
+                             "or off (default: $GTS_PASSWORD, else server_config.txt's "
+                             "server_password, else auto)")
     parser.add_argument("--new-run", action="store_true",
                         help="end the current Nuzlocke/randomizer run and start the next one")
     args = parser.parse_args(argv)
@@ -1753,6 +1998,11 @@ def main(argv=None):
         print("%s: %s" % (args.config, err), file=sys.stderr)
         return 1
     host, port = listen_address(args.host, args.port, rules)
+    try:
+        password = resolve_password(args.password, os.environ, rules)
+    except ValueError as err:
+        print(err, file=sys.stderr)
+        return 1
     try:
         store = GtsStore(args.data, version=os.environ.get("GTS_MOD_VERSION") or DEFAULT_VERSION,
                          generation=args.gen, rules=rules)
@@ -1771,7 +2021,14 @@ def main(argv=None):
         # run in memory and overwrite this one on its next save.  A changed
         # config began a run just now: that one is it, not another.
         store.new_run()
-    print(banner(host, port, store), flush=True)
+    # auto picks one only now that the server really starts, so a start
+    # that fails (a busy port, another world's data) leaves the file alone
+    saved = True
+    if password == "auto":
+        password = new_password()
+        saved = save_password(args.config, password)
+    httpd.password = None if password == "off" else password
+    print(banner(host, port, store, httpd.password, saved), flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

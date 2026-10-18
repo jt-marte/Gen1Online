@@ -16,6 +16,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 from urllib.parse import quote
@@ -23,7 +24,22 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gts_server  # noqa: E402
 
-VERSION = "1.0.4"
+VERSION = "1.0.5"
+SHIPPED_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_config.txt")
+_shipped = None
+
+
+def setUpModule():
+    global _shipped
+    with open(SHIPPED_CONFIG, "rb") as f:
+        _shipped = f.read()
+
+
+def tearDownModule():
+    # server_password = auto writes a picked password into its config file:
+    # nothing here may ever do that to the one that ships
+    with open(SHIPPED_CONFIG, "rb") as f:
+        assert f.read() == _shipped, "a test changed the shipped server_config.txt"
 
 
 class FakeClock:
@@ -58,12 +74,14 @@ class ServerTest(unittest.TestCase):
 
     generation = None   # a test class can start its server as --gen 1 or 2
     rules = None        # ... and with game modes (server_config.txt settings)
+    password = None     # ... and with a server password
+    prefix = ""         # what the helpers put in front of every path (/PASSWORD)
 
     def start(self):
         self.store = gts_server.GtsStore(self.path, version=VERSION, clock=self.clock,
                                          generation=self.generation, rules=self.rules)
         self.store.announce = lambda text: None
-        self.httpd = gts_server.GtsHTTPServer(("127.0.0.1", 0), self.store)
+        self.httpd = gts_server.GtsHTTPServer(("127.0.0.1", 0), self.store, password=self.password)
         self.port = self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, args=(0.05,), daemon=True)
         self.thread.start()
@@ -102,13 +120,13 @@ class ServerTest(unittest.TestCase):
             payload.setdefault("modesVersion", gts_server.MODES_VERSION)
             if payload["modesVersion"] is None:
                 del payload["modesVersion"]
-        return self.request("POST", "/gts", json.dumps(payload).encode("utf-8"),
+        return self.request("POST", self.prefix + "/gts", json.dumps(payload).encode("utf-8"),
                             {"Content-Type": "application/json", "X-Mod-Version": version or ""})
 
     def get(self, path, version=VERSION):
         if version is not None:
             path += ("&" if "?" in path else "?") + "version=%s&modVersion=%s" % (version, version)
-        return self.request("GET", path, headers={"X-Mod-Version": version or ""})
+        return self.request("GET", self.prefix + path, headers={"X-Mod-Version": version or ""})
 
     def register(self, name, **fields):
         res = self.post("register_player", isNewCharacter=True, name=name,
@@ -1021,7 +1039,7 @@ class BindingTests(ServerTest):
 class CommandLineTests(unittest.TestCase):
     def test_defaults(self):
         self.assertEqual(gts_server.DEFAULT_PORT, 7779)
-        self.assertEqual(gts_server.DEFAULT_VERSION, "1.0.4")
+        self.assertEqual(gts_server.DEFAULT_VERSION, "1.0.5")
         self.assertEqual(gts_server.DEFAULT_DATA,
                          os.path.join(os.path.dirname(os.path.abspath(gts_server.__file__)),
                                       "gts_data.json"))
@@ -1543,6 +1561,241 @@ class RunSignatureTests(unittest.TestCase):
             json.dump(data, f)
         self.assertEqual(self.run_of({"nuzlocke": "hardcore"})["id"], run["id"])
         self.assertEqual(self.run_of({"nuzlocke": "hardcore", "nuzlocke_trades": 1})["id"], run["id"] + 1)
+
+
+# ---- an open port: the server password and the limits ---------------------------------
+
+class PasswordSettingTests(unittest.TestCase):
+    def test_values(self):
+        P = gts_server.parse_password
+        self.assertEqual([P(""), P("auto"), P("AUTO"), P(None)], ["auto"] * 4)
+        self.assertEqual([P("off"), P("None")], ["off", "off"])
+        self.assertEqual(P(" Pikachu25 "), "PIKACHU25")
+        for bad in ("pika chu", "abc", "A" * 17, "pika-chu", "gts", "Server", "pikachü"):
+            with self.assertRaises(ValueError, msg=bad):
+                P(bad)
+        rules = gts_server.parse_rules("server_password = Mew151\n")
+        self.assertEqual(rules["server_password"], "MEW151")
+        with self.assertRaises(ValueError) as err:
+            gts_server.parse_rules("\nserver_password = no way\n")
+        self.assertIn("line 2", str(err.exception))
+
+    def test_the_command_line_wins_then_the_environment_then_the_file(self):
+        R = gts_server.resolve_password
+        rules = gts_server.parse_rules("server_password = FILEWORD\n")
+        self.assertEqual(R("cliword", {"GTS_PASSWORD": "envword"}, rules), "CLIWORD")
+        self.assertEqual(R(None, {"GTS_PASSWORD": "envword"}, rules), "ENVWORD")
+        self.assertEqual(R(None, {}, rules), "FILEWORD")
+        self.assertEqual(R(None, {}, gts_server.parse_rules("")), "auto")
+        self.assertEqual(R("off", {}, rules), "off")
+
+    def test_auto_picks_eight_easy_characters(self):
+        picks = {gts_server.new_password() for _ in range(50)}
+        self.assertGreater(len(picks), 45)
+        for word in picks:
+            self.assertEqual(len(word), 8)
+            self.assertTrue(set(word) <= set(gts_server.PASSWORD_ALPHABET))
+            self.assertEqual(gts_server.parse_password(word), word)
+
+    def test_save_replaces_the_line_and_keeps_the_file(self):
+        folder = tempfile.mkdtemp()
+        path = os.path.join(folder, "c.txt")
+        with open(path, "wb") as f:
+            f.write(b"host = 0.0.0.0\r\n# server_password = auto | off\r\n"
+                    b"server_password = auto   # picked once\r\nseed =\r\n")
+        self.assertTrue(gts_server.save_password(path, "K7QMXR2P"))
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"host = 0.0.0.0\r\n# server_password = auto | off\r\n"
+                                       b"server_password = K7QMXR2P # picked once\r\nseed =\r\n")
+        self.assertEqual(gts_server.load_rules(path)["server_password"], "K7QMXR2P")
+        # an older file without the setting gets it added; a BOM stays
+        with open(path, "wb") as f:
+            f.write(b"\xef\xbb\xbfport = 7779")
+        self.assertTrue(gts_server.save_password(path, "MEW151"))
+        with open(path, "rb") as f:
+            self.assertEqual(f.read(), b"\xef\xbb\xbfport = 7779\nserver_password = MEW151\n")
+        self.assertEqual(gts_server.load_rules(path)["server_password"], "MEW151")
+        self.assertFalse(gts_server.save_password(os.path.join(folder, "no", "such", "c.txt"), "MEW151"))
+
+    def test_the_shipped_file_asks_for_auto(self):
+        self.assertEqual(gts_server.load_rules(SHIPPED_CONFIG)["server_password"], "auto")
+        with open(SHIPPED_CONFIG, encoding="utf-8") as f:
+            self.assertIn("\nserver_password = auto\n", f.read())
+
+    def test_the_password_is_no_rule_and_starts_no_run(self):
+        a = gts_server.parse_rules("randomizer = on\nseed = 5\nserver_password = AAAA\n")
+        b = gts_server.parse_rules("randomizer = on\nseed = 5\nserver_password = BBBB\n")
+        self.assertEqual(gts_server.rules_view(a), gts_server.rules_view(b))
+        self.assertNotIn("AAAA", json.dumps(gts_server.rules_view(a)))
+        path = os.path.join(tempfile.mkdtemp(), "d.json")
+        gts_server.GtsStore(path, rules=a)
+        self.assertEqual(gts_server.GtsStore(path, rules=b).data["run"]["id"], 1)
+
+    def test_banner_gives_the_addresses_to_share(self):
+        store = gts_server.GtsStore(os.path.join(tempfile.mkdtemp(), "d.json"))
+        text = gts_server.banner("0.0.0.0", 7779, store, "PIKACHU", True)
+        self.assertIn("Password: PIKACHU (server_password in server_config.txt)", text)
+        self.assertIn("127.0.0.1/PIKACHU", text)
+        self.assertIn("server_url=http://127.0.0.1:7779/PIKACHU", text)
+        self.assertIn("<your public IP>/PIKACHU", text)
+        self.assertNotIn("WARNING", text)
+        other = gts_server.banner("0.0.0.0", 8000, store, "PIKACHU", False)
+        self.assertIn("127.0.0.1:8000/PIKACHU", other)
+        self.assertIn("for this run only", other)
+        self.assertIn("WARNING: no password", gts_server.banner("0.0.0.0", 7779, store))
+        self.assertNotIn("WARNING", gts_server.banner("127.0.0.1", 7779, store))
+
+    def test_a_bad_password_stops_the_start_and_a_failed_start_saves_none(self):
+        folder = tempfile.mkdtemp()
+        data, config = os.path.join(folder, "d.json"), os.path.join(folder, "c.txt")
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(gts_server.main(["--data", data, "--config", config, "--port", "0",
+                                              "--password", "no way"]), 1)
+        self.assertIn("server_password is auto, off", err.getvalue())
+        with open(config, "w", encoding="utf-8") as f:
+            f.write("server_password = auto\n")
+        busy = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            busy.bind(("127.0.0.1", 0))
+            busy.listen(1)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(gts_server.main(["--data", data, "--config", config, "--host", "127.0.0.1",
+                                                  "--port", str(busy.getsockname()[1])]), 1)
+        finally:
+            busy.close()
+        with open(config, encoding="utf-8") as f:
+            self.assertEqual(f.read(), "server_password = auto\n", "no password saved for a server that never ran")
+
+
+class PasswordServerTests(ServerTest):
+    password = "ZQXW42"
+    prefix = "/ZQXW42"
+
+    def info(self, path):
+        return self.request("GET", path + "?version=%s&modVersion=%s" % (VERSION, VERSION))
+
+    def test_the_right_password_in_any_case_and_any_slashes(self):
+        for path in ("/ZQXW42/server/info", "/zqxw42/server/info", "//ZqXw42//server/info/"):
+            res = self.info(path)
+            self.assertTrue(res.get("success"), (path, res))
+            self.assertEqual(res.get("version"), VERSION)
+        account = self.register("ASH")
+        synced = self.sync(account["trainerId"])
+        self.assertTrue(synced["success"], synced)
+        for answer in (self.info("/ZQXW42/server/info"), account, synced):
+            self.assertNotIn("ZQXW42", json.dumps(answer), "the password is never sent back")
+
+    def test_no_password_or_a_wrong_one_is_refused(self):
+        self.assertError(self.info("/server/info"), "PASSWORD_REQUIRED")
+        self.assertError(self.request("GET", "/"), "PASSWORD_REQUIRED")
+        self.assertError(self.request("POST", "/gts", b'{"action":"get_quests"}',
+                                      {"Content-Type": "application/json"}), "PASSWORD_REQUIRED")
+        self.assertError(self.info("/RAICHU/server/info"), "WRONG_PASSWORD")
+        self.assertError(self.request("POST", "/RAICHU/gts", b'{"action":"get_quests"}',
+                                      {"Content-Type": "application/json"}), "WRONG_PASSWORD")
+        refused = self.info("/server/info")
+        self.assertNotIn("version", refused, "nothing about the server without the password")
+
+    def test_ten_wrong_passwords_lock_the_address_out_for_a_while(self):
+        for _ in range(30):
+            self.assertError(self.info("/server/info"), "PASSWORD_REQUIRED")   # no password: no count
+        for i in range(gts_server.WRONG_PASSWORD_TRIES):
+            self.assertError(self.info("/GUESS%d/server/info" % i), "WRONG_PASSWORD")
+        self.assertError(self.info("/ZQXW42/server/info"), "TOO_MANY_TRIES")
+        self.clock.advance(gts_server.WRONG_PASSWORD_LOCK - 5)
+        self.assertError(self.info("/ZQXW42/server/info"), "TOO_MANY_TRIES")
+        self.clock.advance(10)
+        self.assertTrue(self.info("/ZQXW42/server/info")["success"])
+        # misses spread out over more than the window never add up
+        for i in range(gts_server.WRONG_PASSWORD_TRIES - 1):
+            self.assertError(self.info("/GUESS%d/server/info" % i), "WRONG_PASSWORD")
+        self.clock.advance(gts_server.WRONG_PASSWORD_WINDOW + 1)
+        self.assertError(self.info("/GUESS/server/info"), "WRONG_PASSWORD")
+        self.assertTrue(self.info("/ZQXW42/server/info")["success"])
+
+    def test_a_refusal_closes_the_connection(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            conn.request("GET", "/server/info")
+            res = conn.getresponse()
+            res.read()
+            self.assertEqual(res.status, 200)
+            self.assertEqual(res.getheader("Connection"), "close")
+        finally:
+            conn.close()
+
+
+class NoPasswordTests(ServerTest):
+    def test_a_password_typed_for_a_server_without_one_is_ignored(self):
+        self.prefix = "/PIKACHU"
+        self.assertTrue(self.get("/server/info")["success"])
+        self.assertTrue(self.get("/gts/browse")["success"])
+        self.prefix = ""
+        self.assertTrue(self.get("/server/info")["success"])
+
+
+class LimitTests(ServerTest):
+    def raw(self):
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=3)
+        return sock
+
+    def closed_at_once(self, sock):
+        try:
+            return sock.recv(1) == b""
+        except (ConnectionResetError, socket.timeout):
+            return False
+
+    def test_an_address_holds_only_so_many_connections(self):
+        self.httpd.max_connections_per_ip = 2
+        held = [self.raw(), self.raw()]
+        time.sleep(0.2)
+        extra = self.raw()
+        self.assertTrue(self.closed_at_once(extra), "the third connection is closed")
+        extra.close()
+        held.pop().close()
+        time.sleep(0.3)   # its handler sees the close and gives the slot back
+        self.assertTrue(self.get("/server/info")["success"])
+        for sock in held:
+            sock.close()
+
+    def test_everyone_together_too(self):
+        self.httpd.max_connections = 1
+        held = self.raw()
+        time.sleep(0.2)
+        extra = self.raw()
+        self.assertTrue(self.closed_at_once(extra))
+        extra.close()
+        held.close()
+        time.sleep(0.3)
+        self.assertTrue(self.get("/server/info")["success"])
+
+    def test_an_address_sending_too_fast_is_told_to_slow_down(self):
+        self.httpd.request_burst, self.httpd.request_rate = 3, 0.001
+        for _ in range(3):
+            self.assertTrue(self.get("/server/info")["success"])
+        self.assertError(self.get("/server/info"), "SLOW_DOWN")
+
+    def test_a_body_over_the_limit_is_refused_unread(self):
+        sock = self.raw()
+        try:
+            sock.sendall(("POST /gts HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                          "Content-Length: %d\r\n\r\n" % (gts_server.MAX_BODY + 1)).encode("ascii"))
+            data = b""
+            while b"}" not in data:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            self.assertIn(b'"BAD_REQUEST"', data)
+        finally:
+            sock.close()
+
+    def test_idle_connections_are_closed_after_a_minute(self):
+        self.assertEqual(gts_server.GtsHandler.timeout, 60)
+        self.assertLessEqual(gts_server.MAX_BODY, 256 * 1024)
+
+
 
 if __name__ == "__main__":
     unittest.main()

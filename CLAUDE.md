@@ -88,7 +88,7 @@ randomizer, multiworld) play on Gen 1 and FireRed/LeafGreen. `manifest.json` `"g
 | `npcs/`, `quests/` | Registries (empty). `npcs/{quest,trade}/*` are dead Gen 1 leftovers. |
 | `modes/` | Server game modes: `init.lua` (Gen 1: hooks, the run, shared items, Nuzlocke), `frlg.lua` (the same interface on FireRed/LeafGreen), `randomizer.lua` (pure: build/apply/undo the world from a seed; `build` also takes another game's places and species), `logic.lua` / `logic_frlg.lua` (what each item place needs), `rng.lua` (Park-Miller, pinned). Loaded by main.lua as `GtsUI.Modes` (exported as `mod.exports.modes`). |
 | `gen3/` | The FireRed/LeafGreen layer (`GtsUI.G3`, exported as `mod.exports.gen3`): `ui.lua` (the mod's screens on FireRed's modal stack, in its windows and font), `init.lua` (game wrapper, live save view, session swap, Pokémon and PC, presence actors, avatars, the PC's GTS row), `link.lua` (PVP and link trades over the server). |
-| `gts_config.txt` | `server_url=...`, read at startup through `mod:read`. The default only: an address typed in-game (START > CONNECT > SERVER ADDRESS, stored as `gts_server_url`) wins. |
+| `gts_config.txt` | `server_url=...`, read at startup through `mod:read` (a typed form like `1.2.3.4/PASSWORD` is normalized too). The default only: an address typed in-game (START > CONNECT > SERVER ADDRESS, stored as `gts_server_url`) wins. |
 | `server/` | The server (`gts_server.py`, stdlib Python), its unittest, `start.sh`/`start.bat`. Never packaged. |
 | `dev/` | Test harness (excluded from packages by `.modkitignore`). |
 
@@ -191,7 +191,9 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   `pcall` is wrapped so the mod's swallowed errors are reported.
   - `offline_test.lua`: mod installed, never connected.
   - `online_test.lua`: the full online flow against the local server, with a
-    second trainer, BUDDY, played over raw HTTP.
+    second trainer, BUDDY, played over raw HTTP; WARP TO PLAYER to BUDDY
+    (the rig's map can't really load, so `setMap` is watched: one cell east
+    of him), and a warp the game refuses (`setMap` answering false) said so.
   - `wonder_test.lua`: Wonder Trade with the real client and five raw-HTTP
     trainers: pool count, withdraw, a refused deposit, matching (nobody gets
     their own), CLAIM_PENDING, claim, and client/server XP agreement.
@@ -217,7 +219,8 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     `gen1_offline_test.lua` checks the vanilla game is intact (casino off,
     Pikachu follower untouched); `gen1_test.lua` runs the whole online flow
     on a Gen 1 server, including an accepted PVP battle (booked once) and a
-    link trade opening over the room. `run_tests.sh` runs both for Red, Blue
+    link trade opening over the room, and WARP TO PLAYER to BUDDY (the
+    overworld's `setMap` watched). `run_tests.sh` runs both for Red, Blue
     and Yellow.
   - `instant_text_test.lua` (plain LuaJIT from gen1recomp, the engine's
     `tests.love_stub`, a stand-in font for the ROM's charmap): each printer
@@ -239,7 +242,14 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     and D-pad, refused addresses, an unreachable server, and a typed address
     winning over `gts_config.txt`.
   - CONNECT opens that menu, so every test presses CONNECT, then `^JOIN`.
-  - `dev/server.sh` passes `GTS_GENERATION` through to the server.
+  - `dev/server.sh` passes `GTS_GENERATION` through to the server, and
+    `GTS_PASSWORD` (else `--password off`).
+  - `password_test.lua` (Crystal and Yellow, `GTS_PASSWORD=ZQXW42`): the
+    password hidden in menus, `/` on the D-pad, malformed ones refused,
+    none and a wrong one explained, the right one in lower case through
+    `love.textinput` and `gts_config.txt`'s `127.0.0.1:PORT/zqxw42`
+    connecting; on Crystal a character, then the server restarting with
+    another password disconnecting it with a note.
 - **Real-Crystal drivers** (`dev/drivers/`) boot the actual game from the
   imported ROM in the engine's `POKEPORT_DRIVER` mode.
 - **Real Yellow + voxel** (`dev/drivers/gen1_voxel.lua`): Yellow with
@@ -426,9 +436,8 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     refused), a new player, MY PROFILE and EXP (read off `G3.Font.draw`),
     ONLINE SETTINGS (title, avatar seen by BUDDY, favorite, token, live
     chat), a chat line typed into the chat box, BUDDY's card through A,
-    parties (BUDDY's invite accepted, MEMBERS, WARP TO MEMBER to BUDDY in
-    Pallet Town, LEAVE and the party gone; ASH's own party with BUDDY
-    joining), and a new device: a wrong token refused,
+    the ONLINE menu without CO-OP PARTY, WARP TO PLAYER to BUDDY in Pallet
+    Town (one cell east of him), and a new device: a wrong token refused,
     REDEEM RECOVERY TOKEN (lower case), DISCONNECT restoring the offline
     game. The mod's menus close when an item is picked, so a screen opened
     from one returns to the field.
@@ -474,6 +483,32 @@ no digits); Crystal and Gen 3 worlds' stay 8 hex characters.
 ### Wire protocol (the client defines it, so a server must match exactly)
 
 Transport and framing:
+- **The server password** (`server_password`, `--password`, `$GTS_PASSWORD`;
+  since 1.0.5) is the first part of every path: `/<PASSWORD>/gts`,
+  `/<PASSWORD>/server/info`. The client gets it for free: players type
+  `1.2.3.4/PASSWORD` (`GtsUI.normalizeServerAddress` makes it
+  `http://1.2.3.4:7779/PASSWORD`, capitals) and every request path is built
+  from the server URL (`asyncParseUrl`, the raw-TCP fallback, socket.http),
+  so a 1.0.0-1.0.4 client works too, through `gts_config.txt`. The server
+  compares it case-insensitively (`hmac.compare_digest`), strips it, then
+  routes as before; without it the answer is `PASSWORD_REQUIRED` (the first
+  part is a route root: `gts`, `server`, `chat`, `player`) or
+  `WRONG_PASSWORD`, and 10 wrong ones from an address in 10 minutes lock it
+  out for 15 (`TOO_MANY_TRIES`); every refusal closes the connection.
+  `/server/info` is behind it too. A server with none ignores an unknown
+  first part. `auto` (the default; also a missing key) picks 8 characters
+  from `PASSWORD_ALPHABET` once the port is bound and writes them into the
+  config file (`save_password`: the line replaced or added, BOM and line
+  endings kept, atomically); `dev/server.sh` passes `--password off` unless
+  `GTS_PASSWORD` is set, so no test writes one, and the server unittest
+  checks the shipped `server_config.txt` is untouched. Never commit a
+  generated password. The password is no rule (`rules_view` never shows
+  it, a change starts no run) and is never sent back.
+- **Limits for an open port** (`Guard`, in memory only, never logged):
+  64 connections in all and 16 per address (`GtsHTTPServer.process_request`
+  closes one more before it gets a thread), a token bucket of 60
+  requests/s with a burst of 600 per address (`SLOW_DOWN`), 256 KiB bodies,
+  60 s idle keep-alive. The client syncs every few seconds.
 - Plain HTTP. Without LuaSec the client rewrites `https://` to `http://`, so
   serve plain HTTP.
 - `POST /gts` with a JSON body dispatched on `action`. Answers are JSON with
@@ -506,8 +541,11 @@ Transport and framing:
   16 s challenge wait). Driver gotcha: a hold or wait counted in frames
   covers 1.5x the game time (`gen3_link.lua` scales LEAF's step).
 - Errors are `{"success":false,"error":"CODE"}`. The client acts on
-  `VERSION_MISMATCH`, `WRONG_GENERATION`, `ALREADY_LOGGED_IN`, `BANNED` and
-  `NAME_TAKEN`.
+  `VERSION_MISMATCH`, `WRONG_GENERATION`, `ALREADY_LOGGED_IN`, `BANNED`,
+  `NAME_TAKEN`, and the password's `PASSWORD_REQUIRED`, `WRONG_PASSWORD` and
+  `TOO_MANY_TRIES` (`GtsUI.passwordText`: on CONNECT's `/server/info` it
+  reopens SERVER ADDRESS with the reason; in a sync answer it disconnects,
+  "THE SERVER'S PASSWORD CHANGED").
 - POST bodies also carry `generation` (1 or 2) and GETs `&gen=<1|2>`; see
   "One generation per server".
 - **Send every JSON answer, errors included, with HTTP 200.** `makeHttpRequest`
@@ -599,11 +637,16 @@ Wonder Trade:
   offeredMon}`, `wonder_trade_withdraw` and `wonder_trade_claim`, all keyed on
   `trainerId`. The pool is server-side; see the design notes below.
 
-Parties:
-- `party_create`, `party_invite {targetId}`, `party_accept`, `party_decline`,
-  `party_leave` and `party_warp_target {targetId}` → `{success, map, x, y}`.
-  Parties hold up to 4, as `{leaderId, members: {tid: {name, level, map}}}`.
-  Invites and shared XP reach the target through `sync_pos`.
+Warps, and the old parties:
+- `party_warp_target {targetId}` → `{success, map, x, y}`, the target's last
+  sync, for any online player (no party needed): ONLINE SETTINGS > WARP TO
+  PLAYER (`GtsUI.openWarpMenu`, since 1.0.5) lists `/gts/players` but this
+  player and warps one cell east of the one picked.
+- The client has no co-op parties since 1.0.5. The server keeps
+  `party_create`, `party_invite {targetId}`, `party_accept`,
+  `party_decline` and `party_leave` (and `sync_pos`'s `partyInvite`,
+  `partyXp`, `party`) for 1.0.0-1.0.4 clients; they can go at 1.1. Parties
+  hold up to 4, as `{leaderId, members: {tid: {name, level, map}}}`.
 
 Quests:
 - `get_quests` → `{success, quests: []}`. There is no quest content yet.
@@ -654,7 +697,8 @@ Game modes (Gen 1 and FireRed/LeafGreen; `server/server_config.txt`,
 
 **Why a rewrite.** The legacy server was about 2,700 lines, and most of it was
 dead weight for a friends' server: Texas Hold'em tables, anti-cheat audits,
-an IP ledger, an HTML analytics dashboard, rate limiting, Cloudflare
+an IP ledger, an HTML analytics dashboard, rate limiting (1.0.5 added a
+minimal, memory-only one for open ports: see "Limits for an open port"), Cloudflare
 assumptions and a Gold-only game gate. It also predated 0.5.x, and Wonder
 Trade was never server-side. The client fully specifies the protocol above,
 so a small server built against it is simpler to trust and to run.

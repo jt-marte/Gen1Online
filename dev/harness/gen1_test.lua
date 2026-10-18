@@ -23,19 +23,19 @@ local ltn12 = require("ltn12")
 local socket = require("socket")
 
 local function post(payload)
-  payload.modVersion = payload.modVersion or "1.0.4"
+  payload.modVersion = payload.modVersion or "1.0.5"
   payload.gameVersion = payload.gameVersion or "Pokemon Blue"
   local body = Json.encode(payload)
   local out = {}
   http.request({ url = BASE .. "/gts", method = "POST", source = ltn12.source.string(body),
     headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body),
-      ["X-Mod-Version"] = "1.0.4" }, sink = ltn12.sink.table(out) })
+      ["X-Mod-Version"] = "1.0.5" }, sink = ltn12.sink.table(out) })
   local ok, res = pcall(Json.decode, table.concat(out))
   return ok and res or nil
 end
 local function get(path)
   local out = {}
-  http.request({ url = BASE .. path .. (path:find("?", 1, true) and "&" or "?") .. "version=1.0.4",
+  http.request({ url = BASE .. path .. (path:find("?", 1, true) and "&" or "?") .. "version=1.0.5",
     sink = ltn12.sink.table(out) })
   local ok, res = pcall(Json.decode, table.concat(out))
   return ok and res or nil
@@ -282,6 +282,26 @@ check(crystal and crystal.error == "WRONG_GENERATION" and crystal.serverGenerati
 frames(30)
 check(exports.netNpcs["888888"] == nil, "no Crystal trainer appears in the Gen 1 world")
 Rig.dump("remote player")
+
+-- ---- 3b. WARP TO PLAYER: any friend online, any time (no co-op parties) --------------
+buddySync()
+item(startMenu(), "ONLINE").onSelect()
+local onlineMenu = describe(top())
+check(onlineMenu:find("WARP TO PLAYER", 1, true) and not onlineMenu:find("PARTY", 1, true),
+  "ONLINE SETTINGS warps to a player and has no co-op party: " .. onlineMenu)
+pick("WARP TO PLAYER")
+check(describe(top()):find("BUDDY (LV", 1, true) ~= nil, "every other player online is listed: " .. describe(top()))
+-- the overworld's setMap is a stand-in here: watch the call
+local warpedTo = nil
+world.setMap = function(self, ...) warpedTo = { ... } end
+pick("^BUDDY")
+closeTexts()
+world.setMap = nil
+check(said("WARPED TO BUDDY") ~= nil and warpedTo and warpedTo[1] == world.map.id
+  and warpedTo[2] == 6 and warpedTo[3] == 8,
+  ("WARP TO PLAYER: one cell east of BUDDY (5,8): %s %s,%s"):format(tostring(warpedTo and warpedTo[1]),
+    tostring(warpedTo and warpedTo[2]), tostring(warpedTo and warpedTo[3])))
+popTo(world)
 
 -- ---- 4. chat ----------------------------------------------------------------------------
 post({ action = "send_chat", trainerId = "777777", name = "BUDDY", text = "HELLO FROM PALLET", scope = "global" })

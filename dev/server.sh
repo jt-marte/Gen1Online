@@ -3,6 +3,8 @@
 # fresh database.
 #   dev/server.sh          start (kills the previous one)
 #   dev/server.sh stop     stop
+# GTS_PASSWORD=WORD dev/server.sh starts it with a server password; without
+# it the password is off, so no test server ever writes one into a config.
 # Port: $GTS_PORT (default 17781).  PID in $G1O_WORK/server/server.pid.
 DEV=$(cd "$(dirname "$0")" && pwd)
 REPO=$(dirname "$DEV")
@@ -22,7 +24,7 @@ SERVER=${SERVER:-$REPO/server/gts_server.py}
 rm -f "$D/run_db.json"
 cd "$D" || exit 1
 PORT=$PORT GTS_DB_PATH="$D/run_db.json" \
-  nohup python3 "$SERVER" --host 127.0.0.1 > "$D/server.log" 2>&1 &
+  nohup python3 "$SERVER" --host 127.0.0.1 --password "${GTS_PASSWORD:-off}" > "$D/server.log" 2>&1 &
 echo $! > "$D/server.pid"   # python's own PID, so stop/restart really kills it
 sleep 1.2
 curl -sf -m 3 "http://127.0.0.1:$PORT/server/info" >/dev/null \

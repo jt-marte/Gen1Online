@@ -1,25 +1,10 @@
-# Gen1Online+ server configuration.
-#
-# Players can type the server in the game instead: START > CONNECT > SERVER
-# ADDRESS. A typed address wins over this file until USE CONFIG FILE.
-#
-# This file is the default for a game with no typed address, which suits the
-# host. Point it at a Gen1Online+ server (server/gts_server.py), then restart
-# the game. No rebuild is needed.
-#
-# The server prints the exact line to use when it starts. Typical values:
-#
-#   This PC runs the server:
-#     server_url=http://127.0.0.1:7779
-#   The server is on another PC on the same Wi-Fi/LAN (its LAN address):
-#     server_url=http://192.168.1.23:7779
-#   The server is on a friend's PC over Tailscale (its 100.x address,
-#   from `tailscale ip -4`):
-#     server_url=http://100.101.102.103:7779
-#
-# Use http://, not https://: the server speaks plain HTTP.
-#
-# A server hosts one generation: point Red, Blue and Yellow at a Gen 1 server
-# and Crystal at a Crystal server (the game tells you if it's the wrong one).
+# Gen1Online+: the server this game connects to when no address was typed in
+# START > CONNECT > SERVER ADDRESS (a typed one wins until USE CONFIG FILE).
+# The server prints the exact line to use. Add its password after a slash:
+#   server_url=http://127.0.0.1:7779/PASSWORD      this PC runs the server
+#   server_url=http://192.168.1.23:7779/PASSWORD   another PC on your Wi-Fi
+#   server_url=1.2.3.4/PASSWORD                    as it's typed in the game
+# Plain http:// only. A server hosts one generation: Red/Blue/Yellow, Crystal,
+# or FireRed/LeafGreen.
 
 server_url=http://127.0.0.1:7779

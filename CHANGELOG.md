@@ -1,6 +1,44 @@
 # Changelog
 
-## [1.0.4] - 2026-10-18
+## [1.0.5] - 2026-10-18
+
+1.0 servers and clients still play together: a 1.0.0-1.0.4 game reaches a
+server with a password through `gts_config.txt`
+(`server_url=http://1.2.3.4:7779/PASSWORD`).
+
+### Added
+
+- **A server password**, so a port opened on the router (port forwarding)
+  is safe from strangers, with no Hamachi or Tailscale needed. Friends type
+  it after the address, in START > CONNECT > SERVER ADDRESS:
+  `1.2.3.4/PASSWORD` (port 7779 when none is given, `1.2.3.4:8000/PASSWORD`
+  otherwise), or put that address in `gts_config.txt`. The server answers
+  nobody without it, and one that guesses wrong 10 times waits 15 minutes.
+  `server_password = auto` (the default) picks one the first time the
+  server starts, writes it into `server_config.txt` and prints the
+  addresses to share; or set your own, or `off`. Menus show the address
+  with the password hidden. The game can't encrypt its traffic, so the
+  password travels in plain text: never reuse a real one.
+- **Limits for an open port**: at most 16 connections from one address (64
+  in all), a request rate per address, smaller request bodies, and idle
+  connections closed after a minute. Kept in memory only; nothing about who
+  connected is logged or saved.
+- **WARP TO PLAYER** in ONLINE SETTINGS: warp to any friend online, any
+  time, game modes included. A spot the game can't load is said so
+  instead of "WARPED".
+
+### Changed
+
+- **`server_config.txt` is short now**: one line per setting with its
+  values; README.md's "Game modes" has the details. The mod's
+  `gts_config.txt` too, with the password form.
+
+### Removed
+
+- **Co-op parties** (create, invite, members, leave): every friend online
+  is a warp away instead. The server keeps the party actions for older
+  games.
+ - 2026-10-18
 
 1.0 servers and clients still play together. On a server running a game
 mode or a game speed above 1, an older client is told to update (the rules
