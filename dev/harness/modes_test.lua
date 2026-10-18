@@ -595,6 +595,52 @@ do
     "crazy: an ordinary trainer may get anything")
 end
 
+-- ---- crazy movesets: four of the whole level-up list ------------------------------------
+do
+  local HM = { CUT = true, SURF = true }
+  local function isHm(m) return HM[m] == true end
+  -- FireRed HO-OH's level-up list, with a repeat and two HMs mixed in
+  local list = { "WHIRLWIND", "SAFEGUARD", "GUST", "RECOVER", "FIRE_BLAST", "SUNNY_DAY", "CUT",
+                 "SWIFT", "SACRED_FIRE", "GUST", "ANCIENTPOWER", "SURF", "FUTURE_SIGHT" }
+  local pool = R.movePool(list, isHm)
+  local inPool = {}
+  for _, m in ipairs(pool) do inPool[m] = true end
+  check(#pool == 10 and pool[1] == "WHIRLWIND" and pool[2] == "SAFEGUARD" and pool[10] == "FUTURE_SIGHT"
+    and not inPool.CUT and not inPool.SURF, "move pool: in order, no repeats, no HMs")
+  check(#R.movePool({ 33, 0, 33, 15, 45 }, function(m) return m == 15 end) == 2,
+    "move pool: numbers too (FireRed), the empty slot 0 dropped")
+
+  local ok, seen, fresh = true, {}, 0
+  for seed = 1, 200 do
+    local moves = R.randomMoves(Rng.new(seed, 40000), pool)
+    local dup = {}
+    if #moves ~= 4 then ok = false end
+    for _, m in ipairs(moves) do
+      if not inPool[m] or dup[m] then ok = false end
+      dup[m], seen[m] = true, true
+    end
+    local same = R.randomMoves(Rng.new(seed, 40000), pool)
+    for i = 1, 4 do if same[i] ~= moves[i] then ok = false end end
+    if not (dup.WHIRLWIND and dup.SAFEGUARD and dup.GUST and dup.RECOVER) then fresh = fresh + 1 end
+  end
+  local all = true
+  for _, m in ipairs(pool) do if not seen[m] then all = false end end
+  check(ok, "random moves: four, all distinct, all from the pool, the same for the same seed")
+  check(all and fresh > 150, ("random moves: every move of the pool comes up (%d of 200 seeds aren't the first four)")
+    :format(fresh))
+  local few = R.randomMoves(Rng.new(1), { "SPLASH", "TACKLE", "FLAIL" })
+  local got = {}
+  for _, m in ipairs(few) do got[m] = true end
+  check(#few == 3 and got.SPLASH and got.TACKLE and got.FLAIL, "random moves: four or fewer, it gets them all")
+  check(#R.randomMoves(Rng.new(1), {}) == 0 and #R.randomMoves(Rng.new(1), pool, 2) == 2,
+    "random moves: an empty pool gives none, and n is honoured")
+  -- any int(lo, hi) will do (the clients' love.math.random for wild Pokémon)
+  local live = { int = function(_, lo, hi) return hi end }
+  local last = R.randomMoves(live, pool)
+  check(last[1] == "FUTURE_SIGHT" and last[2] == "ANCIENTPOWER" and last[3] == "SACRED_FIRE" and last[4] == "SWIFT",
+    "random moves: drawn through the rng's int")
+end
+
 -- ---- FireRed/LeafGreen multiworld: each player finishes with the team's finds --------
 -- modes/frlg.lua's places, synthetic (balls on every logic map, the gifts, the
 -- fixed gifts, the gym slots), built for 2 worlds and replayed per player: a

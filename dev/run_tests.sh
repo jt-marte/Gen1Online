@@ -243,8 +243,9 @@ if [ "${1:-}" != "quick" ]; then
         step "real $g Nuzlocke with a friend (friend)" "$(result "$G1O_WORK/gen3_friend_guest.log" | sed 's/.*\t//')"
       fi
       # the optional modes from the server's own file: wild legendaries (at
-      # 100%), every trainer's team randomized, and the game at 1.5X
-      printf 'randomizer = on\nwild_legendaries = 100\nrandomize_trainers = on\nseed = 4242\ngame_speed = 1.5\n' \
+      # 100%), every trainer's team randomized, the crazy randomizer (its
+      # random movesets), and the game at 1.5X
+      printf 'randomizer = on\nwild_legendaries = 100\nrandomize_trainers = on\ncrazy_randomizer = on\nseed = 4242\ngame_speed = 1.5\n' \
         > "$G1O_WORK/server/options_config.txt"
       GTS_CONFIG="$G1O_WORK/server/options_config.txt" GTS_GENERATION=3 "$DEV/server.sh" >/dev/null
       install_frlg "$FPROFILE"

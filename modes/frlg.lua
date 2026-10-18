@@ -514,6 +514,57 @@ return function(ctx)
     return Randomizer.trainerTeam(Rng.new(r.seed, salt), species, pokemon, legendary, theme, r.crazy)
   end
 
+  -- ---- crazy movesets ----------------------------------------------------------
+
+  -- The crazy randomizer: a new Pokémon knows up to four moves drawn from its
+  -- whole level-up list (Randomizer.randomMoves).  Pokemon.movesAtLevel
+  -- builds every new one's moves (Party.giveMon: givemon, gifts, trades; the
+  -- battle: wild Pokémon; roamers), a fresh draw each time.  A trainer's team
+  -- draws from the run's seed in the trainer.party hook below, the same every
+  -- time for every player; a team with its own moves keeps them unless the
+  -- trainer randomizer changed it.
+  function M.crazyMoves()
+    local r = rules()
+    return (r ~= nil and r.randomizer and r.crazy) and true or false
+  end
+  -- the moves a Pokémon may be given: every level-up move, HMs left out
+  function M.movePool(species)
+    local list = {}
+    for _, e in ipairs(Pokemon.learnset(species) or {}) do
+      local mv = tonumber(e[2] or e.move)
+      if mv then list[#list + 1] = mv end
+    end
+    return Randomizer.movePool(list, Pokemon.isHmMove)
+  end
+  -- slot `slot` of a trainer's team, as the trainer.party hook gives it
+  function M.trainerMoves(trainerId, slot, species)
+    local r = rules()
+    local pool = M.movePool(species)
+    if not (r and r.seed) or #pool == 0 then return nil end
+    local salt = 40000 + Randomizer.saltOf(tostring(trainerId) .. "#" .. tostring(slot))
+      + ((worlds(r) > 1 and M.world) or 0) * 1000
+    return Randomizer.randomMoves(Rng.new(r.seed, salt), pool)
+  end
+  local liveRng = { int = function(_, lo, hi)
+    return lo + math.min(hi - lo, math.floor(random() * (hi - lo + 1)))
+  end }
+  local origMovesAtLevel = Pokemon.movesAtLevel
+  Pokemon.movesAtLevel = function(species, level, ...)
+    local pool = M.crazyMoves() and M.movePool(species)
+    if not (pool and #pool > 0) then return origMovesAtLevel(species, level, ...) end
+    local moves, pp, maxPp = Randomizer.randomMoves(liveRng, pool), {}, {}
+    for i, mv in ipairs(moves) do pp[i] = Pokemon.movePp(mv); maxPp[i] = pp[i] end
+    return moves, pp, maxPp
+  end
+  -- a party row with moves of its own (a trainer's custom moves)
+  local function ownMoves(row)
+    local list = type(row.moveIds) == "table" and row.moveIds or type(row.moves) == "table" and row.moves or {}
+    for _, mv in ipairs(list) do
+      if mv ~= 0 and mv ~= "" and mv ~= "NONE" then return true end
+    end
+    return false
+  end
+
   mod.hooks:wrap("trainer.party", function(nextFn, trainerClass, trainerId, party)
     local out = nextFn(trainerClass, trainerId, party)
     if type(out) ~= "table" or #out == 0 then return out end
@@ -522,14 +573,20 @@ return function(ctx)
       species[i] = tonumber(mon.speciesId) or Pokemon.speciesFromName(mon.species) or 0
     end
     local new = M.trainerTeam(trainerId, species)
-    if not new then return out end
+    local crazy = M.crazyMoves()
+    if not new and not crazy then return out end
     local copy = {}
     for i, mon in ipairs(out) do
       local row = {}
       for k, v in pairs(mon) do row[k] = v end
-      row.species, row.speciesId = Gen3Compat.speciesName(new[i]) or new[i], new[i]
-      -- the vanilla moves belong to the vanilla Pokémon
-      row.moves, row.moveIds = nil, nil
+      if new then
+        row.species, row.speciesId = Gen3Compat.speciesName(new[i]) or new[i], new[i]
+        -- the vanilla moves belong to the vanilla Pokémon
+        row.moves, row.moveIds = nil, nil
+      end
+      if crazy and not ownMoves(row) then
+        row.moves, row.moveIds = M.trainerMoves(trainerId, i, new and new[i] or species[i]), nil
+      end
       copy[i] = row
     end
     return copy

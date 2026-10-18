@@ -326,9 +326,78 @@ return function(ctx)
       Randomizer.LEGENDARY, theme, r.crazy)
   end
 
+  -- ---- crazy movesets ------------------------------------------------------------
+
+  -- The crazy randomizer: a new Pokémon (wild, a gift, a trade, a trainer's)
+  -- knows up to four moves drawn from its whole level-up list
+  -- (Randomizer.randomMoves).  Every one goes through Pokemon.movesAtLevel
+  -- (Pokemon.new); a wild one or a gift draws afresh each time, a trainer's
+  -- team from the run's seed, the same every time for every player.
+  local okP, Pokemon = pcall(require, "src.pokemon.Pokemon")
+  if not (okP and type(Pokemon) == "table" and Pokemon.movesAtLevel) then Pokemon = nil end
+  function M.crazyMoves()
+    local r = rules()
+    return (r ~= nil and r.randomizer and r.crazy) and true or false
+  end
+  local function isHm(move)
+    local c = Game.data and Game.data.constants
+    for _, m in ipairs(c and c.hmMoves or { "CUT", "FLY", "SURF", "STRENGTH", "FLASH" }) do
+      if m == move then return true end
+    end
+    return false
+  end
+  local function poolOf(def)
+    if type(def) ~= "table" then return {} end
+    local list = {}
+    for _, m in ipairs(def.level1Moves or {}) do list[#list + 1] = m end
+    for _, e in ipairs(def.learnset or {}) do list[#list + 1] = e.move end
+    return Randomizer.movePool(list, isHm)
+  end
+  -- the moves a Pokémon may be given: its level-1 moves and every level-up move
+  function M.movePool(species)
+    return poolOf(Game.data and Game.data.pokemon and Game.data.pokemon[species])
+  end
+  local function trainerRng(r, key, slot)
+    return Rng.new(r.seed, 40000 + Randomizer.saltOf(tostring(key) .. "#" .. tostring(slot))
+      + ((worlds(r) > 1 and M.world) or 0) * 1000)
+  end
+  -- slot `slot` of a trainer's team, as the battle builds it
+  function M.trainerMoves(oppClass, partyIndex, slot, species)
+    local r = rules()
+    local pool = M.movePool(species)
+    if not (r and r.seed) or #pool == 0 then return nil end
+    return Randomizer.randomMoves(trainerRng(r, tostring(oppClass) .. "#" .. tostring(partyIndex), slot), pool)
+  end
+  local liveRng = { int = function(_, lo, hi)
+    return lo + math.min(hi - lo, math.floor(random() * (hi - lo + 1)))
+  end }
+  -- the team the battle builds next (BattleState: the trainer.party hook,
+  -- then one Pokemon.new per slot)
+  local trainerDraw = nil
+  if Pokemon then
+    local origMovesAtLevel = Pokemon.movesAtLevel
+    Pokemon.movesAtLevel = function(def, level, ...)
+      local draw = trainerDraw
+      if draw then
+        draw.slot = draw.slot + 1
+        if draw.slot >= draw.left then trainerDraw = nil end
+      end
+      local r = M.crazyMoves() and rules()
+      local pool = r and poolOf(def)
+      if not (pool and #pool > 0) then return origMovesAtLevel(def, level, ...) end
+      if draw and r.seed then return Randomizer.randomMoves(trainerRng(r, draw.key, draw.slot), pool) end
+      return Randomizer.randomMoves(liveRng, pool)
+    end
+  end
+  mod.events:on("battle.started", function() trainerDraw = nil end)
+
   mod.hooks:wrap("trainer.party", function(nextFn, oppClass, partyIndex, partyDef)
     local out = nextFn(oppClass, partyIndex, partyDef)
+    trainerDraw = nil
     if type(out) ~= "table" or #out == 0 then return out end
+    local crazy = M.crazyMoves()
+    -- a team's own moves (a slot's list, the boss-move tables) still win
+    if crazy then trainerDraw = { key = tostring(oppClass) .. "#" .. tostring(partyIndex), slot = 0, left = #out } end
     local species = {}
     for i, slot in ipairs(out) do species[i] = slot.species end
     local new = M.trainerTeam(oppClass, partyIndex, species)
@@ -337,8 +406,10 @@ return function(ctx)
     for i, slot in ipairs(out) do
       local row = {}
       for k, v in pairs(slot) do row[k] = v end
-      -- the vanilla moves belong to the vanilla Pokémon
+      -- the vanilla moves belong to the vanilla Pokémon (and with the crazy
+      -- randomizer the new one's drawn moves win over the boss-move tables)
       row.species, row.moves = new[i], nil
+      if crazy then row.moves = M.trainerMoves(oppClass, partyIndex, i, new[i]) end
       copy[i] = row
     end
     return copy

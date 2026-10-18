@@ -43,13 +43,13 @@ return function(game)
 
   local http, ltn12 = package.loaded["socket.http"], package.loaded["ltn12"]
   local function post(payload)
-    payload.modVersion, payload.gameVersion, payload.generation = "1.0.3", "Pokemon Yellow", 1
+    payload.modVersion, payload.gameVersion, payload.generation = "1.0.4", "Pokemon Yellow", 1
     payload.modesVersion = payload.modesVersion or (g1o and g1o.ui and g1o.ui.MODES_VERSION)
     local body = Json.encode(payload)
     local res = {}
     http.request({ url = BASE .. "/gts", method = "POST", source = ltn12.source.string(body),
       headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body),
-        ["X-Mod-Version"] = "1.0.3" }, sink = ltn12.sink.table(res) })
+        ["X-Mod-Version"] = "1.0.4" }, sink = ltn12.sink.table(res) })
     local ok, decoded = pcall(Json.decode, table.concat(res))
     return ok and decoded or nil
   end
@@ -456,6 +456,95 @@ return function(game)
   check(bug and #bug == 2, "on: every trainer, at the same strength: " .. types(bug))
   Modes.synced = origSynced
   Modes.rules.trainers = "off"
+
+  -- the crazy randomizer's movesets (off on this server), pinned by its own
+  -- switch rather than the rules (whose crazy flag would reshuffle this
+  -- run's world): every new Pokémon knows four of its whole level-up list
+  local Pokemon1 = require("src.pokemon.Pokemon")
+  local BattleState = require("src.battle.BattleState")
+  local function moveIds(moves)
+    local o = {}
+    for i, m in ipairs(moves or {}) do o[i] = type(m) == "table" and m.id or m end
+    return o
+  end
+  local function crazyOk(species, moves)
+    local pool, inPool, seen = Modes.movePool(species), {}, {}
+    for _, m in ipairs(pool) do inPool[m] = true end
+    local ok = #pool > 0 and #moves == math.min(4, #pool)
+    for _, m in ipairs(moves) do
+      if not inPool[m] or seen[m] then ok = false end
+      seen[m] = true
+    end
+    return ok
+  end
+  local vanillaPidgey = Pokemon1.movesAtLevel(game.data.pokemon.PIDGEY, 3)
+  check(#vanillaPidgey == 1 and vanillaPidgey[1] == "GUST",
+    "without it a level-3 PIDGEY knows " .. table.concat(vanillaPidgey, ", "))
+  local origCrazy = Modes.crazyMoves
+  Modes.crazyMoves = function() return true end
+  local seenPidgey = game.save.pokedex.seen.PIDGEY
+  local okW, wild = pcall(BattleState.newWild, game, "PIDGEY", 3)
+  game.save.pokedex.seen.PIDGEY = seenPidgey
+  local wildMoves = moveIds(okW and wild and wild.enemy and wild.enemy.mon.moves)
+  check(crazyOk("PIDGEY", wildMoves), ("crazy: a wild level-3 PIDGEY knows four of its level-up list: %s (of %s)")
+    :format(table.concat(wildMoves, ", "), table.concat(Modes.movePool("PIDGEY"), ", ")))
+  -- a gift through the overworld's runner
+  local partyBefore2 = #game.save.party
+  local dexSeen2, dexOwned2 = game.save.pokedex.seen.PIDGEY, game.save.pokedex.owned.PIDGEY
+  game.overworld.runner:run({ { "give_pokemon", "PIDGEY", 3 } })
+  for _ = 1, 600 do
+    local s = top()
+    if isText(s) then clearTexts(1)
+    elseif s ~= game.overworld then U.tap(game, "b"); U.wait(3)   -- no nickname
+    elseif not (game.overworld.runner and game.overworld.runner:isRunning()) then break
+    else U.wait(2) end
+  end
+  local gift = #game.save.party > partyBefore2 and game.save.party[#game.save.party] or nil
+  local giftMoves = moveIds(gift and gift.moves)
+  check(gift and gift.species == "PIDGEY" and crazyOk("PIDGEY", giftMoves),
+    "crazy: a gift level-3 PIDGEY too: " .. table.concat(giftMoves, ", "))
+  if gift then table.remove(game.save.party) end
+  game.save.pokedex.seen.PIDGEY, game.save.pokedex.owned.PIDGEY = dexSeen2, dexOwned2
+  -- Brock, built twice: the seed's moves each time, his BIDE still his
+  local function brockMoves()
+    local okT, bs = pcall(BattleState.newTrainer, game, "OPP_BROCK", 1)
+    local list, species = {}, {}
+    for i, mon in ipairs(okT and bs and bs.enemyParty or {}) do
+      list[i], species[i] = moveIds(mon.moves), mon.species
+    end
+    return list, species
+  end
+  local function seeded(list, species, boss)
+    if #list == 0 then return false end
+    for i, moves in ipairs(list) do
+      local want = Modes.trainerMoves("OPP_BROCK", 1, i, species[i]) or {}
+      for j = 1, math.max(#moves, #want) do
+        if moves[j] ~= want[j] and not (boss and j == 3 and moves[j] == "BIDE") then return false end
+      end
+    end
+    return true
+  end
+  local function text(list, species)
+    local o = {}
+    for i, moves in ipairs(list) do o[i] = tostring(species[i]) .. ": " .. table.concat(moves, ", ") end
+    return table.concat(o, " / ")
+  end
+  local b1, s1 = brockMoves()
+  local b2 = brockMoves()
+  local bide = false
+  for _, moves in ipairs(b1) do if moves[3] == "BIDE" then bide = true end end
+  check(seeded(b1, s1, true) and text(b1, s1) == text(b2, s1) and bide,
+    "crazy: Brock's team gets the seed's moves, the same twice, his BIDE kept: " .. text(b1, s1))
+  -- "on": every trainer, Brock too away from his gym (the driver is on Route 1)
+  Modes.rules.trainers = "on"
+  local drawn = Modes.trainerTeam("OPP_BROCK", 1, { "GEODUDE", "ONIX" })
+  local b3, s3 = brockMoves()
+  Modes.rules.trainers = "off"
+  check(drawn and s3[1] == drawn[1] and s3[2] == drawn[2] and seeded(b3, s3, false),
+    "crazy: his randomized team gets the seed's moves, no BIDE: " .. text(b3, s3))
+  Modes.crazyMoves = origCrazy
+  local after = Pokemon1.movesAtLevel(game.data.pokemon.PIDGEY, 3)
+  check(#after == 1 and after[1] == "GUST", "unpinned, a level-3 PIDGEY knows " .. table.concat(after, ", ") .. " again")
   local changed = 0
   for i, obj in ipairs(game.data.maps.VIRIDIAN_FOREST.objects or {}) do
     if obj.item and obj.item ~= vanillaForest[i] then changed = changed + 1 end

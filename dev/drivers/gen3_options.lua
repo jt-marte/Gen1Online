@@ -1,13 +1,17 @@
 -- Real FireRed / LeafGreen on a server whose server_config.txt turns the
 -- optional modes on (randomizer, wild_legendaries = 100, randomize_trainers
--- = on, seed 4242; no Nuzlocke) and game_speed = 1.5: the settings travel
--- from the server's file to the game, not pinned in the driver.
---   the rules view has them, the game runs at 1.5X with the player's own
---   GAME SPEED locked, a text page shows whole at once -> a wild Pokémon on
---   Route 1 is a legendary at its own level -> a real Viridian Forest
---   trainer, talked to, sends out the seed's team for his (vanilla levels)
---   and is beaten, the battle at 1.5X -> DISCONNECT: the player's own speed
---   again, the text still instant.
+-- = on, crazy_randomizer = on, seed 4242; no Nuzlocke) and game_speed = 1.5:
+-- the settings travel from the server's file to the game, not pinned in the
+-- driver.
+--   offline a level-5 HO-OH knows WHIRLWIND alone -> the rules view has the
+--   options, the game runs at 1.5X with the player's own GAME SPEED locked,
+--   a text page shows whole at once -> the crazy movesets: HO-OH at level 5
+--   gets four of its whole level-up list, and a gift CHARIZARD too -> a wild
+--   Pokémon on Route 1 is a legendary at its own level, with four of its
+--   level-up moves -> a real Viridian Forest trainer, talked to, sends out
+--   the seed's team for his (vanilla levels) with the seed's moves, and is
+--   beaten, the battle at 1.5X -> DISCONNECT: the player's own speed again,
+--   the text still instant, HO-OH's vanilla moves again.
 local U = require("tests.drivers.util")
 
 return function(game)
@@ -27,15 +31,39 @@ return function(game)
   local Message = require("src.ui.game3.message")
   local Modes = GtsUI.Modes
 
+  local function moveNames(list)
+    local out = {}
+    for i, m in ipairs(list or {}) do out[i] = Pokemon.moveName(m) end
+    return table.concat(out, ", ")
+  end
+  -- the crazy randomizer's moves: four (or the whole pool), distinct, all
+  -- from the Pokémon's level-up list
+  local function crazyMoves(species, moves)
+    local pool, inPool, seen = Modes.movePool(species), {}, {}
+    for _, m in ipairs(pool) do inPool[m] = true end
+    local ok = #pool > 0 and #(moves or {}) == math.min(4, #pool)
+    for _, m in ipairs(moves or {}) do
+      m = tonumber(m)
+      if not inPool[m] or seen[m] then ok = false end
+      if m then seen[m] = true end
+    end
+    return ok
+  end
+  local HO_OH = 250
+
   H.newOffline("OFFLINE")
+  local vanillaHoOh = { Pokemon.movesAtLevel(HO_OH, 5) }
+  vanillaHoOh = vanillaHoOh[1] or {}
+  check(#vanillaHoOh == 1 and vanillaHoOh[1] == 18, "offline a level-5 HO-OH knows " .. moveNames(vanillaHoOh))
   if not check(H.createPlayer("ASH", "^RED$"), "online as a new character") then return finish() end
   H.clearTexts()
   H.closeAll()
   local r = Modes.rules or {}
   local info = H.get("/server/info") or {}
   check(r.randomizer and r.wildLegendaries == 100 and r.trainers == "on" and r.starters
-    and r.nuzlocke == "off", ("the server's file reached the game: legendaries %s%%, trainers %s, starters %s")
-      :format(tostring(r.wildLegendaries), tostring(r.trainers), tostring(r.starters)))
+    and r.crazy == true and r.nuzlocke == "off",
+    ("the server's file reached the game: legendaries %s%%, trainers %s, starters %s, crazy %s")
+      :format(tostring(r.wildLegendaries), tostring(r.trainers), tostring(r.starters), tostring(r.crazy)))
   check(info.rules and info.rules.wildLegendaries == 100 and info.rules.trainers == "on",
     "and /server/info says the same")
 
@@ -54,8 +82,29 @@ return function(game)
     return whole
   end
   check(instantPage("THIS WHOLE LINE SHOWS AT ONCE.\nAND THIS ONE TOO."), "a text page shows whole at once")
+
+  -- the crazy movesets: a new Pokémon gets four of its whole level-up list
+  local pool = Modes.movePool(HO_OH)
+  local drawsOk, ppOk, union, unionCount = true, true, {}, 0
+  for _ = 1, 40 do
+    local moves, pp, maxPp = Pokemon.movesAtLevel(HO_OH, 5)
+    if not crazyMoves(HO_OH, moves) then drawsOk = false end
+    for i, m in ipairs(moves or {}) do
+      if pp[i] ~= Pokemon.movePp(m) or maxPp[i] ~= pp[i] then ppOk = false end
+      if not union[m] then union[m], unionCount = true, unionCount + 1 end
+    end
+  end
+  say("HO-OH's level-up list (HMs out): " .. moveNames(pool))
+  check(drawsOk and ppOk, "online a level-5 HO-OH gets four of them, with their PP: "
+    .. moveNames((Pokemon.movesAtLevel(HO_OH, 5))))
+  check(unionCount == #pool, ("and 40 draws use the whole list (%d of %d moves)"):format(unionCount, #pool))
   local s = Runtime.getSession()
-  Party.giveMon(s, 6, 60)      -- CHARIZARD, to win with
+  local _, _, zard = Party.giveMon(s, 6, 60)      -- CHARIZARD, to win with
+  check(zard and crazyMoves(6, zard.moves), "a gift CHARIZARD gets four of its level-up moves: "
+    .. moveNames(zard and zard.moves))
+  if zard then  -- FLAMETHROWER first, for the fights below
+    zard.moves[1], zard.pp[1], zard.maxPp[1] = 53, 15, 15
+  end
 
   -- a wild Pokémon on Route 1: a legendary, at its own level
   G3.warpTo("ROUTE_1", 10, 20, "down")
@@ -72,6 +121,8 @@ return function(game)
   local wsp = wildMon and tonumber(wildMon.species)
   check(wsp and legends[wsp] and wildMon.level == 4, "a wild PIDGEY roll on Route 1 is a legendary: "
     .. tostring(wsp and Pokemon.name(wsp)) .. " LV" .. tostring(wildMon and wildMon.level))
+  check(wsp and crazyMoves(wsp, wildMon.moves), "with four of its level-up moves: "
+    .. moveNames(wildMon and wildMon.moves))
   U.wait(150)
   shot("wild_legendary")
   Battle.abort("run")
@@ -116,6 +167,15 @@ return function(game)
   check(want and table.concat(got, ",") == table.concat(want, ","),
     ("his team is the seed's draw: %s (vanilla %s)"):format(table.concat(names, ", "), table.concat(vanillaNames, ", ")))
   check(sameLevels, "at his own levels")
+  local movesOk, moveText = #foe > 0, {}
+  for i, m in ipairs(foe) do
+    local seeded = Modes.trainerMoves(tid, i, got[i])
+    if not (crazyMoves(got[i], m.moves) and table.concat(m.moves or {}, ",") == table.concat(seeded or {}, ",")) then
+      movesOk = false
+    end
+    moveText[i] = moveNames(m.moves)
+  end
+  check(movesOk, "with the seed's moves, four of each one's level-up list: " .. table.concat(moveText, " / "))
   local api0 = BattleAPI.new(game)
   for _ = 1, 600 do
     local snap = api0:snapshot()
@@ -154,5 +214,8 @@ return function(game)
   check(game:logicSpeed() == 1 and not game:speedLocked(),
     ("offline: the player's own speed again (%sX), unlocked"):format(tostring(game:logicSpeed())))
   check(instantPage("OFFLINE TOO, A PAGE\nSHOWS WHOLE AT ONCE."), "and offline a text page still shows whole")
+  local after = (Pokemon.movesAtLevel(HO_OH, 5))
+  check(table.concat(after or {}, ",") == table.concat(vanillaHoOh, ","),
+    "and a level-5 HO-OH knows " .. moveNames(after) .. " again")
   return finish()
 end

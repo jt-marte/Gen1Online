@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.4] - 2026-10-18
+
+1.0 servers and clients still play together. On a server running a game
+mode or a game speed above 1, an older client is told to update (the rules
+version is 9 now).
+
+### Changed
+
+- **Crazy randomizer movesets**: with `crazy_randomizer = on`, every new
+  Pokémon knows up to four moves drawn at random from its whole level-up
+  list, whatever its level, instead of the last few it learned by then: a
+  level 5 HO-OH no longer knows only WHIRLWIND, and may know SACRED FIRE,
+  FIRE BLAST, RECOVER and FUTURE SIGHT. Wild Pokémon draw afresh each
+  time; starters, gifts and in-game trades when they are received;
+  trainers' Pokémon from the run's seed, the same in every rematch and for
+  every player. A trainer with moves of his own keeps them unless
+  `randomize_trainers` changed his team. HM moves stay out. On Red, Blue,
+  Yellow, FireRed and LeafGreen.
+
+### Fixed
+
+- **Crystal froze at boot** with 1.0.2 and 1.0.3 installed, offline and
+  online: the game speed lock was wrapped twice, once through the
+  sandbox's Gen 1 `Game` facade, whose `logicSpeed` then called itself
+  forever. It now wraps Crystal's own game class only.
+
 ## [1.0.3] - 2026-10-17
 
 1.0 servers and clients still play together. On a server running a game

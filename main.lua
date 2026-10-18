@@ -4,7 +4,7 @@
 
   -- Resolved before anything else: request headers, the default avatar and
   -- the save paths below all read these.
-  local MOD_VERSION = "1.0.3"
+  local MOD_VERSION = "1.0.4"
   local isGen2, isGen3 = false, false
   if mod and mod.generation then
     isGen2 = (mod.generation == 2)
@@ -136,7 +136,7 @@
   -- The game modes' rules this client plays (modes/): sent with every POST.
   -- A server running a mode turns away clients below its MODES_VERSION, so
   -- nobody plays an old copy of the Nuzlocke rules without knowing.
-  GtsUI.MODES_VERSION = 8
+  GtsUI.MODES_VERSION = 9
   -- The host's game_speed (server_config.txt): every player runs at it while
   -- connected, battles included.  It rides /server/info and every sync_pos
   -- answer; 1 is normal, and anything odd reads as 1.
@@ -3247,7 +3247,11 @@
   -- fixed-speed minigame stays at 1x; _speedLockEdge, which would end every
   -- fast frame under the lock, stands aside while connected.
   if GtsUI.G3 then GtsUI.G3.installGame(disconnectOnTitle) end
-  for _, cls in ipairs(isGen3 and {} or { Game, (okGame2 and Game2Mod) or nil }) do
+  -- One class per generation: on Crystal `Game` is the sandbox's Gen 1
+  -- facade, whose logicSpeed is bound late to the live game's, so a wrap
+  -- through it lands on the game itself and then calls itself forever
+  -- (Crystal froze at boot in 1.0.2 and 1.0.3).
+  for _, cls in ipairs(isGen3 and {} or isGen2 and { (okGame2 and Game2Mod) or nil } or { Game }) do
     if cls and cls.speedLocked then
       local origSpeedLocked = cls.speedLocked
       cls.speedLocked = function(self, ...)

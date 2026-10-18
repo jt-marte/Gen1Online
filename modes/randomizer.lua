@@ -158,6 +158,40 @@ function R.saltOf(key)
   return h
 end
 
+-- ---- movesets -----------------------------------------------------------------
+
+-- The crazy randomizer: a new Pokémon knows up to four moves drawn at random
+-- from its whole level-up list, whatever its level (a level-5 HO-OH may know
+-- SACRED FIRE), instead of the last four it learned by then.  HM moves stay
+-- out: they can't be forgotten without the Move Deleter, and a wild Pokémon
+-- knowing SURF would get around the shuffle's HM logic.  `moves` is the
+-- level-up list in order (names on Gen 1, numbers on FireRed); `isHm(move)`
+-- says which to leave out.
+R.MOVES = 4
+
+function R.movePool(moves, isHm)
+  local pool, seen = {}, {}
+  for _, m in ipairs(moves or {}) do
+    if m ~= nil and m ~= 0 and m ~= "" and not seen[m] and not (isHm and isHm(m)) then
+      seen[m] = true
+      pool[#pool + 1] = m
+    end
+  end
+  return pool
+end
+
+-- up to `n` (R.MOVES) distinct moves of `pool`, in the order drawn; `rng` is
+-- an Rng, or anything with `int(lo, hi)`
+function R.randomMoves(rng, pool, n)
+  n = n or R.MOVES
+  local left, out = {}, {}
+  for i, m in ipairs(pool or {}) do left[i] = m end
+  while #out < n and #left > 0 do
+    out[#out + 1] = table.remove(left, rng:int(1, #left))
+  end
+  return out
+end
+
 -- ---- starters -----------------------------------------------------------------
 
 -- The starters become basic Pokémon that evolve twice, as the real ones do:

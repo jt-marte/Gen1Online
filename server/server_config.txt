@@ -97,7 +97,12 @@ randomize_trainers = off
 # one.  The starters may be any Pokemon at all, legendaries included, and
 # randomized trainers (above) get any Pokemon too; gym leaders and the Elite
 # Four still keep their type.  Wild legendaries stay out of it (see
-# wild_legendaries).
+# wild_legendaries).  Every new Pokemon (wild, a starter or gift, a
+# trainer's) knows up to four moves drawn at random from everything it learns
+# by level-up, at any level: a level 5 HO-OH may know SACRED FIRE.  HM moves
+# stay out.  A trainer's moves come from the run's seed (the same in every
+# rematch, for every player); a trainer with moves of his own keeps them,
+# unless randomize_trainers changed his team.
 # crazy_randomizer = off | on
 crazy_randomizer = off
 

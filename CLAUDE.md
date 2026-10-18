@@ -128,6 +128,13 @@ randomizer, multiworld) play on Gen 1 and FireRed/LeafGreen. `manifest.json` `"g
   online file.
 - On Crystal the overworld is an **empty** `game.stack`: the world isn't a
   stack state.
+- On Crystal `src.core.Game` is the sandbox's Gen 1 **facade**
+  (`src/mods/Gen2Compat.lua`): a plain method read through it is bound
+  early, but its translated members (`logicSpeed`, `applyOptions`, ...) call
+  the live game's at call time, and a write lands on the live game itself.
+  Never wrap a game method through it: wrap `src.core.Game2`. A
+  `logicSpeed` wrap through it called itself forever (a tail call, so no
+  stack overflow, just 100% CPU) and froze Crystal at boot in 1.0.2-1.0.3.
 - **Generations.** `isGen2` picks the branch. On Gen 1 the engine's `Game`
   (`src.core.Game`), `StateStack` and overworld (`src.world.OverworldController`)
   are singleton modules, the overworld sits on the stack, the save keeps the
@@ -278,7 +285,13 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
   learners in 3+ early areas). After connecting it also covers a lost
   report sent again, a full bag sending a team item to the PC, no room at
   all (not counted, comes later), an owed gym prize, and the level cap with
-  gyms open out of order. The starters: Red/Blue's lab rows through the
+  gyms open out of order. The crazy movesets, by `Modes.crazyMoves`
+  pinned (the rules' `crazy` would reshuffle the run): a wild
+  (`BattleState.newWild`) and a gift (`give_pokemon` through the runner)
+  level-3 PIDGEY know four of its level-up list, Brock's team
+  (`BattleState.newTrainer`) gets `Modes.trainerMoves`' moves twice with
+  his BIDE kept, and randomized (`trainers = on`) without it. The
+  starters: Red/Blue's lab rows through the
   mod's `script.command` hook (no Red/Blue data here) and Yellow's gift
   through the overworld's runner (BELLSPROUT for seed 4242, the PIKACHU
   scene skipped). Last, a new device (the online files deleted):
@@ -381,14 +394,18 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     a real battle: her wipe ends run 1 for both, ASH is told why, and both
     start run 2 in the bedroom.
   - `gen3_options.lua` (FireRed; `randomizer = on`, `wild_legendaries =
-    100`, `randomize_trainers = on`, `game_speed = 1.5`, no Nuzlocke): the
-    options travel from the server's file (rules view and `/server/info`),
-    the game runs at 1.5X with the player's own speed locked, a text page
-    shows whole on its first tick, a Route 1 wild roll is a legendary at
-    its level, and a real Viridian Forest trainer, talked to, sends out the
-    seed's team (`Modes.trainerTeam` of his `Trainers.get` party) at his
-    levels and is beaten, every battle frame at 1.5X; after DISCONNECT the
-    player's own speed (1X) again and the text still instant.
+    100`, `randomize_trainers = on`, `crazy_randomizer = on`, `game_speed =
+    1.5`, no Nuzlocke): the options travel from the server's file (rules
+    view and `/server/info`), the game runs at 1.5X with the player's own
+    speed locked, a text page shows whole on its first tick, a level-5
+    HO-OH knows WHIRLWIND alone offline and four of its level-up list
+    online (40 draws use the whole list), a gift CHARIZARD too, a Route 1
+    wild roll is a legendary at its level with four of its level-up moves,
+    and a real Viridian Forest trainer, talked to, sends out the seed's
+    team (`Modes.trainerTeam` of his `Trainers.get` party) at his levels
+    with `Modes.trainerMoves`' moves and is beaten, every battle frame at
+    1.5X; after DISCONNECT the player's own speed (1X) again, the text
+    still instant and HO-OH's vanilla moves back.
   - `gen3_link.lua` also checks the link battle ran at the server's speed;
     on a `game_speed = 1.5` server (not what `run_tests.sh` uses) both games
     passed the battle and the trade at 1.5X (2026-10-17).
@@ -467,7 +484,7 @@ Transport and framing:
   `modVersion`, `version`, `gameVersion` and `recompVersion`. Accept a client
   when its major.minor matches the server's. Otherwise answer
   `{"success":false,"error":"VERSION_MISMATCH","serverVersion":...}`.
-- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 8: the
+- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 9: the
   game modes' rules the client plays). While a game mode is on, the server
   answers a Gen 1 or FireRed/LeafGreen POST below `MODES_VERSION` (logout
   excepted) with `VERSION_MISMATCH`, `serverVersion` "<version>+ (GAME MODES)":
@@ -976,6 +993,24 @@ off the open internet.
     instead of the nearest by strength. Trainers still follow
     `randomize_trainers`; levels stay. Part of the plan key; RUN INFO says
     CRAZY RANDOMIZER.
+  - Crazy movesets (since 1.0.4, rules version 9): `M.crazyMoves()` wraps
+    the engine's one starting-moveset builder, `Pokemon.movesAtLevel`
+    (Gen 1 `src/pokemon/Pokemon.lua`, through `Pokemon.new`: wild, trainers,
+    `give_pokemon`, in-game trades; FireRed `src/core/game3/pokemon.lua`:
+    `Party.giveMon`, the battle's mons without moves, roamers), so a new
+    Pokémon gets `Randomizer.randomMoves` (up to 4) of `movePool`: its
+    level-1 and level-up moves at any level, HMs out (Gen 1
+    `constants.hmMoves`, FireRed `Pokemon.isHmMove`). Wild Pokémon and gifts
+    draw from love.math.random; trainers from Rng(seed, 40000 + saltOf(key
+    .. "#" .. slot) [+ world * 1000]), `M.trainerMoves`. FireRed sets them
+    in the `trainer.party` hook on every slot without moves of its own (or
+    every slot of a randomized team). Gen 1 can't tell which slots the
+    boss-move tables (`applySpecialMoves`) will fill, so the hook leaves a
+    `trainerDraw` that the next `#party` `Pokemon.new` calls consume
+    (BattleState builds one per slot right after the hook; cleared on
+    `battle.started`) and the boss moves still overlay; a randomized team's
+    rows get `moves` outright, which win over them. The mod itself never
+    builds a Pokémon, so GTS, Wonder Trade and link trades keep theirs.
   - Wild legendaries (`M.wildLegendary`): `BattleBridge.startWild` calls
     with no options (the field's grass, water, fishing, Rock Smash and Sweet
     Scent) roll `Randomizer.rollLegendary` (love.math.random) against the

@@ -23,7 +23,7 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gts_server  # noqa: E402
 
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 
 class FakeClock:
@@ -1021,7 +1021,7 @@ class BindingTests(ServerTest):
 class CommandLineTests(unittest.TestCase):
     def test_defaults(self):
         self.assertEqual(gts_server.DEFAULT_PORT, 7779)
-        self.assertEqual(gts_server.DEFAULT_VERSION, "1.0.3")
+        self.assertEqual(gts_server.DEFAULT_VERSION, "1.0.4")
         self.assertEqual(gts_server.DEFAULT_DATA,
                          os.path.join(os.path.dirname(os.path.abspath(gts_server.__file__)),
                                       "gts_data.json"))
