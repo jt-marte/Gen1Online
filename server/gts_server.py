@@ -55,7 +55,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_VERSION = "1.0.1"
+DEFAULT_VERSION = "1.0.2"
 DEFAULT_PORT = 7779
 DEFAULT_DATA = os.path.join(SCRIPT_DIR, "gts_data.json")
 DEFAULT_CONFIG = os.path.join(SCRIPT_DIR, "server_config.txt")
@@ -140,6 +140,9 @@ RULE_DEFAULTS = {
     "multiworld": False,
     "players": 2,
     "seed": None,
+    # everyone's game speed while online, battles included (not a game mode:
+    # like host and port it is no rule a run is started under)
+    "game_speed": 1.0,
 }
 NUZLOCKE_MODES = ("off", "hardcore")
 TRADES_MAX = 99                 # nuzlocke_trades: trades allowed between two gym leaders
@@ -149,8 +152,11 @@ TRAINER_MODES = ("off", "gyms", "on")   # gyms: gym leaders, their gyms, Elite F
 # is turned away with VERSION_MISMATCH, so nobody plays an old copy of the
 # rules (2: the strict first encounter, no dupes clause; 3: wild legendaries;
 # 4: randomized trainers; 5: trades limited between gym leaders; 6: the
-# crazy randomizer).
-MODES_VERSION = 6
+# crazy randomizer; 7: the host's game speed).  A server with game_speed
+# above 1 turns such a client away on every generation: it would play at 1X
+# among faster players.
+MODES_VERSION = 7
+GAME_SPEED_MAX = 4.0
 MODES_GENERATIONS = (1, 3)
 MAX_WORLDS = 8
 SAVE_ATTEMPTS = 5               # os.replace tries (Windows: Defender/OneDrive hold the file briefly)
@@ -284,6 +290,8 @@ def parse_rules(text):
                 rules[key] = "auto"
             elif key == "wild_legendaries":
                 rules[key] = parse_chance(value)
+            elif key == "game_speed":
+                rules[key] = parse_speed(value)
             elif key == "randomize_trainers":
                 word = value.strip().lower()
                 if word in ("gyms", "gym"):
@@ -325,6 +333,20 @@ def parse_chance(value):
     if not 0 < chance <= 100:
         raise ValueError("wild_legendaries is off, on, or a percent from 0 to 100")
     return chance
+
+
+def parse_speed(value):
+    """game_speed: normal (1) or a multiplier from 1 to 4, like 1.5 or 2x."""
+    word = value.strip().lower().rstrip("x").strip()
+    if word in ("", "off", "normal", "no", "false"):
+        return 1.0
+    try:
+        speed = float(word)
+    except ValueError:
+        speed = 0.0
+    if not 1 <= speed <= GAME_SPEED_MAX:
+        raise ValueError("game_speed is a number from 1 to %g, like 1.5" % GAME_SPEED_MAX)
+    return speed
 
 
 def parse_trades(value):
@@ -565,6 +587,11 @@ class GtsStore:
 
     # ---- requests -----------------------------------------------------------
 
+    def game_speed(self):
+        """The host's game_speed: every client runs at it while online."""
+        speed = self.rules.get("game_speed")
+        return float(speed) if isinstance(speed, (int, float)) and speed >= 1 else 1.0
+
     def compatible(self, client_version):
         mine = series(self.version)
         return mine is not None and series(client_version) == mine
@@ -595,7 +622,8 @@ class GtsStore:
             # never version-gated: the client compares versions itself
             with self.lock:
                 return {"success": True, "version": self.version, "modVersion": self.version,
-                        "generation": self.data["generation"], "rules": self._run_view()}
+                        "generation": self.data["generation"], "rules": self._run_view(),
+                        "gameSpeed": self.game_speed()}
         route = self.GET_ROUTES.get(path)
         if route is None:
             return {"success": False, "error": "NOT_FOUND"}
@@ -627,11 +655,16 @@ class GtsStore:
             gen = generation_of(req.get("generation"), req.get("gameVersion"))
             if not self._admit(gen, True):
                 return self.wrong_generation()
-            if (gen in MODES_GENERATIONS and to_int(req.get("modesVersion"), 0) < MODES_VERSION
-                    and action != "logout" and self._run_view()["active"]):
-                return {"success": False, "error": "VERSION_MISMATCH",
-                        "serverVersion": "%s+ (GAME MODES)" % self.version,
-                        "modesVersion": MODES_VERSION}
+            if to_int(req.get("modesVersion"), 0) < MODES_VERSION and action != "logout":
+                if gen in MODES_GENERATIONS and self._run_view()["active"]:
+                    return {"success": False, "error": "VERSION_MISMATCH",
+                            "serverVersion": "%s+ (GAME MODES)" % self.version,
+                            "modesVersion": MODES_VERSION}
+                # an older client would play at 1X among faster players
+                if self.game_speed() != 1:
+                    return {"success": False, "error": "VERSION_MISMATCH",
+                            "serverVersion": "%s+ (GAME SPEED)" % self.version,
+                            "modesVersion": MODES_VERSION}
             self._sweep()
             try:
                 return copy.deepcopy(handler(self, req))
@@ -973,6 +1006,7 @@ class GtsStore:
             "serverHour": clock.tm_hour,
             "serverMinute": clock.tm_min,
             "serverWeekday": (clock.tm_wday + 1) % 7,   # 0 = Sunday
+            "gameSpeed": self.game_speed(),
             "run": self._run_view(),
             "team": self._team_view(),
         }
@@ -1670,9 +1704,10 @@ def banner(host, port, store):
     lines = ["Gen1Online+ server %s on %s:%d" % (store.version, host, port),
              "Data: %s" % os.path.abspath(store.path),
              "World: %s" % world,
-             "Modes: %s" % modes_line(store),
-             "",
-             "Put one of these lines in gts_config.txt (next to the mod's main.lua):"]
+             "Modes: %s" % modes_line(store)]
+    if store.game_speed() != 1:
+        lines.append("Game speed: %gX for everyone online, battles included" % store.game_speed())
+    lines += ["", "Put one of these lines in gts_config.txt (next to the mod's main.lua):"]
     urls = [("this PC", "127.0.0.1")]
     if host in ("0.0.0.0", ""):
         ip, ts = lan_ip(), tailscale_ip()

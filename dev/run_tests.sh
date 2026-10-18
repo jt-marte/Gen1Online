@@ -28,6 +28,8 @@ cd "$RECOMP" || exit 1
 step "synthetic offline" "$(result "$G1O_WORK/offline.log")"
 "$LUAJIT" "$DEV/harness/modes_test.lua" > "$G1O_WORK/modes.log" 2>&1
 step "game modes (seed, logic, placement)" "$(result "$G1O_WORK/modes.log")"
+"$LUAJIT" "$DEV/harness/instant_text_test.lua" > "$G1O_WORK/instant_text.log" 2>&1
+step "instant text (every game's printers)" "$(result "$G1O_WORK/instant_text.log")"
 "$DEV/server.sh" >/dev/null
 DEV=1 "$LUAJIT" "$DEV/harness/online_test.lua" > "$G1O_WORK/online.log" 2>&1
 step "synthetic online" "$(result "$G1O_WORK/online.log")"
@@ -241,8 +243,8 @@ if [ "${1:-}" != "quick" ]; then
         step "real $g Nuzlocke with a friend (friend)" "$(result "$G1O_WORK/gen3_friend_guest.log" | sed 's/.*\t//')"
       fi
       # the optional modes from the server's own file: wild legendaries (at
-      # 100%) and every trainer's team randomized
-      printf 'randomizer = on\nwild_legendaries = 100\nrandomize_trainers = on\nseed = 4242\n' \
+      # 100%), every trainer's team randomized, and the game at 1.5X
+      printf 'randomizer = on\nwild_legendaries = 100\nrandomize_trainers = on\nseed = 4242\ngame_speed = 1.5\n' \
         > "$G1O_WORK/server/options_config.txt"
       GTS_CONFIG="$G1O_WORK/server/options_config.txt" GTS_GENERATION=3 "$DEV/server.sh" >/dev/null
       install_frlg "$FPROFILE"

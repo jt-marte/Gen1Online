@@ -1,10 +1,13 @@
 -- Real FireRed / LeafGreen on a server whose server_config.txt turns the
 -- optional modes on (randomizer, wild_legendaries = 100, randomize_trainers
--- = on, seed 4242; no Nuzlocke): the settings travel from the server's file
--- to the game, not pinned in the driver.
---   the rules view has them -> a wild Pokémon on Route 1 is a legendary at
---   its own level -> a real Viridian Forest trainer, talked to, sends out the
---   seed's team for his (vanilla levels) and is beaten.
+-- = on, seed 4242; no Nuzlocke) and game_speed = 1.5: the settings travel
+-- from the server's file to the game, not pinned in the driver.
+--   the rules view has them, the game runs at 1.5X with the player's own
+--   GAME SPEED locked, a text page shows whole at once -> a wild Pokémon on
+--   Route 1 is a legendary at its own level -> a real Viridian Forest
+--   trainer, talked to, sends out the seed's team for his (vanilla levels)
+--   and is beaten, the battle at 1.5X -> DISCONNECT: the player's own speed
+--   again, the text still instant.
 local U = require("tests.drivers.util")
 
 return function(game)
@@ -35,6 +38,22 @@ return function(game)
       :format(tostring(r.wildLegendaries), tostring(r.trainers), tostring(r.starters)))
   check(info.rules and info.rules.wildLegendaries == 100 and info.rules.trainers == "on",
     "and /server/info says the same")
+
+  -- the host's game_speed: the whole game at 1.5X, the player's own GAME
+  -- SPEED rows and hotkeys locked
+  check(info.gameSpeed == 1.5 and GtsUI.onlineSpeed == 1.5,
+    ("the server's game speed reached the game: %sX"):format(tostring(GtsUI.onlineSpeed)))
+  check(game:logicSpeed() == 1.5 and game:speedLocked() == true,
+    ("the game runs at %sX online, the player's own speed locked"):format(tostring(game:logicSpeed())))
+  -- instant text (other/instant_text.lua): a page shows whole on its first tick
+  local function instantPage(text)
+    Message.show(text)
+    Message.tick()
+    local whole = Message._total > 0 and Message._revealed == Message._total and Message.isWaiting()
+    Message.close()
+    return whole
+  end
+  check(instantPage("THIS WHOLE LINE SHOWS AT ONCE.\nAND THIS ONE TOO."), "a text page shows whole at once")
   local s = Runtime.getSession()
   Party.giveMon(s, 6, 60)      -- CHARIZARD, to win with
 
@@ -106,8 +125,10 @@ return function(game)
   end
   shot("route_trainer")
   local api, intent = BattleAPI.new(game), 0
+  local speeds = {}
   for _ = 1, 6000 do
     if not Battle.isActive() then break end
+    speeds[tostring(game:logicSpeed())] = true
     local snap = api:snapshot()
     if snap and (snap.prompt == "menu" or snap.prompt == "moves") then
       intent = intent + 1
@@ -118,7 +139,20 @@ return function(game)
     U.wait(2)
   end
   check(not Battle.isActive(), "and beaten")
+  local seen = {}
+  for k in pairs(speeds) do seen[#seen + 1] = k end
+  check(#seen == 1 and seen[1] == "1.5", "the whole battle ran at 1.5X: " .. table.concat(seen, ", "))
   H.clearTexts()
   check(H.fieldFree(), "back in the forest")
+
+  -- offline again: the player's own GAME SPEED, and the text still instant
+  H.closeAll()
+  H.startItem("gen1online")
+  H.choose("DISCONNECT")
+  H.clearTexts()
+  check(not H.online(), "disconnected")
+  check(game:logicSpeed() == 1 and not game:speedLocked(),
+    ("offline: the player's own speed again (%sX), unlocked"):format(tostring(game:logicSpeed())))
+  check(instantPage("OFFLINE TOO, A PAGE\nSHOWS WHOLE AT ONCE."), "and offline a text page still shows whole")
   return finish()
 end

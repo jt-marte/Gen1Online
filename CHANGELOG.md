@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.2] - 2026-10-17
+
+1.0 servers and clients still play together. On a server with a game
+speed above 1, or running a game mode, an older client is told to update
+(the rules version is 7 now).
+
+### Added
+
+- **Instant text**, built in: every text box shows its whole page at once
+  instead of letter by letter, in the field and in battles, on Red, Blue,
+  Yellow, Crystal, FireRed and LeafGreen, offline too. A still turns each
+  page; YES/NO questions and the sound effects inside a text stay, and the
+  empty-box wait between pages is gone.
+- **Game speed for everyone online** (`game_speed` in
+  `server/server_config.txt`, 1 to 4, like `1.5`; any generation's server):
+  every connected player runs at the host's speed, in the overworld, in
+  battles and in PVP link battles and trades. Music and sounds keep their
+  normal speed, and a fixed-speed minigame stays at 1X. Offline, each
+  player's own GAME SPEED option applies again. It is no game mode, so
+  changing it never starts a new run. The challenge timeout still counts
+  real seconds.
+
 ## [1.0.1] - 2026-10-17
 
 1.0 servers and clients still play together. On a server running a game

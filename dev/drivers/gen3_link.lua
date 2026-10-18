@@ -80,8 +80,9 @@ return function(game)
   if not check(theirTid ~= nil, them .. " is online") then return finish() end
   local px, py = Player.cellX, Player.cellY
   if not host then
-    -- LEAF steps right, so RED can face her
-    U.hold(game, "right", 18)
+    -- LEAF steps right, so RED can face her: one step's worth of frames at
+    -- the game's speed (the server's game_speed runs it faster)
+    U.hold(game, "right", math.max(1, math.floor(18 / (game:logicSpeed() or 1) + 0.5)))
     U.wait(30)
     check(Player.cellX == px + 1, "LEAF stepped east")
   end
@@ -123,11 +124,17 @@ return function(game)
   if not check(started, "the link battle started") then return finish() end
   U.wait(240)
   shot("battle")
+  -- online, a link battle runs at the server's game_speed on both games
+  local speeds, want = {}, tostring(H.GtsUI.onlineSpeed or 1)
   for _ = 1, 9000 do
     if not Battle.isActive() and not G3.link().busy() then break end
+    if Battle.isActive() then speeds[tostring(game:logicSpeed())] = true end
     U.tap(game, "a"); U.wait(4)
   end
   check(not Battle.isActive(), "the battle ended")
+  local seen = {}
+  for k in pairs(speeds) do seen[#seen + 1] = k end
+  check(#seen == 1 and seen[1] == want, ("the link battle ran at the server's %sX: %s"):format(want, table.concat(seen, ", ")))
   local last = G3.link().last
   check(last and last.kind == "battle", "the link closed after the battle")
   H.clearTexts()

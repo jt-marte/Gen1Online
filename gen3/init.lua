@@ -23,7 +23,7 @@
 --                  NPCs, so they sort and layer like them) with their name
 --                  tags; avatars are FireRed overworld sprites.
 --
--- env = { mod, requireLocal, diag, netNpcs(), netPlayerMap(), online() }
+-- env = { mod, requireLocal, diag, netNpcs(), netPlayerMap(), online(), onlineSpeed() }
 return function(env)
   local G3 = {}
   local mod = env.mod
@@ -723,7 +723,8 @@ return function(env)
   -- ----------------------------------------------------- the engine
 
   -- Game3: QUIT logs out first (not during a session swap), and the game
-  -- runs at 1x while connected, like Gen 1 and Crystal
+  -- runs at the host's game speed while connected (1x unless the server sets
+  -- one), link battles included, like Gen 1 and Crystal; a minigame stays 1x
   function G3.installGame(onQuit)
     local okG, Game3 = pcall(require, "src.core.Game3")
     if not (okG and type(Game3) == "table") then return end
@@ -740,6 +741,23 @@ return function(env)
     Game3.speedLocked = function(self, ...)
       if env.online() then return true, "online" end
       return origLocked(self, ...)
+    end
+    local origSpeed, origEdge = Game3.logicSpeed, Game3._speedLockEdge
+    if origSpeed then
+      Game3.logicSpeed = function(self, ...)
+        if not env.online() then return origSpeed(self, ...) end
+        local speed = env.onlineSpeed and env.onlineSpeed() or 1
+        local MG = speed ~= 1 and loaded("src.core.game3.minigames.common")
+        if MG and MG.isActive and MG.isActive() == true then return 1 end
+        return speed
+      end
+    end
+    if origEdge then
+      -- it ends every fast frame under the lock, which online always holds
+      Game3._speedLockEdge = function(self, ...)
+        if env.online() then return end
+        return origEdge(self, ...)
+      end
     end
     G3.installTrades()
   end

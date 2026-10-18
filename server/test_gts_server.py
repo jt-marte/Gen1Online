@@ -23,7 +23,7 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gts_server  # noqa: E402
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 
 
 class FakeClock:
@@ -134,7 +134,7 @@ class TransportTests(ServerTest):
         res = self.get("/server/info", version=None)
         rules = res.pop("rules")
         self.assertEqual(res, {"success": True, "version": VERSION, "modVersion": VERSION,
-                               "generation": None})
+                               "generation": None, "gameSpeed": 1.0})
         self.assertIs(rules["active"], False)
         self.assertEqual(rules["runId"], 1)
         res = self.get("/server/info", version="0.1.0")
@@ -1021,7 +1021,7 @@ class BindingTests(ServerTest):
 class CommandLineTests(unittest.TestCase):
     def test_defaults(self):
         self.assertEqual(gts_server.DEFAULT_PORT, 7779)
-        self.assertEqual(gts_server.DEFAULT_VERSION, "1.0.1")
+        self.assertEqual(gts_server.DEFAULT_VERSION, "1.0.2")
         self.assertEqual(gts_server.DEFAULT_DATA,
                          os.path.join(os.path.dirname(os.path.abspath(gts_server.__file__)),
                                       "gts_data.json"))
@@ -1116,6 +1116,26 @@ class RulesFileTests(unittest.TestCase):
         self.assertIn("Modes: crazy randomizer (encounters, items, badges, starters)",
                       gts_server.banner("127.0.0.1", 7779, store))
         self.assertEqual(store.data["run"]["id"], 2, "turning it on starts a new run")
+
+    def test_game_speed(self):
+        def speed(text):
+            return gts_server.parse_rules(text)["game_speed"]
+        self.assertEqual(speed(""), 1.0, "normal by default")
+        for text, want in (("game_speed = 1", 1.0), ("game_speed = normal", 1.0),
+                           ("game_speed = 1.5", 1.5), ("game_speed = 2x", 2.0),
+                           ("game_speed = 4", 4.0)):
+            self.assertEqual(speed(text), want, text)
+        for bad in ("0.5", "5", "fast", "nan", "-1"):
+            with self.assertRaises(ValueError) as ctx:
+                gts_server.parse_rules("\ngame_speed = " + bad)
+            self.assertIn("line 2", str(ctx.exception), bad)
+        rules = gts_server.parse_rules("game_speed = 1.5")
+        self.assertEqual(gts_server.rules_view(rules), gts_server.rules_view(gts_server.parse_rules("")),
+                         "the speed is no rule clients play: it never starts a new run")
+        store = gts_server.GtsStore(os.path.join(tempfile.mkdtemp(), "d.json"), rules=rules)
+        self.assertIn("Game speed: 1.5X for everyone online", gts_server.banner("127.0.0.1", 7779, store))
+        plain = gts_server.GtsStore(os.path.join(tempfile.mkdtemp(), "d.json"))
+        self.assertNotIn("Game speed", gts_server.banner("127.0.0.1", 7779, plain))
 
     def test_trades_between_gym_leaders(self):
         def trades(text):
@@ -1375,6 +1395,38 @@ class ModesOffTests(ServerTest):
     def test_a_random_seed_per_run(self):
         seed = self.get("/server/info")["rules"]["seed"]
         self.assertTrue(1 <= seed <= gts_server.SEED_MAX)
+
+
+class GameSpeedTests(ServerTest):
+    """game_speed: every client runs at the host's speed while online."""
+    rules = {"game_speed": 1.5}     # on a Crystal world: not a game mode
+
+    def test_the_speed_reaches_every_client(self):
+        info = self.get("/server/info")
+        self.assertEqual(info["gameSpeed"], 1.5)
+        self.assertIs(info["rules"]["active"], False, "the speed is no game mode")
+        gold = self.register("GOLD")
+        self.assertEqual(self.sync(gold["trainerId"])["gameSpeed"], 1.5)
+
+    def test_an_older_client_is_told_to_update(self):
+        gold = self.register("GOLD")
+        res = self.sync(gold["trainerId"], modesVersion=6)
+        self.assertEqual((res["success"], res["error"]), (False, "VERSION_MISMATCH"), res)
+        self.assertIn("GAME SPEED", res["serverVersion"])
+        self.assertError(self.post("register_player", isNewCharacter=True, name="OLD",
+                                   spriteId="SPRITE_CHRIS", modesVersion=None), "VERSION_MISMATCH")
+        self.assertTrue(self.post("logout", trainerId=gold["trainerId"], modesVersion=None)["success"])
+        self.assertTrue(self.sync(gold["trainerId"])["success"])
+
+    def test_at_normal_speed_older_clients_still_play(self):
+        self.stop()
+        self.rules = {"game_speed": 1.0}
+        self.start()
+        self.assertEqual(self.get("/server/info")["gameSpeed"], 1.0)
+        gold = self.register("GOLD", modesVersion=None)
+        res = self.sync(gold["trainerId"], modesVersion=None)
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["gameSpeed"], 1.0)
 
 
 class ModesCommandLineTests(unittest.TestCase):

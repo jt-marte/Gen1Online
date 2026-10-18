@@ -24,11 +24,13 @@ randomizer, multiworld) play on Gen 1 and FireRed/LeafGreen. `manifest.json` `"g
   add gameplay that changes the vanilla game outside the online features. On
   Gen 1 that is why the casino is never set up (it would take over the
   Celadon Game Corner and raise the coin cap) and why the mod leaves Yellow's
-  own Pikachu follower (`src.world.PikachuFollower`) alone. The one
-  sanctioned exception is the server's game modes (`modes/`: hardcore
-  Nuzlocke, randomizer, shared key items), which the user asked for: off by
-  default, chosen by the host in `server/server_config.txt`, online only, and
-  undone the moment the player is offline.
+  own Pikachu follower (`src.world.PikachuFollower`) alone. The sanctioned
+  exceptions, all asked for by the user: the server's game modes (`modes/`:
+  hardcore Nuzlocke, randomizer, shared key items): off by default, chosen
+  by the host in `server/server_config.txt`, online only, and undone the
+  moment the player is offline; the host's `game_speed` (online only, the
+  same rules); and **instant text** (`other/instant_text.lua`), the one
+  change to the offline game: built in, always on, no option.
 - **The server is for friends**, with no Cloudflare. See "Server" below.
 - The user's Crystal ROM (v1.1, verified SHA-1) is at
   `/home/jt/Desktop/Pokemon/Pokemon - Crystal Version (UE) (V1.1) [C][!].zip`.
@@ -59,6 +61,12 @@ randomizer, multiworld) play on Gen 1 and FireRed/LeafGreen. `manifest.json` `"g
   tag `v1.0.1`, packed with gen1recomp `21a64419`'s modkit on Windows. Only
   the server unittest and `modes_test.lua` were run for it (no Linux, no
   ROMs there); the real-game drivers still need a run.
+- 1.0.2 (2026-10-17, instant text and the host's game speed) the same way,
+  tag `v1.0.2`. Run for it on Windows: the server unittest, `modes_test.lua`,
+  `instant_text_test.lua`, modkit validate/lint/gen2check (only 1.0.0's four
+  gen2check errors), and real FireRed 1.0: `gen3_options.lua` at 1.5X,
+  `gen3_link.lua` (PVP and link trade) at 1X and 1.5X, `gen3_online.lua`.
+  Gen 1, Crystal and LeafGreen real-game drivers were not run.
 - Release: pack, then `gh release create v<version> <mod zip> <server zip>
   sha256sums.txt --verify-tag` after pushing the tag (1.0.0 was made from
   the sandbox: `gh` works once the host has set the sandbox's `github`
@@ -74,6 +82,7 @@ randomizer, multiworld) play on Gen 1 and FireRed/LeafGreen. `manifest.json` `"g
 | `main.lua` | ~7,900 lines, nearly the whole mod. **CRLF line endings.** |
 | `pvp/` | Fallback Gen 2 PVP engine, used only against pre-0.5.1 peers. |
 | `other/`, `games/` | Gen 1 casino (Crash, Tube Flyer, Prize Case, pawn). Off: main.lua returns before setting it up on Gen 1, and on Crystal its maps don't exist. |
+| `other/instant_text.lua` | Instant text, on at load on every game (offline too): `install{TextBox, BattleState, Typer, Message}` patches the game's own printers (Gen 1/Crystal `src.render.TextBox`, Gen 1 battle `updateQueue`, Crystal `src.ui.gen2.Typer`, FireRed `src.ui.game3.message`); main.lua hands over only that game's. |
 | `npcs/`, `quests/` | Registries (empty). `npcs/{quest,trade}/*` are dead Gen 1 leftovers. |
 | `modes/` | Server game modes: `init.lua` (Gen 1: hooks, the run, shared items, Nuzlocke), `frlg.lua` (the same interface on FireRed/LeafGreen), `randomizer.lua` (pure: build/apply/undo the world from a seed; `build` also takes another game's places and species), `logic.lua` / `logic_frlg.lua` (what each item place needs), `rng.lua` (Park-Miller, pinned). Loaded by main.lua as `GtsUI.Modes` (exported as `mod.exports.modes`). |
 | `gen3/` | The FireRed/LeafGreen layer (`GtsUI.G3`, exported as `mod.exports.gen3`): `ui.lua` (the mod's screens on FireRed's modal stack, in its windows and font), `init.lua` (game wrapper, live save view, session swap, Pokémon and PC, presence actors, avatars, the PC's GTS row), `link.lua` (PVP and link trades over the server). |
@@ -201,6 +210,12 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     on a Gen 1 server, including an accepted PVP battle (booked once) and a
     link trade opening over the room. `run_tests.sh` runs both for Red, Blue
     and Yellow.
+  - `instant_text_test.lua` (plain LuaJIT from gen1recomp, the engine's
+    `tests.love_stub`, a stand-in font for the ROM's charmap): each printer
+    timed vanilla, then installed: a three-page TextBox (a page whole in two
+    updates, A, the next page at once with its mid-text pause and the 20-frame
+    empty box skipped, A closes), Gen 1 battle text, Typer and Message whole
+    on the first tick, and installing twice changing nothing.
   - `modes_test.lua` (plain LuaJIT, no engine or ROM): the pinned RNG, 200
     seeds of placement on a synthetic world (always finishable, no
     progression on hidden tiles, post-game maps or the S.S. Anne's cabins, a
@@ -364,11 +379,28 @@ dev/run_tests.sh quick    # synthetic only, no ROM needed
     a real battle: her wipe ends run 1 for both, ASH is told why, and both
     start run 2 in the bedroom.
   - `gen3_options.lua` (FireRed; `randomizer = on`, `wild_legendaries =
-    100`, `randomize_trainers = on`, no Nuzlocke): the options travel from
-    the server's file (rules view and `/server/info`), a Route 1 wild roll
-    is a legendary at its level, and a real Viridian Forest trainer, talked
-    to, sends out the seed's team (`Modes.trainerTeam` of his
-    `Trainers.get` party) at his levels and is beaten.
+    100`, `randomize_trainers = on`, `game_speed = 1.5`, no Nuzlocke): the
+    options travel from the server's file (rules view and `/server/info`),
+    the game runs at 1.5X with the player's own speed locked, a text page
+    shows whole on its first tick, a Route 1 wild roll is a legendary at
+    its level, and a real Viridian Forest trainer, talked to, sends out the
+    seed's team (`Modes.trainerTeam` of his `Trainers.get` party) at his
+    levels and is beaten, every battle frame at 1.5X; after DISCONNECT the
+    player's own speed (1X) again and the text still instant.
+  - `gen3_link.lua` also checks the link battle ran at the server's speed;
+    on a `game_speed = 1.5` server (not what `run_tests.sh` uses) both games
+    passed the battle and the trade at 1.5X (2026-10-17).
+  - **On Windows** (no `setup.sh`): LÖVE 11.5 and LuaJIT from winget
+    (`Love2d.Love2d`, `DEVCOM.LuaJIT`). LÖVE's save folder follows
+    `%APPDATA%`, so pointing `APPDATA` at a temp folder gives a throwaway
+    profile: import with `POKEPORT_IDENTITY=gen1online-frlg
+    POKEPORT_VERSION=firered POKEPORT_IMPORT_ONLY=1 POKEPORT_IMPORT_ROM=<gba>
+    lovec.exe .` from gen1recomp, copy the mod (minus `.git`, `dev`,
+    `server`) to `<profile>/mods/gen1online-plus`, start the server with
+    `GTS_CONFIG`/`GTS_GENERATION=3` and `--port 17781`, then run `lovec.exe
+    .` with `POKEPORT_DRIVER`, `POKEPORT_BACKGROUND=1`, `G1O_DEV`, `SHOTS`,
+    `GTS_PORT`. The user's FireRed is a v1.0 dump (SHA-1 `41cb23d8...`, the
+    engine's `FIRERED_10`), zipped in the workspace root.
   - `gen3_social.lua` (FireRed; plain server, `gts_config.txt` at a dead
     port): JOIN reporting the dead server, SERVER ADDRESS typed through
     `love.textinput`, `Game3:keypressed` and the D-pad (bad addresses
@@ -433,12 +465,27 @@ Transport and framing:
   `modVersion`, `version`, `gameVersion` and `recompVersion`. Accept a client
   when its major.minor matches the server's. Otherwise answer
   `{"success":false,"error":"VERSION_MISMATCH","serverVersion":...}`.
-- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 6: the
+- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 7: the
   game modes' rules the client plays). While a game mode is on, the server
   answers a Gen 1 or FireRed/LeafGreen POST below `MODES_VERSION` (logout
   excepted) with `VERSION_MISMATCH`, `serverVersion` "<version>+ (GAME MODES)":
   the rules are enforced by each client, so an old copy would play without
-  them. Bump both when the rules change.
+  them. Bump both when the rules change. With `game_speed` above 1 the same
+  refusal reaches every generation, `serverVersion` "<version>+ (GAME SPEED)":
+  an old copy would play at 1X among faster players.
+- **Game speed.** `/server/info` and every `sync_pos` answer carry
+  `gameSpeed` (`game_speed` in server_config.txt, 1..4; no rules view key, so
+  never in the run signature). The client (`GtsUI.setOnlineSpeed`, clamped
+  1..4) wraps `logicSpeed` on Game, Game2 and Game3: while connected it
+  answers that speed, link battles and trades included, but 1 in a
+  fixed-speed minigame (Gen 1/2 `speedLocked` reason "minigame", FireRed's
+  `minigames.common` active); `_speedLockEdge` stands aside online (it would
+  end every fast frame under the mod's lock); `speedLocked` still answers
+  true, "online", which keeps the player's GAME SPEED rows and hotkeys shut.
+  Audio runs on the engine's own real-time accumulator, so nothing sounds
+  faster. Logic-`dt` timers that mean real seconds divide by the speed (the
+  16 s challenge wait). Driver gotcha: a hold or wait counted in frames
+  covers 1.5x the game time (`gen3_link.lua` scales LEAF's step).
 - Errors are `{"success":false,"error":"CODE"}`. The client acts on
   `VERSION_MISMATCH`, `WRONG_GENERATION`, `ALREADY_LOGGED_IN`, `BANNED` and
   `NAME_TAKEN`.

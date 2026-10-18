@@ -49,6 +49,7 @@ dev/drivers/gen3_options.lua
 dev/harness/address_test.lua
 dev/harness/modes_test.lua
 dev/harness/nuzlocke_trades_test.lua
+dev/harness/instant_text_test.lua
 # The server (server/) is hosted separately and never ships inside the mod.
 server/gts_server.py
 server/test_gts_server.py

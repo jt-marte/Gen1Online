@@ -8,6 +8,14 @@
 host = 0.0.0.0
 port = 7779
 
+# Game speed for everyone while online, battles (PVP too) and walking
+# included: 1.5 runs the game 50% faster.  Music and sounds keep their normal
+# speed.  Every player on the server plays at it (offline, each player's own
+# GAME SPEED option applies again).  Unlike the modes below, changing it
+# never starts a new run.
+# game_speed = 1 (normal) | a number up to 4, like 1.5 or 2
+game_speed = 1
+
 #
 # The modes play on a Gen 1 world (Red, Blue and Yellow) and on a FireRed /
 # LeafGreen world; a Crystal server ignores them.  Everyone on the server

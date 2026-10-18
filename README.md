@@ -1,7 +1,7 @@
 # Gen1Online+
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Mod Version: v1.0.1](https://img.shields.io/badge/version-1.0.1-green.svg)](manifest.json)
+[![Mod Version: v1.0.2](https://img.shields.io/badge/version-1.0.2-green.svg)](manifest.json)
 [![Games: Red, Blue, Yellow, Crystal, FireRed, LeafGreen](https://img.shields.io/badge/target-Red%20%7C%20Blue%20%7C%20Yellow%20%7C%20Crystal%20%7C%20FireRed%20%7C%20LeafGreen-blue.svg)](https://github.com/bryanthaboi/gen1recomp)
 
 Online multiplayer for *Pokémon Red, Blue, Yellow, Crystal, FireRed* and *LeafGreen* on the [gen1recomp](https://github.com/bryanthaboi/gen1recomp) engine: see other trainers on the map, trade, battle and chat, on a server you host for your friends.
@@ -13,6 +13,8 @@ Online multiplayer for *Pokémon Red, Blue, Yellow, Crystal, FireRed* and *LeafG
 - **PVP**: face another player, press **A**, and battle on the game's own link battle.
 - **Chat, co-op parties** (up to 4; warp to a teammate), trainer cards and an online level.
 - **A separate online save**: your offline save is never touched.
+- **Instant text**: every text box shows its whole page at once instead of letter by letter, in the field and in battles, on every game (offline too). Press **A** to go on, as usual.
+- **Faster online play**: the host can run everyone at up to 4X (like `game_speed = 1.5` in `server/server_config.txt`), walking, battles and PVP included. Music and sounds keep their normal speed.
 - **Crystal extras**: a shared server clock for day and night, and a PokéGear chat tab with [pokegear_cards](https://github.com/1Jamie/pokegear_cards).
 - **Game modes** on Red/Blue/Yellow and FireRed/LeafGreen: hardcore Nuzlocke, co-op randomizer, randomized trainers, wild legendaries, shared key items and multiworld. See [Game modes](#game-modes).
 
@@ -23,7 +25,7 @@ A server hosts one generation: Red/Blue/Yellow together, Crystal, or FireRed/Lea
 The server is one Python file: Python 3.8 or newer, nothing to install.
 
 1. **Start it**: `server/start.sh` (Linux/macOS) or double-click `server\start.bat` (Windows; tick "Add python.exe to PATH" when installing Python). It prints the addresses to give your friends. **Ctrl+C** stops it; your world lives in `server/gts_data.json`.
-2. **Set it up** in `server/server_config.txt`, then restart: the address and port it listens on (`host`, `port`) and the game modes. Command-line flags win over the file: `--host`, `--port`, `--data <file>`, `--gen 1|2|3`, `--config <file>`, `--new-run`.
+2. **Set it up** in `server/server_config.txt`, then restart: the address and port it listens on (`host`, `port`), the game speed for everyone (`game_speed`, 1 to 4, like 1.5) and the game modes. Command-line flags win over the file: `--host`, `--port`, `--data <file>`, `--gen 1|2|3`, `--config <file>`, `--new-run`.
 3. **Connect each game**: **START > CONNECT > SERVER ADDRESS**, type the host's address (like `192.168.1.23`; `:7779` is added when there's no port) and press **A**. The game remembers it. `gts_config.txt` in the mod folder holds the default, `server_url=http://127.0.0.1:7779`, which is right for the host.
 4. **Let friends reach it**, one of:
    - **Same Wi-Fi**: the host's LAN address. Let TCP 7779 through the firewall: `sudo ufw allow 7779/tcp`, `sudo firewall-cmd --add-port=7779/tcp`, or on Windows allow Python on private networks.
@@ -41,6 +43,7 @@ Red/Blue/Yellow and FireRed/LeafGreen servers; everyone on the server plays the 
 ```
 host = 0.0.0.0             # 127.0.0.1 = this PC only
 port = 7779
+game_speed = 1             # 1.5 = everyone online 50% faster (any server)
 nuzlocke = hardcore        # off | hardcore
 nuzlocke_trades = 1        # off | how many trades between gym leaders
 randomizer = on            # off | on

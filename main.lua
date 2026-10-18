@@ -4,7 +4,7 @@
 
   -- Resolved before anything else: request headers, the default avatar and
   -- the save paths below all read these.
-  local MOD_VERSION = "1.0.1"
+  local MOD_VERSION = "1.0.2"
   local isGen2, isGen3 = false, false
   if mod and mod.generation then
     isGen2 = (mod.generation == 2)
@@ -136,7 +136,15 @@
   -- The game modes' rules this client plays (modes/): sent with every POST.
   -- A server running a mode turns away clients below its MODES_VERSION, so
   -- nobody plays an old copy of the Nuzlocke rules without knowing.
-  GtsUI.MODES_VERSION = 6
+  GtsUI.MODES_VERSION = 7
+  -- The host's game_speed (server_config.txt): every player runs at it while
+  -- connected, battles included.  It rides /server/info and every sync_pos
+  -- answer; 1 is normal, and anything odd reads as 1.
+  GtsUI.onlineSpeed = 1
+  function GtsUI.setOnlineSpeed(v)
+    v = tonumber(v)
+    GtsUI.onlineSpeed = (v and v >= 1 and v <= 4) and v or 1
+  end
 
 
   local Game, Input, OverworldState, BattleState = require("src.core.Game"), require("src.core.Input"), require("src.world.OverworldController"), require("src.battle.BattleState")
@@ -145,6 +153,24 @@
   local Net, CodeEntry, NPC, SpriteRenderer = require("src.link.Net"), require("src.link.CodeEntry"), require("src.world.NPC"), require("src.render.SpriteRenderer")
   local Pokemon, Json = require("src.pokemon.Pokemon"), require("src.link.Json")
   local Strings = pcall(require, "src.core.Strings") and require("src.core.Strings") or function(s) return s end
+
+  -- Instant text (other/instant_text.lua): this game's own text printers show
+  -- a whole page at once, offline too.  Before the FireRed block below, which
+  -- swaps TextBox for the mod's own.
+  do
+    local printers = {}
+    if not isGen3 then printers.TextBox = TextBox end
+    if not (isGen2 or isGen3) then printers.BattleState = BattleState end
+    if isGen2 then
+      local okT, Typer = pcall(require, "src.ui.gen2.Typer")
+      if okT then printers.Typer = Typer end
+    end
+    if isGen3 then
+      local okM, Message = pcall(require, "src.ui.game3.message")
+      if okM then printers.Message = Message end
+    end
+    pcall(function() requireLocal("other/instant_text.lua").install(printers) end)
+  end
 
   -- FireRed and LeafGreen (gen3/init.lua): the mod's screens, its view of
   -- the save and the overworld, Gen 3 Pokémon.  `Game` becomes its game,
@@ -283,6 +309,7 @@
     GtsUI.G3env.netNpcs = function() return netNpcs end
     GtsUI.G3env.netPlayerMap = function() return netPlayerMap end
     GtsUI.G3env.online = function() return isGtsServerConnected end
+    GtsUI.G3env.onlineSpeed = function() return GtsUI.onlineSpeed or 1 end
   end
 
   -- Custom Trainer Profile State & MMO Leveling Engine (1 to 100)
@@ -2166,6 +2193,7 @@
               activeParty = res.party
             end
             if GtsUI.Modes and res.run then GtsUI.Modes.synced(game, res) end
+            if res.gameSpeed ~= nil then GtsUI.setOnlineSpeed(res.gameSpeed) end
             -- Synchronize RTC Clock with Server
             if isGen2 and res.serverHour and res.serverMinute and res.serverWeekday and game and game.save then
               local okClock, Clock = pcall(require, "src.core.gen2.Clock")
@@ -3209,11 +3237,15 @@
     end
   end
 
-  -- MMO speed lock: while connected every player runs at 1x so the online
-  -- world stays in sync.  speedLocked is the engine's own lock on both Game
-  -- (Gen 1) and Game2 (link battles and minigames use it): logicSpeed
-  -- answers 1 and a fast-forward frame in flight is ended cleanly, and the
-  -- player's saved GAME SPEED option is left alone for when they go offline.
+  -- MMO speed lock: while connected every player runs at the host's
+  -- game_speed (GtsUI.onlineSpeed, 1 unless the server sets one) so the
+  -- online world stays in sync.  speedLocked is the engine's own lock on both
+  -- Game (Gen 1) and Game2 (link battles and minigames use it): online it
+  -- keeps the player's GAME SPEED rows and hotkeys shut, and their saved
+  -- option is left alone for when they go offline.  logicSpeed answers the
+  -- host's speed, in link battles too (both players run at it), but a
+  -- fixed-speed minigame stays at 1x; _speedLockEdge, which would end every
+  -- fast frame under the lock, stands aside while connected.
   if GtsUI.G3 then GtsUI.G3.installGame(disconnectOnTitle) end
   for _, cls in ipairs(isGen3 and {} or { Game, (okGame2 and Game2Mod) or nil }) do
     if cls and cls.speedLocked then
@@ -3221,6 +3253,21 @@
       cls.speedLocked = function(self, ...)
         if isGtsServerConnected then return true, "online" end
         return origSpeedLocked(self, ...)
+      end
+      local origLogicSpeed, origLockEdge = cls.logicSpeed, cls._speedLockEdge
+      if origLogicSpeed then
+        cls.logicSpeed = function(self, ...)
+          if not isGtsServerConnected then return origLogicSpeed(self, ...) end
+          local speed = GtsUI.onlineSpeed or 1
+          if speed ~= 1 and select(2, origSpeedLocked(self)) == "minigame" then return 1 end
+          return speed
+        end
+      end
+      if origLockEdge then
+        cls._speedLockEdge = function(self, ...)
+          if isGtsServerConnected then return end
+          return origLockEdge(self, ...)
+        end
       end
     end
   end
@@ -6101,6 +6148,7 @@
     -- the server's game modes (modes/init.lua), handed over once connected;
     -- a full multiworld run, or one on another game's data, turns us away here
     GtsUI.serverRules = srvInfo.rules
+    GtsUI.setOnlineSpeed(srvInfo.gameSpeed)
     local modesRefusal = GtsUI.Modes and GtsUI.Modes.precheck(game, srvInfo.rules)
     if modesRefusal then
       game.stack:push(TextBox.new(game, wrapText(modesRefusal)))
@@ -6751,7 +6799,8 @@ return function(mod)
   OverworldState.update = function(self, dt)
     -- LOCKOUT PLAYER MOVEMENT WHILE WAITING FOR CHALLENGE RESPONSE
     if isWaitingForChallenge then
-      challengeWaitTimer = (challengeWaitTimer or 0) + dt
+      -- real seconds: the logic clock runs at the host's game speed
+      challengeWaitTimer = (challengeWaitTimer or 0) + dt / (GtsUI.onlineSpeed or 1)
       if challengeWaitTimer > 16.0 then
         isWaitingForChallenge = false
         GtsUI.pendingOffer = nil
@@ -7069,7 +7118,8 @@ return function(mod)
       -- LOCKOUT PLAYER MOVEMENT WHILE WAITING FOR CHALLENGE RESPONSE
       if isWaitingForChallenge then
         local dt = 1 / 60
-        challengeWaitTimer = (challengeWaitTimer or 0) + dt
+        -- real seconds: the logic clock runs at the host's game speed
+        challengeWaitTimer = (challengeWaitTimer or 0) + dt / (GtsUI.onlineSpeed or 1)
         if challengeWaitTimer > 16.0 then
           isWaitingForChallenge = false
           GtsUI.pendingOffer = nil
