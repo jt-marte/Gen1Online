@@ -69,6 +69,19 @@ randomizer, multiworld) play on Gen 1 and FireRed/LeafGreen. `manifest.json` `"g
   Gen 1, Crystal and LeafGreen real-game drivers were not run.
 - 1.0.3 (2026-10-17, legendary crazy starters; rules version 8) the same
   way, tag `v1.0.3`.
+- 1.0.4 (2026-10-18, crazy movesets and the Crystal boot fix; rules
+  version 9) was never released on its own: 1.0.5 carries it.
+- 1.0.5 (2026-10-18, the server password and WARP TO PLAYER) from `master`
+  with tag `v1.0.5`, after the full `dev/run_tests.sh` (42/42: real
+  Crystal, Yellow, FireRed, LeafGreen). Packed on Linux with gen1recomp
+  `21a64419`'s modkit from a `git archive` of the tagged commit (a clean
+  tree: no `dist/`, no `server/__pycache__/`; the package matched 1.0.3's
+  60 files). Every new dev file needs its own `.modkitignore` line
+  (`password_test.lua` was nearly packed). The server zip
+  (`gen1online-server-<v>/` with the four files, 1980 dates) built with
+  Python's `zipfile` on Linux needs Unix modes on its entries
+  (`create_system = 3`, the folder `0o40755`, `start.sh` `0o100755`, the
+  rest `0o100644`): with mode 0 the unzipped folder can't be opened.
 - Release: pack, then `gh release create v<version> <mod zip> <server zip>
   sha256sums.txt --verify-tag` after pushing the tag (1.0.0 was made from
   the sandbox: `gh` works once the host has set the sandbox's `github`
