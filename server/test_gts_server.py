@@ -23,7 +23,7 @@ from urllib.parse import quote
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import gts_server  # noqa: E402
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 
 class FakeClock:
@@ -1021,7 +1021,7 @@ class BindingTests(ServerTest):
 class CommandLineTests(unittest.TestCase):
     def test_defaults(self):
         self.assertEqual(gts_server.DEFAULT_PORT, 7779)
-        self.assertEqual(gts_server.DEFAULT_VERSION, "1.0.0")
+        self.assertEqual(gts_server.DEFAULT_VERSION, "1.0.1")
         self.assertEqual(gts_server.DEFAULT_DATA,
                          os.path.join(os.path.dirname(os.path.abspath(gts_server.__file__)),
                                       "gts_data.json"))
@@ -1048,7 +1048,7 @@ class RulesFileTests(unittest.TestCase):
         view = gts_server.rules_view(gts_server.parse_rules(""))
         self.assertEqual(view, {"nuzlocke": "off", "tradesPerGym": 0, "randomizer": False, "encounters": False,
                                 "items": False, "badges": False, "starters": False,
-                                "wildLegendaries": 0.0, "trainers": "off",
+                                "wildLegendaries": 0.0, "trainers": "off", "crazy": False,
                                 "sharedKeyItems": False,
                                 "multiworld": False, "players": 1, "active": False})
 
@@ -1097,6 +1097,25 @@ class RulesFileTests(unittest.TestCase):
             gts_server.parse_rules("randomize_trainers = some")
         self.assertEqual(gts_server.rules_view(gts_server.parse_rules("randomize_trainers = on"))["trainers"],
                          "off", "only with the randomizer")
+
+    def test_crazy_randomizer(self):
+        def crazy(text):
+            return gts_server.rules_view(gts_server.parse_rules("randomizer = on\n" + text))["crazy"]
+        self.assertFalse(crazy(""), "off by default")
+        self.assertTrue(crazy("crazy_randomizer = on"))
+        self.assertFalse(crazy("crazy_randomizer = off"))
+        with self.assertRaises(ValueError):
+            gts_server.parse_rules("crazy_randomizer = very")
+        self.assertFalse(gts_server.rules_view(gts_server.parse_rules("crazy_randomizer = on"))["crazy"],
+                         "only with the randomizer")
+        path = os.path.join(tempfile.mkdtemp(), "d.json")
+        plain = gts_server.GtsStore(path, rules=gts_server.parse_rules("randomizer = on\nseed = 7\n"))
+        self.assertIn("Modes: randomizer (", gts_server.banner("127.0.0.1", 7779, plain))
+        store = gts_server.GtsStore(path, rules=gts_server.parse_rules(
+            "randomizer = on\ncrazy_randomizer = on\nseed = 7\n"))
+        self.assertIn("Modes: crazy randomizer (encounters, items, badges, starters)",
+                      gts_server.banner("127.0.0.1", 7779, store))
+        self.assertEqual(store.data["run"]["id"], 2, "turning it on starts a new run")
 
     def test_trades_between_gym_leaders(self):
         def trades(text):

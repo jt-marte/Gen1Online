@@ -55,7 +55,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_VERSION = "1.0.0"
+DEFAULT_VERSION = "1.0.1"
 DEFAULT_PORT = 7779
 DEFAULT_DATA = os.path.join(SCRIPT_DIR, "gts_data.json")
 DEFAULT_CONFIG = os.path.join(SCRIPT_DIR, "server_config.txt")
@@ -135,6 +135,7 @@ RULE_DEFAULTS = {
     "randomize_starters": True,
     "wild_legendaries": 0.0,      # percent of wild encounters that are a legendary
     "randomize_trainers": "off",  # off | gyms | on
+    "crazy_randomizer": False,    # no strength matching: any Pokémon anywhere (leaders keep their type)
     "shared_key_items": "auto",
     "multiworld": False,
     "players": 2,
@@ -147,8 +148,9 @@ TRAINER_MODES = ("off", "gyms", "on")   # gyms: gym leaders, their gyms, Elite F
 # POST).  While a mode is on, a Gen 1 or FireRed/LeafGreen client below this
 # is turned away with VERSION_MISMATCH, so nobody plays an old copy of the
 # rules (2: the strict first encounter, no dupes clause; 3: wild legendaries;
-# 4: randomized trainers; 5: trades limited between gym leaders).
-MODES_VERSION = 5
+# 4: randomized trainers; 5: trades limited between gym leaders; 6: the
+# crazy randomizer).
+MODES_VERSION = 6
 MODES_GENERATIONS = (1, 3)
 MAX_WORLDS = 8
 SAVE_ATTEMPTS = 5               # os.replace tries (Windows: Defender/OneDrive hold the file briefly)
@@ -381,6 +383,8 @@ def rules_view(rules):
         "starters": rando and bool(rules.get("randomize_starters")),
         "wildLegendaries": float(rules.get("wild_legendaries") or 0) if rando else 0.0,
         "trainers": (rules.get("randomize_trainers") or "off") if rando else "off",
+        # wild Pokémon, starters and randomized trainers of any strength
+        "crazy": rando and bool(rules.get("crazy_randomizer")),
         "sharedKeyItems": bool(shared),
     }
     # the multiworld splits the shuffled items across worlds: it needs the
@@ -1646,7 +1650,8 @@ def modes_line(store):
                                                              "" if view["tradesPerGym"] == 1 else "s"))
     if view["randomizer"]:
         shuffled = [name for name in ("encounters", "items", "badges", "starters") if view[name]]
-        parts.append("randomizer (%s)" % (", ".join(shuffled) or "nothing shuffled"))
+        parts.append("%srandomizer (%s)" % ("crazy " if view["crazy"] else "",
+                                            ", ".join(shuffled) or "nothing shuffled"))
         if view["trainers"] != "off":
             parts.append("trainers (%s)" % ("gyms" if view["trainers"] == "gyms" else "all"))
         if view["wildLegendaries"]:

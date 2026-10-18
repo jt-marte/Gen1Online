@@ -280,7 +280,7 @@ return function(ctx)
     return Randomizer.build({ seed = r.seed, locations = M.places(r.items, r.badges), logic = L, Rng = Rng,
       encounters = r.encounters, items = r.items, badges = r.badges, worlds = worlds(r),
       world = world, pokemon = pokemon, legendary = legendary, fieldMovesOk = fieldMovesOk,
-      fallbackItem = "POTION", starters = r.starters, starterIds = STARTERS })
+      fallbackItem = "POTION", starters = r.starters, starterIds = STARTERS, crazy = r.crazy })
   end
 
   -- ---- the starters -----------------------------------------------------------
@@ -401,9 +401,9 @@ return function(ctx)
     local r = rules()
     local key = nil
     if r and r.randomizer and r.seed and G3.raw() and (worlds(r) == 1 or M.world) then
-      key = ("%s/%s%s%s%s/%d:%d"):format(tostring(r.seed), tostring(r.encounters), tostring(r.items),
-                                         tostring(r.badges), tostring(r.starters), worlds(r),
-                                         worlds(r) > 1 and M.world or 1)
+      key = ("%s/%s%s%s%s%s/%d:%d"):format(tostring(r.seed), tostring(r.encounters), tostring(r.items),
+                                           tostring(r.badges), tostring(r.starters), tostring(r.crazy),
+                                           worlds(r), worlds(r) > 1 and M.world or 1)
     end
     -- a new script bundle (the engine reloaded it) holds vanilla items again
     if key and planKey == key and locsBundle ~= bundle() then planKey = nil end
@@ -482,9 +482,10 @@ return function(ctx)
 
   -- randomize_trainers: gym leaders, their gyms' trainers and the Elite Four
   -- keep their type; the Champion (and with "on" every other trainer) gets
-  -- Pokémon of the same strength.  Each team comes from the run's seed and
-  -- the trainer's number: the same every time, for every player.  Levels and
-  -- held items stay; moves are the new Pokémon's own.
+  -- Pokémon of the same strength (the crazy randomizer: of any strength).
+  -- Each team comes from the run's seed and the trainer's number: the same
+  -- every time, for every player.  Levels and held items stay; moves are the
+  -- new Pokémon's own.
   local TYPE = { FIGHTING = 1, POISON = 3, GROUND = 4, ROCK = 5, GHOST = 7, FIRE = 10, WATER = 11,
     GRASS = 12, ELECTRIC = 13, PSYCHIC = 14, ICE = 15, DRAGON = 16 }
   local TRAINER_TYPE = { [414] = TYPE.ROCK, [415] = TYPE.WATER, [416] = TYPE.ELECTRIC,
@@ -510,7 +511,7 @@ return function(ctx)
     local pokemon, legendary = M.speciesData()
     local salt = 30000 + Randomizer.saltOf(id or tostring(trainerId))
       + ((worlds(r) > 1 and M.world) or 0) * 1000
-    return Randomizer.trainerTeam(Rng.new(r.seed, salt), species, pokemon, legendary, theme)
+    return Randomizer.trainerTeam(Rng.new(r.seed, salt), species, pokemon, legendary, theme, r.crazy)
   end
 
   mod.hooks:wrap("trainer.party", function(nextFn, trainerClass, trainerId, party)
@@ -1147,7 +1148,7 @@ return function(ctx)
       parts[#parts + 1] = "HARDCORE NUZLOCKE"
         .. (n > 0 and (" (%d TRADE%s PER GYM LEADER)"):format(n, n == 1 and "" or "S") or "")
     end
-    if r.randomizer then parts[#parts + 1] = "RANDOMIZER" end
+    if r.randomizer then parts[#parts + 1] = r.crazy and "CRAZY RANDOMIZER" or "RANDOMIZER" end
     if r.multiworld then
       parts[#parts + 1] = ("MULTIWORLD (YOU ARE WORLD %s OF %d)"):format(tostring(M.world or "?"), worlds(r))
     end

@@ -1,7 +1,7 @@
 # Gen1Online+
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Mod Version: v1.0.0](https://img.shields.io/badge/version-1.0.0-green.svg)](manifest.json)
+[![Mod Version: v1.0.1](https://img.shields.io/badge/version-1.0.1-green.svg)](manifest.json)
 [![Games: Red, Blue, Yellow, Crystal, FireRed, LeafGreen](https://img.shields.io/badge/target-Red%20%7C%20Blue%20%7C%20Yellow%20%7C%20Crystal%20%7C%20FireRed%20%7C%20LeafGreen-blue.svg)](https://github.com/bryanthaboi/gen1recomp)
 
 Online multiplayer for *Pokémon Red, Blue, Yellow, Crystal, FireRed* and *LeafGreen* on the [gen1recomp](https://github.com/bryanthaboi/gen1recomp) engine: see other trainers on the map, trade, battle and chat, on a server you host for your friends.
@@ -49,6 +49,7 @@ randomize_items = on
 randomize_badges = on
 randomize_starters = on
 randomize_trainers = off   # gyms | on (every trainer)
+crazy_randomizer = off     # on: any Pokémon of any strength, anywhere
 wild_legendaries = off     # on (1 in 100) or a percent, like 2
 shared_key_items = auto    # auto = on with the randomizer
 multiworld = off           # on: one world per player
@@ -57,7 +58,7 @@ seed =                     # a number replays the same world
 ```
 
 - **Hardcore Nuzlocke**: only the first wild Pokémon you meet in each area can be caught (encounters before your first Poké Balls don't count), fainted Pokémon are gone for good, no items in battle, SET style, and a level cap at the next gym leader's ace. If any player's whole party faints, the run ends for everyone and a new world begins. With `nuzlocke_trades = 1`, each player gets one trade between two gym leaders (a GTS buy, a GTS or Wonder Trade deposit, or a link trade; taking a deposit back gives the trade back, and what comes back for a deposit is always yours to claim): beat a leader and you may trade once more.
-- **Randomizer**: wild Pokémon (swapped for ones of similar strength; on FireRed/LeafGreen any of the 386), items, gym badges and Oak's starters, with progression logic so every run can be finished. **Trainers**: random teams of the same strength; gym leaders and the Elite Four keep their type. **Wild legendaries**: a small chance per wild encounter.
+- **Randomizer**: wild Pokémon (swapped for ones of similar strength; on FireRed/LeafGreen any of the 386), items, gym badges and Oak's starters, with progression logic so every run can be finished. **Trainers**: random teams of the same strength; gym leaders and the Elite Four keep their type. **Crazy randomizer**: the same, with no strength matching, so a DRAGONITE can be on Route 1 at a Route 1 level, a starter can be anything but a legendary, and randomized trainers get Pokémon of any strength (gym leaders and the Elite Four still keep their type). **Wild legendaries**: a small chance per wild encounter.
 - **Shared key items**: key items, HMs and badges belong to the team; whatever one player finds, everyone gets.
 - **Multiworld**: each player gets their own world, and every key item exists in only one of them.
 - **ONLINE > RUN INFO** shows the modes, the level cap, your fallen Pokémon and the team's finds.

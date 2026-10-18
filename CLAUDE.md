@@ -55,6 +55,10 @@ randomizer, multiworld) play on Gen 1 and FireRed/LeafGreen. `manifest.json` `"g
   on gen1recomp `21a64419`. The tag first held the original Gen1Online
   author's first commit (an unrelated history); that is `original-v1.0.0`
   now.
+- 1.0.1 (2026-10-17, the crazy randomizer) was released from `master` with
+  tag `v1.0.1`, packed with gen1recomp `21a64419`'s modkit on Windows. Only
+  the server unittest and `modes_test.lua` were run for it (no Linux, no
+  ROMs there); the real-game drivers still need a run.
 - Release: pack, then `gh release create v<version> <mod zip> <server zip>
   sha256sums.txt --verify-tag` after pushing the tag (1.0.0 was made from
   the sandbox: `gh` works once the host has set the sandbox's `github`
@@ -429,7 +433,7 @@ Transport and framing:
   `modVersion`, `version`, `gameVersion` and `recompVersion`. Accept a client
   when its major.minor matches the server's. Otherwise answer
   `{"success":false,"error":"VERSION_MISMATCH","serverVersion":...}`.
-- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 5: the
+- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 6: the
   game modes' rules the client plays). While a game mode is on, the server
   answers a Gen 1 or FireRed/LeafGreen POST below `MODES_VERSION` (logout
   excepted) with `VERSION_MISMATCH`, `serverVersion` "<version>+ (GAME MODES)":
@@ -541,9 +545,10 @@ Quests:
 Game modes (Gen 1 and FireRed/LeafGreen; `server/server_config.txt`,
 `--config`, `GTS_CONFIG`):
 - The rules view `{nuzlocke: "off"|"hardcore", tradesPerGym, randomizer,
-  encounters, items, badges, starters, wildLegendaries, trainers,
+  encounters, items, badges, starters, wildLegendaries, trainers, crazy,
   sharedKeyItems, active, runId, seed}` (`wildLegendaries`: a percent, 0 when
   off or without the randomizer; `trainers`: "off" | "gyms" | "on";
+  `crazy`: `crazy_randomizer`, no strength matching;
   `tradesPerGym`: `nuzlocke_trades`, 0 = unlimited, 0 unless hardcore;
   `runReason`: why the run began, "start" | "wipe" | "config" | "manual",
   which words the clients' "RUN N IS OVER" note) rides `/server/info` as
@@ -910,6 +915,15 @@ off the open internet.
     `trainer.party` hook (class, party index, party): types by gym map
     (`M.GYM_TYPE`, leaders and their trainers) or class (`M.ELITE_TYPE`),
     OPP_RIVAL3 any type, salt from "CLASS#party".
+  - Crazy randomizer (`crazy_randomizer`, rules view `crazy`; both
+    generations): `Randomizer.build{crazy=}` shuffles the species in one
+    tier (`speciesMap`'s `tiers` = 1; still a permutation, legendaries
+    apart, the Cut re-draw as before), the starter pool is every
+    non-legendary with base stats (`starterPool`'s `any`), and
+    `trainerTeam`'s `crazy` picks from the whole themed (or untyped) pool
+    instead of the nearest by strength. Trainers still follow
+    `randomize_trainers`; levels stay. Part of the plan key; RUN INFO says
+    CRAZY RANDOMIZER.
   - Wild legendaries (`M.wildLegendary`): `BattleBridge.startWild` calls
     with no options (the field's grass, water, fishing, Rock Smash and Sweet
     Scent) roll `Randomizer.rollLegendary` (love.math.random) against the

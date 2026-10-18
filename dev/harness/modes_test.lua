@@ -508,6 +508,90 @@ do
     "FireRed's numbered starters draw from its own data")
 end
 
+-- ---- the crazy randomizer: any strength, anywhere ------------------------------------------
+do
+  -- wild Pokémon: still a one-to-one swap, but across every strength
+  local map = R.speciesMap(Rng.new(3, 1), pokemon, nil, 1)
+  local hit, perm, legendsStay, count, maxJump = {}, true, true, 0, 0
+  for from, to in pairs(map) do
+    if hit[to] then perm = false end
+    hit[to], count = true, count + 1
+    if (R.LEGENDARY[from] ~= nil) ~= (R.LEGENDARY[to] ~= nil) then legendsStay = false end
+    if not R.LEGENDARY[from] then maxJump = math.max(maxJump, math.abs(pokemon[from].dex - pokemon[to].dex)) end
+  end
+  check(perm and count == 151, "crazy: the species shuffle is still a one-to-one swap of all 151")
+  check(legendsStay, "crazy: legendaries still only trade places with legendaries")
+  check(maxJump > math.ceil(148 / R.TIERS), "crazy: a species may become one of any strength (max gap " .. maxJump .. ")")
+  local function crazyBuild(seed, extra)
+    local o = { seed = seed, data = data, victories = victories, logic = L, Rng = Rng,
+                encounters = true, crazy = true }
+    for k, v in pairs(extra or {}) do o[k] = v end
+    return R.build(o)
+  end
+  local a, b, tiered = crazyBuild(9), crazyBuild(9), build(9, { items = false, badges = false })
+  local same, differs = true, false
+  for k, v in pairs(a.species) do
+    if b.species[k] ~= v then same = false end
+    if tiered.species[k] ~= v then differs = true end
+  end
+  check(same and differs, "crazy: every client draws the same world, and it isn't the tiered one")
+  local w1, w2 = crazyBuild(9, { worlds = 2, world = 1 }), crazyBuild(9, { worlds = 2, world = 2 })
+  local perWorld = false
+  for k, v in pairs(w1.species) do if w2.species[k] ~= v then perWorld = true end end
+  check(perWorld, "crazy: each multiworld world gets its own")
+
+  -- starters: any species but the legendaries
+  local pool = R.starterPool(pokemon, nil, true)
+  local inPool, sorted, noLegend = {}, true, true
+  for i, id in ipairs(pool) do
+    inPool[id] = true
+    if R.LEGENDARY[id] then noLegend = false end
+    if i > 1 and pokemon[pool[i - 1]].dex > pokemon[id].dex then sorted = false end
+  end
+  check(#pool == 148 and noLegend and sorted, "crazy: the starter pool is every species but the legendaries, by dex: " .. #pool)
+  local allOk, strong = true, false
+  for seed = 1, 40 do
+    local m = crazyBuild(seed, { encounters = false, starters = true }).starters
+    local seen = {}
+    for _, v in ipairs(R.STARTERS) do
+      if not (m and m[v] and inPool[m[v]] and not seen[m[v]]) then allOk = false end
+      if m and m[v] then
+        seen[m[v]] = true
+        if pokemon[m[v]].dex > 100 then strong = true end
+      end
+    end
+  end
+  check(allOk and strong, "crazy: 40 seeds of four different starters from it, strong ones included")
+
+  -- trainers: the leader's type, any strength
+  local mons, kinds = {}, { "ROCK", "WATER", "NORMAL" }
+  for i = 1, 60 do
+    mons["P" .. i] = { dex = i, types = { kinds[(i - 1) % 3 + 1] },
+                       baseStats = { hp = 200 + i * 8, attack = 0, defense = 0, speed = 0, special = 0 } }
+  end
+  mons.LEGEND = { dex = 61, types = { "ROCK" }, baseStats = { hp = 700, attack = 0, defense = 0, speed = 0, special = 0 } }
+  local themed, far, distinct, untypedFar, kindsSeen = true, false, true, false, {}
+  for seed = 1, 50 do
+    local team = R.trainerTeam(Rng.new(seed, 30414), { "P1", "P31" }, mons, { LEGEND = true }, "ROCK", true)
+    for _, id in ipairs(team) do
+      if id == "LEGEND" or mons[id].types[1] ~= "ROCK" then themed = false end
+    end
+    if team[1] == team[2] then distinct = false end
+    -- the six nearest ROCKs to P1 are P1..P16
+    if mons[team[1]].dex > 16 then far = true end
+    local any = R.trainerTeam(Rng.new(seed, 2), { "P1", "P1", "P1" }, mons, { LEGEND = true }, nil, true)
+    for _, id in ipairs(any) do
+      if id == "LEGEND" then themed = false end
+      kindsSeen[mons[id].types[1]] = true
+      if mons[id].dex > 30 then untypedFar = true end
+    end
+  end
+  check(themed and distinct, "crazy: a gym leader's team is still all his type, no legendary, no repeats")
+  check(far, "crazy: and of any strength (past his six nearest)")
+  check(untypedFar and kindsSeen.ROCK and kindsSeen.WATER and kindsSeen.NORMAL,
+    "crazy: an ordinary trainer may get anything")
+end
+
 -- ---- FireRed/LeafGreen multiworld: each player finishes with the team's finds --------
 -- modes/frlg.lua's places, synthetic (balls on every logic map, the gifts, the
 -- fixed gifts, the gym slots), built for 2 worlds and replayed per player: a

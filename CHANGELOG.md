@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.1] - 2026-10-17
+
+1.0 servers and clients still play together. On a server running a game
+mode, a 1.0.0 client is told to update (the rules version is 6 now).
+
+### Added
+
+- **Crazy randomizer** (`crazy_randomizer = off | on`, off by default,
+  with the randomizer): no strength matching. Wild Pokémon still swap one
+  species for another everywhere, but across every strength, at the
+  levels of the ones they replace (a DRAGONITE on Route 1); the starters
+  may be any Pokémon but a legendary; randomized trainers draw from every
+  Pokémon of their type (gym leaders, their gyms and the Elite Four) or
+  every Pokémon. Legendaries still only swap among themselves. RUN INFO
+  says CRAZY RANDOMIZER. The rules version goes to 6.
+
 ## [1.0.0] - 2026-10-09
 
 The first full release: Red, Blue, Yellow, Crystal, FireRed and LeafGreen

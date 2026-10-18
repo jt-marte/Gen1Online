@@ -5,7 +5,12 @@
 --
 --   plan = Randomizer.build{ seed=, data=, victories=, logic=, Rng=,
 --                            encounters=, items=, badges=, starters=,
---                            worlds=, world= }
+--                            crazy=, worlds=, world= }
+--
+-- crazy (crazy_randomizer): no strength matching.  Wild Pokémon swap in one
+-- pool (a DRAGONITE on Route 1 at the PIDGEY's level), the starters may be
+-- any non-legendary, and a randomized trainer draws from his whole type (or
+-- every species).  Legendaries still keep to themselves.
 --   plan.species[VANILLA] = REPLACEMENT          (wild, fishing, static)
 --   plan.starters[VANILLA_STARTER] = REPLACEMENT (Oak's gifts)
 --   plan.content[key] = { item=, count= }        (every shuffled place)
@@ -38,9 +43,11 @@ end
 -- cut into tiers by base-stat total and shuffled within their tier, so
 -- Route 1 still holds early-game Pokémon and a Nuzlocke stays fair.
 -- `pokemon` is keyed by species id (names on Gen 1, numbers on FireRed);
--- `legendary` is the set kept apart (R.LEGENDARY by default).
-function R.speciesMap(rng, pokemon, legendary)
+-- `legendary` is the set kept apart (R.LEGENDARY by default); `tiers` = 1
+-- (the crazy randomizer) shuffles them all together.
+function R.speciesMap(rng, pokemon, legendary, tiers)
   legendary = legendary or R.LEGENDARY
+  tiers = tiers or R.TIERS
   local plain, legends = {}, {}
   for id, def in pairs(pokemon or {}) do
     if type(def) == "table" and def.baseStats then
@@ -62,8 +69,8 @@ function R.speciesMap(rng, pokemon, legendary)
     local shuffled = rng:shuffle({ unpack(ids) })
     for i, id in ipairs(ids) do map[id] = shuffled[i] end
   end
-  local per = math.ceil(#plain / R.TIERS)
-  for t = 0, R.TIERS - 1 do
+  local per = math.ceil(#plain / tiers)
+  for t = 0, tiers - 1 do
     local group = {}
     for i = t * per + 1, math.min(#plain, (t + 1) * per) do group[#group + 1] = plain[i] end
     shuffleGroup(group)
@@ -101,9 +108,10 @@ end
 -- randomize_trainers: each Pokémon of a trainer's team becomes one of the few
 -- closest to it in strength (base-stat total), of the trainer's type when it
 -- has one (a gym leader, his gym, the Elite Four), never a legendary; a team
--- doesn't repeat a Pokémon while it has others to pick.  `team` is a list of
--- species ids; `pokemon[id]` has baseStats and `types` (names on Gen 1,
--- numbers on FireRed).  Returns the new list, or nil when nothing fits.
+-- doesn't repeat a Pokémon while it has others to pick.  `crazy` drops the
+-- strength: any of the trainer's type (any at all without one).  `team` is a
+-- list of species ids; `pokemon[id]` has baseStats and `types` (names on
+-- Gen 1, numbers on FireRed).  Returns the new list, or nil when nothing fits.
 R.TRAINER_NEAR, R.TRAINER_NEAR_THEMED = 10, 6
 
 local function hasType(def, theme)
@@ -111,7 +119,7 @@ local function hasType(def, theme)
   return false
 end
 
-function R.trainerTeam(rng, team, pokemon, legendary, theme)
+function R.trainerTeam(rng, team, pokemon, legendary, theme, crazy)
   legendary = legendary or R.LEGENDARY
   local pool = {}
   for id, def in pairs(pokemon or {}) do
@@ -130,7 +138,7 @@ function R.trainerTeam(rng, team, pokemon, legendary, theme)
       if a.dex ~= b.dex then return a.dex < b.dex end
       return tostring(a.id) < tostring(b.id)
     end)
-    local k = math.min(#pool, theme and R.TRAINER_NEAR_THEMED or R.TRAINER_NEAR)
+    local k = crazy and #pool or math.min(#pool, theme and R.TRAINER_NEAR_THEMED or R.TRAINER_NEAR)
     local choices = {}
     for j = 1, k do if not used[pool[j].id] then choices[#choices + 1] = pool[j].id end end
     if #choices == 0 then for j = 1, k do choices[#choices + 1] = pool[j].id end end
@@ -153,9 +161,10 @@ end
 
 -- The starters become basic Pokémon that evolve twice, as the real ones do:
 -- species nothing evolves into, whose evolution evolves again (a def's
--- `evolutions` lists { species = INTO }), never a legendary.  Sorted, so
--- every client draws from the same list.
-function R.starterPool(pokemon, legendary)
+-- `evolutions` lists { species = INTO }), never a legendary.  `any` (the
+-- crazy randomizer): every species but the legendaries.  Sorted, so every
+-- client draws from the same list.
+function R.starterPool(pokemon, legendary, any)
   legendary = legendary or R.LEGENDARY
   local evolved = {}
   for _, def in pairs(pokemon or {}) do
@@ -163,7 +172,11 @@ function R.starterPool(pokemon, legendary)
   end
   local pool = {}
   for id, def in pairs(pokemon or {}) do
-    if type(def) == "table" and not evolved[id] and not legendary[id] then
+    if any then
+      if type(def) == "table" and def.baseStats and not legendary[id] then
+        pool[#pool + 1] = { id = id, dex = tonumber(def.dex) or 999 }
+      end
+    elseif type(def) == "table" and not evolved[id] and not legendary[id] then
       for _, e in ipairs(def.evolutions or {}) do
         local mid = pokemon[e.species]
         if type(mid) == "table" and mid.evolutions and #mid.evolutions > 0 then
@@ -432,7 +445,7 @@ function R.build(opts)
     local fieldOk = opts.fieldMovesOk or function(species) return R.fieldMovesOk(species, opts.data, L) end
     for try = 1, R.SPECIES_TRIES do
       plan.species = R.speciesMap(Rng.new(opts.seed, salt + 10000 * (try - 1)),
-        opts.pokemon or opts.data.pokemon, opts.legendary)
+        opts.pokemon or opts.data.pokemon, opts.legendary, opts.crazy and 1 or nil)
       plan.speciesTries = try
       if fieldOk(plan.species) then break end
     end
@@ -442,7 +455,7 @@ function R.build(opts)
     -- three balls and Yellow's PIKACHU by default); one draw per world
     local salt = 20000 + (worlds > 1 and world or 0)
     plan.starters = R.starterMap(Rng.new(opts.seed, salt), opts.starterIds or R.STARTERS,
-      R.starterPool(opts.pokemon or opts.data.pokemon, opts.legendary))
+      R.starterPool(opts.pokemon or opts.data.pokemon, opts.legendary, opts.crazy))
   end
   -- opts.locations: places another game built (FireRed's, modes/frlg.lua)
   local base = opts.locations or R.locations(opts.data, opts.victories or {}, L, opts)
