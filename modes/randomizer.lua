@@ -9,8 +9,9 @@
 --
 -- crazy (crazy_randomizer): no strength matching.  Wild Pokémon swap in one
 -- pool (a DRAGONITE on Route 1 at the PIDGEY's level), the starters may be
--- any non-legendary, and a randomized trainer draws from his whole type (or
--- every species).  Legendaries still keep to themselves.
+-- any Pokémon at all, legendaries too, and a randomized trainer draws from
+-- his whole type (or every species).  Wild legendaries still keep to
+-- themselves.
 --   plan.species[VANILLA] = REPLACEMENT          (wild, fishing, static)
 --   plan.starters[VANILLA_STARTER] = REPLACEMENT (Oak's gifts)
 --   plan.content[key] = { item=, count= }        (every shuffled place)
@@ -162,8 +163,10 @@ end
 -- The starters become basic Pokémon that evolve twice, as the real ones do:
 -- species nothing evolves into, whose evolution evolves again (a def's
 -- `evolutions` lists { species = INTO }), never a legendary.  `any` (the
--- crazy randomizer): every species but the legendaries.  Sorted, so every
--- client draws from the same list.
+-- crazy randomizer): every species, legendaries too (FireRed's MEW and
+-- DEOXYS still obey: they disobey only when their fateful-encounter flag is
+-- false, and Oak's gift leaves it unset).  Sorted, so every client draws
+-- from the same list.
 function R.starterPool(pokemon, legendary, any)
   legendary = legendary or R.LEGENDARY
   local evolved = {}
@@ -173,7 +176,7 @@ function R.starterPool(pokemon, legendary, any)
   local pool = {}
   for id, def in pairs(pokemon or {}) do
     if any then
-      if type(def) == "table" and def.baseStats and not legendary[id] then
+      if type(def) == "table" and def.baseStats then
         pool[#pool + 1] = { id = id, dex = tonumber(def.dex) or 999 }
       end
     elseif type(def) == "table" and not evolved[id] and not legendary[id] then

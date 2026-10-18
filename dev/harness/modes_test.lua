@@ -540,17 +540,18 @@ do
   for k, v in pairs(w1.species) do if w2.species[k] ~= v then perWorld = true end end
   check(perWorld, "crazy: each multiworld world gets its own")
 
-  -- starters: any species but the legendaries
+  -- starters: any species at all, legendaries too
   local pool = R.starterPool(pokemon, nil, true)
-  local inPool, sorted, noLegend = {}, true, true
+  local inPool, sorted, legends = {}, true, 0
   for i, id in ipairs(pool) do
     inPool[id] = true
-    if R.LEGENDARY[id] then noLegend = false end
+    if R.LEGENDARY[id] then legends = legends + 1 end
     if i > 1 and pokemon[pool[i - 1]].dex > pokemon[id].dex then sorted = false end
   end
-  check(#pool == 148 and noLegend and sorted, "crazy: the starter pool is every species but the legendaries, by dex: " .. #pool)
-  local allOk, strong = true, false
-  for seed = 1, 40 do
+  check(#pool == 151 and legends == 3 and sorted,
+    ("crazy: the starter pool is every species, the %d legendaries too, by dex: %d"):format(legends, #pool))
+  local allOk, strong, legendDrawn = true, false, nil
+  for seed = 1, 200 do
     local m = crazyBuild(seed, { encounters = false, starters = true }).starters
     local seen = {}
     for _, v in ipairs(R.STARTERS) do
@@ -558,10 +559,12 @@ do
       if m and m[v] then
         seen[m[v]] = true
         if pokemon[m[v]].dex > 100 then strong = true end
+        if R.LEGENDARY[m[v]] and not legendDrawn then legendDrawn = ("%s (seed %d)"):format(m[v], seed) end
       end
     end
   end
-  check(allOk and strong, "crazy: 40 seeds of four different starters from it, strong ones included")
+  check(allOk and strong, "crazy: 200 seeds of four different starters from it, strong ones included")
+  check(legendDrawn ~= nil, "crazy: and a legendary now and then: " .. tostring(legendDrawn))
 
   -- trainers: the leader's type, any strength
   local mons, kinds = {}, { "ROCK", "WATER", "NORMAL" }

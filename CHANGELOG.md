@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.0.3] - 2026-10-17
+
+1.0 servers and clients still play together. On a server running a game
+mode or a game speed above 1, an older client is told to update (the rules
+version is 8 now).
+
+### Changed
+
+- **Crazy randomizer starters**: with `crazy_randomizer = on` and
+  `randomize_starters`, Oak can now hand over legendaries too (MEWTWO,
+  MEW, the birds; on FireRed/LeafGreen any of the 21, Lugia to Deoxys),
+  alongside every other Pokémon. A MEW or DEOXYS starter obeys. Wild
+  legendaries still only swap among themselves.
+
 ## [1.0.2] - 2026-10-17
 
 1.0 servers and clients still play together. On a server with a game

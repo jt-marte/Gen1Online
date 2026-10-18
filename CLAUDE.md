@@ -67,6 +67,8 @@ randomizer, multiworld) play on Gen 1 and FireRed/LeafGreen. `manifest.json` `"g
   gen2check errors), and real FireRed 1.0: `gen3_options.lua` at 1.5X,
   `gen3_link.lua` (PVP and link trade) at 1X and 1.5X, `gen3_online.lua`.
   Gen 1, Crystal and LeafGreen real-game drivers were not run.
+- 1.0.3 (2026-10-17, legendary crazy starters; rules version 8) the same
+  way, tag `v1.0.3`.
 - Release: pack, then `gh release create v<version> <mod zip> <server zip>
   sha256sums.txt --verify-tag` after pushing the tag (1.0.0 was made from
   the sandbox: `gh` works once the host has set the sandbox's `github`
@@ -465,7 +467,7 @@ Transport and framing:
   `modVersion`, `version`, `gameVersion` and `recompVersion`. Accept a client
   when its major.minor matches the server's. Otherwise answer
   `{"success":false,"error":"VERSION_MISMATCH","serverVersion":...}`.
-- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 7: the
+- POST bodies also carry `modesVersion` (`GtsUI.MODES_VERSION`, now 8: the
   game modes' rules the client plays). While a game mode is on, the server
   answers a Gen 1 or FireRed/LeafGreen POST below `MODES_VERSION` (logout
   excepted) with `VERSION_MISMATCH`, `serverVersion` "<version>+ (GAME MODES)":
@@ -965,8 +967,11 @@ off the open internet.
   - Crazy randomizer (`crazy_randomizer`, rules view `crazy`; both
     generations): `Randomizer.build{crazy=}` shuffles the species in one
     tier (`speciesMap`'s `tiers` = 1; still a permutation, legendaries
-    apart, the Cut re-draw as before), the starter pool is every
-    non-legendary with base stats (`starterPool`'s `any`), and
+    apart, the Cut re-draw as before), the starter pool is every species
+    with base stats, legendaries too (`starterPool`'s `any`, since 1.0.3;
+    FireRed's MEW/DEOXYS disobey only with `fatefulEncounter == false`
+    (`battle/engine.lua` `disobedient`), and Oak's `givemon` leaves it
+    nil), and
     `trainerTeam`'s `crazy` picks from the whole themed (or untyped) pool
     instead of the nearest by strength. Trainers still follow
     `randomize_trainers`; levels stay. Part of the plan key; RUN INFO says

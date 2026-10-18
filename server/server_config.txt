@@ -94,9 +94,10 @@ randomize_trainers = off
 # Crazy randomizer (randomizer only): no more "similar strength".  A wild
 # Pokemon becomes ANY other one, at the level of the one it replaces (a
 # DRAGONITE on Route 1 at level 3); every PIDGEY in the game becomes the same
-# one.  The starters may be any Pokemon, and randomized trainers (above) get
-# any Pokemon too; gym leaders and the Elite Four still keep their type.
-# Legendaries stay out of it (see wild_legendaries).
+# one.  The starters may be any Pokemon at all, legendaries included, and
+# randomized trainers (above) get any Pokemon too; gym leaders and the Elite
+# Four still keep their type.  Wild legendaries stay out of it (see
+# wild_legendaries).
 # crazy_randomizer = off | on
 crazy_randomizer = off
 

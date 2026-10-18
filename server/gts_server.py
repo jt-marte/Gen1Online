@@ -55,7 +55,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_VERSION = "1.0.2"
+DEFAULT_VERSION = "1.0.3"
 DEFAULT_PORT = 7779
 DEFAULT_DATA = os.path.join(SCRIPT_DIR, "gts_data.json")
 DEFAULT_CONFIG = os.path.join(SCRIPT_DIR, "server_config.txt")
@@ -152,10 +152,10 @@ TRAINER_MODES = ("off", "gyms", "on")   # gyms: gym leaders, their gyms, Elite F
 # is turned away with VERSION_MISMATCH, so nobody plays an old copy of the
 # rules (2: the strict first encounter, no dupes clause; 3: wild legendaries;
 # 4: randomized trainers; 5: trades limited between gym leaders; 6: the
-# crazy randomizer; 7: the host's game speed).  A server with game_speed
-# above 1 turns such a client away on every generation: it would play at 1X
-# among faster players.
-MODES_VERSION = 7
+# crazy randomizer; 7: the host's game speed; 8: legendary crazy starters).
+# A server with game_speed above 1 turns such a client away on every
+# generation: it would play at 1X among faster players.
+MODES_VERSION = 8
 GAME_SPEED_MAX = 4.0
 MODES_GENERATIONS = (1, 3)
 MAX_WORLDS = 8

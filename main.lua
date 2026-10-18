@@ -4,7 +4,7 @@
 
   -- Resolved before anything else: request headers, the default avatar and
   -- the save paths below all read these.
-  local MOD_VERSION = "1.0.2"
+  local MOD_VERSION = "1.0.3"
   local isGen2, isGen3 = false, false
   if mod and mod.generation then
     isGen2 = (mod.generation == 2)
@@ -136,7 +136,7 @@
   -- The game modes' rules this client plays (modes/): sent with every POST.
   -- A server running a mode turns away clients below its MODES_VERSION, so
   -- nobody plays an old copy of the Nuzlocke rules without knowing.
-  GtsUI.MODES_VERSION = 7
+  GtsUI.MODES_VERSION = 8
   -- The host's game_speed (server_config.txt): every player runs at it while
   -- connected, battles included.  It rides /server/info and every sync_pos
   -- answer; 1 is normal, and anything odd reads as 1.
